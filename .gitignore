@@ -1,5 +1,6 @@
 .env
 .google-oauth.json
+client_secret*.json
 .jobhunta-data.json
 keep.txt
 node_modules/

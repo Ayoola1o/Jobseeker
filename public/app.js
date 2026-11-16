@@ -111,9 +111,10 @@ function persist() {
   localStorage.setItem(storageKey, JSON.stringify(leads));
   localStorage.setItem(settingsKey, JSON.stringify(settings));
   syncWorkspaceToServer();
+  renderDashboard();
   renderLeads();
   renderInbox();
-  if (activeBusinessId) renderBusinessPage();
+  if (activeBusinessId && location.hash === '#business') renderBusinessPage();
 }
 
 const norm = value => (value || '').trim().toLowerCase();
@@ -307,6 +308,157 @@ function openBusinessPage(item) {
   renderBusinessPage();
 }
 
+function jumpToLeadsFilter(statusValue = '') {
+  const select = $('#filter-status');
+  if (select) select.value = statusValue;
+  location.hash = '#leads';
+  renderLeads();
+}
+
+function leadStatus(lead) {
+  if (lead.classification && statusNames[lead.classification]) return statusNames[lead.classification];
+  if (lead.replied) return 'Replied';
+  if (lead.due && lead.due <= new Date().toLocaleDateString('en-CA')) return 'Follow-up due';
+  if ((lead.threads || []).length) return 'Contacted';
+  return lead.email ? 'New' : 'Needs email';
+}
+
+function statusPillClass(status) {
+  if (status === 'Needs email' || status === 'Follow-up due' || status === 'Out of office') return 'pill wait';
+  if (status === 'Declined' || status === 'Unsubscribed' || status === 'Bounced') return 'pill warn';
+  return 'pill';
+}
+
+function renderDashboard() {
+  const container = $('#dashboard-content');
+  if (!container) return;
+
+  const counts = {
+    total: leads.length,
+    ready: 0,
+    needsEmail: 0,
+    contacted: 0,
+    due: 0,
+    positive: 0,
+    aiAudited: 0
+  };
+  const industryCounts = new Map();
+  const cityCounts = new Map();
+
+  for (const lead of leads) {
+    const st = leadStatus(lead);
+    if (st === 'New') counts.ready++;
+    if (st === 'Needs email') counts.needsEmail++;
+    if (st === 'Contacted' || (lead.threads || []).length) counts.contacted++;
+    if (st === 'Follow-up due') counts.due++;
+    if (st === 'Interested' || st === 'Replied') counts.positive++;
+    if (lead.aiBrief) counts.aiAudited++;
+    if (lead.industry) industryCounts.set(lead.industry, (industryCounts.get(lead.industry) || 0) + 1);
+    if (lead.city) cityCounts.set(lead.city, (cityCounts.get(lead.city) || 0) + 1);
+  }
+
+  const headerBar = create('div', '', 'heading section-title');
+  const titleWrap = create('div');
+  titleWrap.append(
+    create('h1', 'Workspace Dashboard'),
+    create('p', settings.senderName
+      ? `Welcome back, ${settings.senderName}. Offering: ${settings.senderService || 'Set your service in Templates & profile'}.`
+      : 'Overview of your scraped business pipeline, AI lead audits, and outreach conversations.')
+  );
+  const quickActions = create('div', '', 'actions');
+  quickActions.append(
+    button('Find businesses ↗', () => { location.hash = '#discover'; }),
+    button('Import CSV', importLeads, true),
+    button('Add lead', () => editLead(), true)
+  );
+  headerBar.append(titleWrap, quickActions);
+
+  const kpiGrid = create('div', '', 'kpi-grid');
+  const makeKpi = (label, value, subtext, filterTarget) => {
+    const card = create('article', '', 'surface kpi-card');
+    card.append(create('small', label), create('strong', String(value)), create('span', subtext));
+    card.onclick = () => jumpToLeadsFilter(filterTarget);
+    return card;
+  };
+  kpiGrid.append(
+    makeKpi('Total Saved Leads', counts.total, 'View all saved businesses →', ''),
+    makeKpi('Ready to Email', counts.ready, 'Has email · Not contacted →', 'New'),
+    makeKpi('Needs Email', counts.needsEmail, 'Scan websites for email →', 'Needs email'),
+    makeKpi('Contacted', counts.contacted, 'Outreach sent via Gmail →', 'Contacted'),
+    makeKpi('Follow-ups Due', counts.due, 'Needs follow-up today →', 'Follow-up due'),
+    makeKpi('Interested / Replied', counts.positive, 'Warm leads & replies →', 'Interested')
+  );
+
+  const dashboardGrid = create('div', '', 'dossier-grid');
+
+  // Left card: Priority Action Queue (Follow-ups due + Warm replies + Ready to review)
+  const queueCard = create('article', '', 'surface dossier-card');
+  queueCard.append(create('h2', 'Priority Follow-ups & Warm Leads'));
+  const priorityLeads = leads.filter(lead => {
+    const st = leadStatus(lead);
+    return st === 'Follow-up due' || st === 'Replied' || st === 'Interested';
+  }).slice(0, 6);
+
+  if (priorityLeads.length) {
+    for (const lead of priorityLeads) {
+      const st = leadStatus(lead);
+      queueCard.append(row(lead, [lead.industry, lead.city, lead.email, lead.due && 'Due ' + lead.due], [
+        create('span', st, statusPillClass(st)),
+        button('Open dossier', () => openBusinessPage(lead), true),
+        button('Email', () => compose(lead))
+      ], () => openBusinessPage(lead)));
+    }
+  } else {
+    queueCard.append(empty('✉', 'No urgent follow-ups due', 'When a lead replies or reaches its follow-up date, it will appear here.'));
+  }
+
+  // Right card: Pipeline & Market Breakdown
+  const statsCard = create('article', '', 'surface dossier-card');
+  statsCard.append(create('h2', 'Pipeline & AI Audit Overview'));
+  const statsList = create('div');
+  const addStatRow = (label, val) => {
+    const r = create('div', '', 'stat-row');
+    r.append(create('span', label), create('strong', String(val)));
+    statsList.append(r);
+  };
+  addStatRow('Gmail Connection', account.mailbox ? `Connected (${account.mailbox})` : 'Not connected');
+  addStatRow('Leads with Verified Email', leads.filter(l => l.email).length);
+  addStatRow('Leads with Social Media Links', leads.filter(l => l.facebook || l.instagram || l.twitter || l.linkedin).length);
+  addStatRow('Leads Audited with AI Pitch', counts.aiAudited);
+  const topIndustries = [...industryCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} (${v})`).join(', ') || 'None yet';
+  const topCities = [...cityCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} (${v})`).join(', ') || 'None yet';
+  addStatRow('Top Categories', topIndustries);
+  addStatRow('Top Cities', topCities);
+  statsCard.append(statsList);
+
+  // Full width card: Recent Businesses Ready for Review & AI Analysis
+  const recentCard = create('article', '', 'surface dossier-card full');
+  const recentHeader = create('div', '', 'heading');
+  recentHeader.style.margin = '0';
+  recentHeader.append(
+    create('h2', 'Recent Businesses Ready for Review'),
+    leads.length ? button('View all leads →', () => { location.hash = '#leads'; }, true) : ''
+  );
+  recentCard.append(recentHeader);
+
+  if (leads.length) {
+    for (const lead of leads.slice(0, 6)) {
+      const st = leadStatus(lead);
+      recentCard.append(row(lead, [lead.industry, lead.city, lead.email, lead.phone, lead.address], [
+        create('span', st, statusPillClass(st)),
+        lead.aiBrief ? create('span', '✦ AI Pitch Ready', 'pill') : '',
+        button('Review dossier & AI pitch →', () => openBusinessPage(lead), true),
+        button('Draft email', () => compose(lead))
+      ], () => openBusinessPage(lead)));
+    }
+  } else {
+    recentCard.append(empty('⌕', 'Your pipeline is empty', 'Click "Find businesses" to scrape local leads from Bing Maps or import a CSV.'));
+  }
+
+  dashboardGrid.append(queueCard, statsCard, recentCard);
+  container.replaceChildren(headerBar, kpiGrid, dashboardGrid);
+}
+
 function renderResults() {
   const unsavedCount = results.filter(item => !duplicate(item)).length;
   const saveAllBtn = $('#save-all');
@@ -398,20 +550,6 @@ function renderResults() {
   }
 }
 
-function leadStatus(lead) {
-  if (lead.classification && statusNames[lead.classification]) return statusNames[lead.classification];
-  if (lead.replied) return 'Replied';
-  if (lead.due && lead.due <= new Date().toLocaleDateString('en-CA')) return 'Follow-up due';
-  if ((lead.threads || []).length) return 'Contacted';
-  return lead.email ? 'New' : 'Needs email';
-}
-
-function statusPillClass(status) {
-  if (status === 'Needs email' || status === 'Follow-up due' || status === 'Out of office') return 'pill wait';
-  if (status === 'Declined' || status === 'Unsubscribed' || status === 'Bounced') return 'pill warn';
-  return 'pill';
-}
-
 function getFilteredLeads() {
   const query = norm($('#filter-query')?.value);
   const statusFilter = $('#filter-status')?.value || '';
@@ -445,8 +583,8 @@ function deleteLead(lead) {
   if (idx === -1) return;
   leads.splice(idx, 1);
   if (activeBusinessId === lead.id) {
-    activeBusinessId = null;
-    if (location.hash === '#business') location.hash = '#leads';
+    activeBusinessId = leads[idx]?.id || leads[idx - 1]?.id || null;
+    if (!activeBusinessId && location.hash === '#business') location.hash = '#leads';
   }
   persist();
   if (results.length) renderResults();
@@ -472,6 +610,29 @@ function renderLeads() {
   const exportBtn = $('#export');
   if (exportBtn) exportBtn.disabled = leads.length === 0;
 
+  const strip = $('#leads-kpi-strip');
+  if (strip) {
+    const activeStatus = $('#filter-status')?.value || '';
+    const chipCategories = [
+      ['', `All (${leads.length})`],
+      ['New', `New (${leads.filter(l => leadStatus(l) === 'New').length})`],
+      ['Needs email', `Needs email (${leads.filter(l => leadStatus(l) === 'Needs email').length})`],
+      ['Contacted', `Contacted (${leads.filter(l => leadStatus(l) === 'Contacted').length})`],
+      ['Follow-up due', `Follow-up due (${leads.filter(l => leadStatus(l) === 'Follow-up due').length})`],
+      ['Replied', `Replied (${leads.filter(l => leadStatus(l) === 'Replied').length})`],
+      ['Interested', `Interested (${leads.filter(l => leadStatus(l) === 'Interested').length})`]
+    ];
+    strip.replaceChildren(...chipCategories.map(([val, label]) => {
+      const chip = create('button', label, 'kpi-chip' + (activeStatus === val ? ' active' : ''));
+      chip.type = 'button';
+      chip.onclick = () => {
+        $('#filter-status').value = val;
+        renderLeads();
+      };
+      return chip;
+    }));
+  }
+
   const filtered = getFilteredLeads();
   const summary = $('#lead-summary');
   if (summary) {
@@ -492,6 +653,7 @@ function renderLeads() {
       ...socialLinks(lead),
       website(lead.source, 'Listing'),
       create('span', status, statusPillClass(status)),
+      lead.aiBrief ? create('span', '✦ AI Pitch', 'pill') : '',
       enrichBtn,
       button('View business', () => openBusinessPage(lead), true),
       button('Edit', () => editLead(lead), true),
@@ -515,13 +677,15 @@ function kvItem(label, valueNodeOrText) {
 function renderBusinessPage() {
   const container = $('#business-detail');
   if (!container) return;
-  const lead = leads.find(item => item.id === activeBusinessId) || leads[0];
+  const currentIndex = leads.findIndex(item => item.id === activeBusinessId);
+  const lead = currentIndex !== -1 ? leads[currentIndex] : leads[0];
   if (!lead) {
     container.replaceChildren(
       empty('▤', 'No business selected', 'Choose a business from Saved leads or Search results to view its full dossier.')
     );
     return;
   }
+  const leadIndex = currentIndex !== -1 ? currentIndex : 0;
   activeBusinessId = lead.id;
   if (location.hash === '#business') {
     $('#breadcrumb').textContent = 'Saved leads / ' + lead.name;
@@ -530,12 +694,32 @@ function renderBusinessPage() {
   const status = leadStatus(lead);
   const topBar = create('div', '', 'heading section-title');
   const titleWrap = create('div');
+
+  const navQueueBar = create('div', '', 'actions');
+  navQueueBar.style.marginBottom = '12px';
   const backBtn = button('← Back to saved leads', () => { location.hash = '#leads'; }, true);
-  backBtn.style.marginBottom = '12px';
+  const prevLeadBtn = button('← Prev lead', () => {
+    if (leadIndex > 0) {
+      activeBusinessId = leads[leadIndex - 1].id;
+      renderBusinessPage();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, true);
+  prevLeadBtn.disabled = leadIndex <= 0;
+  const nextLeadBtn = button(`Next lead (${leadIndex + 1}/${leads.length}) →`, () => {
+    if (leadIndex < leads.length - 1) {
+      activeBusinessId = leads[leadIndex + 1].id;
+      renderBusinessPage();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, true);
+  nextLeadBtn.disabled = leadIndex >= leads.length - 1;
+  navQueueBar.append(backBtn, prevLeadBtn, nextLeadBtn);
+
   const titleRow = create('div', '', 'actions');
   titleRow.append(create('h1', lead.name), create('span', status, statusPillClass(status)));
   const subTitle = create('p', [lead.industry, lead.city, lead.address].filter(Boolean).join(' · '));
-  titleWrap.append(backBtn, titleRow, subTitle);
+  titleWrap.append(navQueueBar, titleRow, subTitle);
 
   const actionGroup = create('div', '', 'actions');
   if (lead.website) {
@@ -568,16 +752,16 @@ function renderBusinessPage() {
   actionGroup.append(
     analyzeBtn,
     button('Draft email', () => compose(lead)),
-    button('Edit details', () => editLead(lead), true),
+    button('Edit all fields', () => editLead(lead), true),
     button('Delete', () => deleteLead(lead), 'danger')
   );
   topBar.append(titleWrap, actionGroup);
 
   const grid = create('div', '', 'dossier-grid');
 
-  // 1. All Scraped & Contact Details Card
+  // 1. All Scraped & Contact Details Card + Inline Quick Status / Follow-up / Notes
   const detailsCard = create('article', '', 'surface dossier-card full');
-  detailsCard.append(create('h2', 'Scraped Business Details & Contact Fields'));
+  detailsCard.append(create('h2', 'Scraped Business Details & Quick CRM Controls'));
   const kvGrid = create('div', '', 'kv-grid');
   const allEmails = [...new Set([lead.email, ...(lead.emails || [])].filter(Boolean))];
   kvGrid.append(
@@ -592,23 +776,75 @@ function renderBusinessPage() {
     kvItem('Map / Listing Source', website(lead.source, 'Open on Bing Maps / Source') || 'Manual / CSV entry'),
     kvItem('Star Rating & Reviews', [lead.rating && `★ ${lead.rating}`, lead.ratingInfo].filter(Boolean).join(' · ') || 'No rating listed'),
     kvItem('Operating Hours', lead.openHours || 'Not listed'),
-    kvItem('Coordinates', (lead.latitude && lead.longitude) ? `${lead.latitude}, ${lead.longitude}` : 'Not listed'),
-    kvItem('Follow-up Date', lead.due || 'None scheduled'),
-    kvItem('Listing Summary', lead.about || 'None')
+    kvItem('Coordinates', (lead.latitude && lead.longitude) ? `${lead.latitude}, ${lead.longitude}` : 'Not listed')
   );
   detailsCard.append(kvGrid);
 
-  // 2. Website Combing & Social Media Presence Card
+  // Inline CRM controls (Status, Follow-up Date, Primary Email, Quick Notes)
+  const quickCrmGrid = create('div', '', 'filters');
+  quickCrmGrid.style.margin = '4px 0 0';
+  const statusSelect = selectField('Lead Status', 'classification', {
+    '': 'Automatic (' + status + ')',
+    ...statusNames
+  }, lead.classification || '');
+  statusSelect.lastChild.onchange = e => {
+    lead.classification = e.target.value;
+    if (['unsubscribe', 'bounced'].includes(lead.classification) && lead.email) {
+      lead.suppressed = [...new Set([...(lead.suppressed || []), norm(lead.email)])];
+      lead.due = '';
+    }
+    persist();
+    report(`Updated status for ${lead.name}.`);
+  };
+
+  const dueField = field('Follow-up Date', 'due', lead.due, { type: 'date' });
+  dueField.lastChild.onchange = e => {
+    lead.due = e.target.value;
+    persist();
+    report(`Updated follow-up date for ${lead.name}.`);
+  };
+
+  const emailInline = field('Primary Outreach Email', 'email', lead.email, { type: 'email', placeholder: 'Add or update email…' });
+  emailInline.lastChild.onchange = e => {
+    lead.email = e.target.value.trim();
+    persist();
+    report(`Updated email for ${lead.name}.`);
+  };
+  quickCrmGrid.append(emailInline, statusSelect, dueField);
+
+  const notesWrapper = field('Review Notes & Summary (auto-saves on change)', 'about', lead.about, {
+    type: 'textarea',
+    maxLength: 6000,
+    placeholder: 'Add your review notes, pain points, or call observations for this business…'
+  });
+  notesWrapper.lastChild.style.minHeight = '80px';
+  notesWrapper.lastChild.onchange = e => {
+    lead.about = e.target.value.trim();
+    persist();
+    report('Saved business notes.');
+  };
+  detailsCard.append(quickCrmGrid, notesWrapper);
+
+  // 2. Website Combing & Social Media Presence Card (with inline Website URL setter!)
   const webCard = create('article', '', 'surface dossier-card');
-  const webHeader = create('div', '', 'heading');
-  webHeader.style.margin = '0';
-  webHeader.append(
-    create('h2', 'Website & Social Media Presence'),
-    lead.website
-      ? button('Comb website now', event => enrichItemEmail(lead, event.currentTarget), true)
-      : create('span', 'No website URL', 'pill warn')
-  );
-  webCard.append(webHeader);
+  webCard.append(create('h2', 'Website & Social Media Combing'));
+
+  const webUrlForm = create('form', '', 'inline-bar');
+  const webInput = field('Business Website URL', 'websiteUrl', lead.website, {
+    type: 'url',
+    placeholder: 'https://example.com'
+  });
+  const saveAndCombBtn = create('button', lead.website ? 'Have a look (Comb site)' : 'Save & Comb site');
+  webUrlForm.append(webInput, saveAndCombBtn);
+  webUrlForm.onsubmit = async event => {
+    event.preventDefault();
+    let urlVal = webInput.lastChild.value.trim();
+    if (urlVal && !/^https?:\/\//i.test(urlVal)) urlVal = 'https://' + urlVal;
+    lead.website = urlVal;
+    persist();
+    if (urlVal) await enrichItemEmail(lead, saveAndCombBtn);
+  };
+  webCard.append(webUrlForm);
 
   const socialsRow = create('div', '', 'actions');
   const foundSocials = socialLinks(lead);
@@ -648,7 +884,7 @@ function renderBusinessPage() {
   if (lead.aboutSummary) {
     aboutBox.append(kvItem('Combed "About the Business" Summary', lead.aboutSummary));
   } else if (lead.website) {
-    aboutBox.append(create('p', 'Click "Have a look (Comb website)" above to crawl their website for About text, services, emails, and social links.', 'small'));
+    aboutBox.append(create('p', 'Click "Have a look (Comb site)" above to crawl their website for About text, services, emails, and social links.', 'small'));
   }
   webCard.append(aboutBox);
 
@@ -707,7 +943,35 @@ function renderBusinessPage() {
     );
   }
 
-  grid.append(detailsCard, webCard, aiCard);
+  // 4. Outreach History & Conversations for this Business
+  const historyCard = create('article', '', 'surface dossier-card full');
+  const historyHeader = create('div', '', 'heading');
+  historyHeader.style.margin = '0';
+  historyHeader.append(
+    create('h2', 'Outreach Conversations with ' + lead.name),
+    button('Compose new email', () => compose(lead))
+  );
+  historyCard.append(historyHeader);
+
+  const leadThreads = lead.threads || [];
+  if (leadThreads.length) {
+    for (const conv of leadThreads) {
+      const cached = messages.get(threadKey(conv)) || [];
+      const hasReply = cached.some(m => !m.sent);
+      historyCard.append(row(
+        { name: conv.subject },
+        ['To: ' + (conv.to || lead.email), new Date(conv.time).toLocaleString(), hasReply ? 'Reply received' : 'Sent'],
+        [
+          create('span', hasReply ? 'Reply received' : 'Sent', hasReply ? 'pill' : 'pill wait'),
+          button('Open conversation & reply', () => openThread(lead, conv), true)
+        ]
+      ));
+    }
+  } else {
+    historyCard.append(create('p', 'No outreach emails sent to this business yet.', 'small'));
+  }
+
+  grid.append(detailsCard, webCard, aiCard, historyCard);
   container.replaceChildren(topBar, grid);
 }
 
@@ -1155,6 +1419,7 @@ async function refresh(manual = false) {
 
 function renderAccount() {
   $('#connect').textContent = account.mailbox ? 'Gmail connected' : account.configured ? 'Connect Gmail' : 'Set up Gmail';
+  renderDashboard();
   renderInbox();
 }
 
@@ -1196,7 +1461,6 @@ $('#connect').onclick = async () => {
       create('p', account.credentialError || 'Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your environment variables (Vercel Settings → Environment Variables or local .env).'),
       create('p', 'In Google Cloud Console → Credentials, add this exact Authorized Redirect URI to your Web application OAuth client:'),
       uriCode,
-      create('div', '', 'actions'),
       copyBtn,
       website('https://console.cloud.google.com/apis/credentials', 'Open Google Cloud Credentials'));
     return;
@@ -1346,9 +1610,15 @@ $('#save-all').onclick = () => {
 };
 
 function navigate() {
-  const pageTitles = { discover: 'Find businesses', leads: 'Saved leads', business: 'Business dossier', inbox: 'Inbox' };
+  const pageTitles = {
+    dashboard: 'Dashboard',
+    discover: 'Find businesses',
+    leads: 'Saved leads',
+    business: 'Business dossier',
+    inbox: 'Inbox'
+  };
   const requested = location.hash.slice(1);
-  const page = Object.hasOwn(pageTitles, requested) ? requested : 'discover';
+  const page = Object.hasOwn(pageTitles, requested) ? requested : 'dashboard';
   for (const section of document.querySelectorAll('.page')) section.hidden = section.id !== page;
   for (const link of document.querySelectorAll('nav a')) {
     const activeNav = page === 'business' ? 'leads' : page;
@@ -1356,6 +1626,7 @@ function navigate() {
     else link.removeAttribute('aria-current');
   }
   $('#breadcrumb').textContent = pageTitles[page];
+  if (page === 'dashboard') renderDashboard();
   if (page === 'business') renderBusinessPage();
   if (page === 'inbox') refresh();
 }
@@ -1372,6 +1643,7 @@ $('#filter-status').onchange = renderLeads;
 $('#filter-sort').onchange = renderLeads;
 window.addEventListener('hashchange', navigate);
 $('#results').replaceChildren(empty('⌕', 'Start a search', 'Choose or enter an industry and enter the city you want to explore.'));
+renderDashboard();
 renderLeads();
 renderInbox();
 navigate();

@@ -13,8 +13,9 @@
 </head>
 <body>
   <aside>
-    <a href="#discover" class="brand"><img src="/logo.png" alt="Jobhunta logo" width="35" height="35"> Jobhunta</a>
+    <a href="#dashboard" class="brand"><img src="/logo.png" alt="Jobhunta logo" width="35" height="35"> Jobhunta</a>
     <nav aria-label="Workspace">
+      <a href="#dashboard"><span aria-hidden="true">⊞</span> Dashboard</a>
       <a href="#discover"><span aria-hidden="true">⌕</span> Find businesses</a>
       <a href="#leads"><span aria-hidden="true">▤</span> Saved leads <small id="nav-leads-count" class="badge" hidden></small></a>
       <a href="#inbox"><span aria-hidden="true">✉</span> Inbox</a>
@@ -23,7 +24,7 @@
   </aside>
   <main>
     <header>
-      <span>Workspace <b>/</b> <strong id="breadcrumb">Find businesses</strong></span>
+      <span>Workspace <b>/</b> <strong id="breadcrumb">Dashboard</strong></span>
       <div class="actions">
         <button id="templates" class="secondary" type="button">Templates &amp; profile</button>
         <button id="connect" class="secondary" type="button">Connect Gmail</button>
@@ -31,7 +32,10 @@
     </header>
     <div class="content">
       <p id="notice" role="status" hidden></p>
-      <section id="discover" class="page">
+      <section id="dashboard" class="page">
+        <div id="dashboard-content"></div>
+      </section>
+      <section id="discover" class="page" hidden>
         <div class="hero">
           <div class="radar" aria-hidden="true"><i></i><i></i><i></i><i></i><b>⌖</b></div>
           <p class="eyebrow">BUSINESS DISCOVERY</p>
@@ -74,6 +78,7 @@
             <button id="add" type="button">Add lead</button>
           </div>
         </div>
+        <div id="leads-kpi-strip" class="kpi-strip"></div>
         <div class="surface filters" id="lead-filters">
           <label>Search leads<input id="filter-query" type="search" placeholder="Filter by name, city, email, phone or notes…"></label>
           <label>Status
