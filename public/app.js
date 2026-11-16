@@ -77,7 +77,13 @@ async function api(path, payload) {
   const response = await fetch(path, payload === undefined ? undefined : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
   });
-  const data = await response.json();
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`Server returned an invalid response (HTTP ${response.status}).`);
+  }
   if (!response.ok) throw new Error(data.error || 'Request failed.');
   return data;
 }

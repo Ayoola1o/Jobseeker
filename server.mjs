@@ -5,11 +5,10 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadEnvFile } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 try {
-  loadEnvFile(fileURLToPath(new URL('./.env', import.meta.url)));
+  process.loadEnvFile?.(fileURLToPath(new URL('./.env', import.meta.url)));
 } catch (error) {
   if (error.code !== 'ENOENT') throw error;
 }
@@ -1035,7 +1034,7 @@ export async function handleRequest(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   const json = (value, status = 200) => { res.writeHead(status, jsonHeaders); res.end(JSON.stringify(value)); };
   const redirect = location => { res.writeHead(303, { Location: location }); res.end(); };
   try {
@@ -1044,7 +1043,8 @@ export async function handleRequest(req, res) {
     const isHttps = reqOrigin.startsWith('https://');
     const cookieFlags = `HttpOnly; SameSite=Lax; Path=/${isHttps ? '; Secure' : ''}`;
     const url = new URL(req.url, reqOrigin);
-    const path = url.pathname;
+    const rawPath = url.searchParams.get('__path') || url.pathname;
+    const path = rawPath.startsWith('/') ? rawPath : '/' + rawPath;
     if (req.method === 'GET' && Object.hasOwn(files, path)) {
       const [file, contentType] = files[path];
       const content = await readFile(new URL('./public/' + file, import.meta.url));
