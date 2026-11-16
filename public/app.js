@@ -436,6 +436,7 @@ function renderDashboard() {
     statsList.append(r);
   };
   addStatRow('Gmail Connection', account.mailbox ? `Connected (${account.mailbox})` : 'Not connected');
+  addStatRow('Database Storage', account.supabase?.connected ? 'Supabase Cloud Connected' : (account.supabase?.configured ? 'Supabase (Pending SQL setup)' : 'Local Storage'));
   addStatRow('Leads with Verified Email', leads.filter(l => l.email).length);
   addStatRow('Shopify / E-commerce Stores', leads.filter(l => l.platform === 'Shopify' || l.platform === 'WooCommerce').length);
   addStatRow('Leads with Social Media Links', leads.filter(l => l.facebook || l.instagram || l.twitter || l.linkedin).length);
@@ -1285,19 +1286,72 @@ function renderSettings() {
     );
   }
 
-  // 2. Quick Workspace & Discovery Shortcuts Card
+  // 2. Supabase Cloud Persistence & Discovery Tools Card
   const toolsCard = create('article', '', 'surface dossier-card');
-  toolsCard.append(
-    create('h2', 'Discovery & Data Tools'),
-    create('p', 'Jump to business discovery, import/export your lead database, or batch-scan websites for missing emails.', 'small'),
-    create('div', '', 'actions')
-  );
-  toolsCard.lastChild.append(
-    button('Find businesses ↗', () => { location.hash = '#discover'; }),
+  const sbHead = create('div', '', 'heading');
+  sbHead.style.margin = '0';
+  const sbStatus = account.supabase?.connected
+    ? ['Supabase Connected', 'pill']
+    : account.supabase?.configured
+      ? ['SQL Setup Needed', 'pill warn']
+      : ['Local Storage Mode', 'pill wait'];
+  sbHead.append(create('h2', 'Supabase Cloud Database'), create('span', sbStatus[0], sbStatus[1]));
+  toolsCard.append(sbHead);
+
+  if (account.supabase?.error) {
+    toolsCard.append(create('p', account.supabase.error, 'small'));
+  } else {
+    toolsCard.append(create('p', account.supabase?.connected
+      ? 'All leads, AI briefs, templates, and outreach threads are synced with your Supabase Postgres database.'
+      : 'Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env / Vercel and run supabase/schema.sql in the Supabase SQL Editor to enable cloud database sync.', 'small'));
+  }
+
+  const copySqlBtn = button('Copy Supabase SQL Schema', async event => {
+    const btn = event.currentTarget;
+    const sql = `create table if not exists public.jobhunta_workspace (
+  id text primary key default 'default',
+  settings jsonb not null default '{}'::jsonb,
+  auth jsonb,
+  thread_owners jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+create table if not exists public.jobhunta_leads (
+  id text primary key,
+  name text not null,
+  industry text default '',
+  city text default '',
+  address text default '',
+  email text default '',
+  phone text default '',
+  website text default '',
+  source text default '',
+  platform text default '',
+  rating text default '',
+  open_hours text default '',
+  search_rank integer,
+  classification text default '',
+  due text default '',
+  about text default '',
+  data jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);`;
+    try {
+      await navigator.clipboard.writeText(sql);
+      btn.textContent = 'SQL Schema Copied!';
+      setTimeout(() => { btn.textContent = 'Copy Supabase SQL Schema'; }, 2200);
+    } catch {
+      report('Open supabase/schema.sql in your project folder to copy the SQL.', true);
+    }
+  }, true);
+
+  const toolsActions = create('div', '', 'actions');
+  toolsActions.append(
+    copySqlBtn,
+    website('https://supabase.com/dashboard', 'Open Supabase Dashboard'),
     button('Import CSV', importLeads, true),
-    button('Export CSV', exportLeads, true),
-    button('Find missing emails', () => { location.hash = '#leads'; enrichMissingEmails(); }, true)
+    button('Export CSV', exportLeads, true)
   );
+  toolsCard.append(toolsActions);
 
   // 3. Sender Profile & Email Templates Card
   const formCard = create('article', '', 'surface dossier-card full');

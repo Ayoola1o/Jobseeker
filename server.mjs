@@ -136,13 +136,171 @@ try {
   if (error.code !== 'ENOENT') console.warn('Could not load .jobhunta-data.json:', error.message);
 }
 
+const supabaseUrl = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim().replace(/\/$/, '');
+const supabaseKey = (
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  ''
+).trim();
+const supabaseConfigured = Boolean(supabaseUrl.startsWith('https://') && supabaseKey);
+let supabaseStatus = { configured: supabaseConfigured, connected: false, error: null };
+
+function supabaseHeaders(extra = {}) {
+  return {
+    apikey: supabaseKey,
+    Authorization: 'Bearer ' + supabaseKey,
+    'Content-Type': 'application/json',
+    ...extra
+  };
+}
+
+function leadToSupabaseRow(lead) {
+  return {
+    id: String(lead.id || randomBytes(12).toString('hex')),
+    name: String(lead.name || 'Unnamed Business'),
+    industry: String(lead.industry || ''),
+    city: String(lead.city || ''),
+    address: String(lead.address || ''),
+    email: String(lead.email || ''),
+    phone: String(lead.phone || ''),
+    website: String(lead.website || ''),
+    source: String(lead.source || ''),
+    platform: String(lead.platform || ''),
+    rating: String(lead.rating || ''),
+    open_hours: String(lead.openHours || ''),
+    search_rank: Number.isFinite(Number(lead.searchRank)) ? Number(lead.searchRank) : null,
+    classification: String(lead.classification || ''),
+    due: String(lead.due || ''),
+    about: String(lead.about || ''),
+    data: lead,
+    updated_at: new Date().toISOString()
+  };
+}
+
+function supabaseRowToLead(row) {
+  return {
+    ...(row.data && typeof row.data === 'object' ? row.data : {}),
+    id: row.id,
+    name: row.name,
+    industry: row.industry || '',
+    city: row.city || '',
+    address: row.address || '',
+    email: row.email || '',
+    phone: row.phone || '',
+    website: row.website || '',
+    source: row.source || '',
+    platform: row.platform || '',
+    rating: row.rating || '',
+    openHours: row.open_hours || row.data?.openHours || '',
+    searchRank: row.search_rank ?? row.data?.searchRank,
+    classification: row.classification || '',
+    due: row.due || '',
+    about: row.about || ''
+  };
+}
+
+async function loadFromSupabase() {
+  if (!supabaseConfigured) return;
+  try {
+    const [wsRes, leadsRes] = await Promise.all([
+      fetch(`${supabaseUrl}/rest/v1/jobhunta_workspace?id=eq.default&select=*`, {
+        headers: supabaseHeaders(),
+        signal: AbortSignal.timeout(6000)
+      }),
+      fetch(`${supabaseUrl}/rest/v1/jobhunta_leads?select=*&order=updated_at.desc&limit=5000`, {
+        headers: supabaseHeaders(),
+        signal: AbortSignal.timeout(6000)
+      })
+    ]);
+    if (!wsRes.ok || !leadsRes.ok) {
+      supabaseStatus = {
+        configured: true,
+        connected: false,
+        error: `Supabase returned HTTP ${!wsRes.ok ? wsRes.status : leadsRes.status}. Run supabase/schema.sql in Supabase SQL Editor.`
+      };
+      return;
+    }
+    const wsRows = await wsRes.json();
+    const leadRows = await leadsRes.json();
+    if (Array.isArray(wsRows) && wsRows[0]) {
+      const ws = wsRows[0];
+      if (ws.auth?.mailbox && ws.auth?.tokens) store.auth = ws.auth;
+      if (ws.settings && typeof ws.settings === 'object' && Object.keys(ws.settings).length) {
+        store.settings = {
+          senderName: String(ws.settings.senderName || ''),
+          senderService: String(ws.settings.senderService || ''),
+          defaultFollowUpDays: Number(ws.settings.defaultFollowUpDays) || 4,
+          templates: Array.isArray(ws.settings.templates) && ws.settings.templates.length
+            ? ws.settings.templates
+            : defaultTemplates
+        };
+      }
+      if (ws.thread_owners && typeof ws.thread_owners === 'object') {
+        store.threadOwners = { ...store.threadOwners, ...ws.thread_owners };
+      }
+    }
+    if (Array.isArray(leadRows)) {
+      store.leads = leadRows.map(supabaseRowToLead);
+    }
+    supabaseStatus = { configured: true, connected: true, error: null };
+  } catch (error) {
+    supabaseStatus = { configured: true, connected: false, error: error.message };
+  }
+}
+
+async function syncToSupabase(removedIds = []) {
+  if (!supabaseConfigured) return;
+  try {
+    const wsPayload = {
+      id: 'default',
+      settings: store.settings,
+      auth: store.auth,
+      thread_owners: store.threadOwners,
+      updated_at: new Date().toISOString()
+    };
+    const wsRes = await fetch(`${supabaseUrl}/rest/v1/jobhunta_workspace?on_conflict=id`, {
+      method: 'POST',
+      headers: supabaseHeaders({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
+      body: JSON.stringify(wsPayload),
+      signal: AbortSignal.timeout(7000)
+    });
+    if (removedIds.length) {
+      const inList = removedIds.map(id => `"${String(id).replace(/"/g, '')}"`).join(',');
+      await fetch(`${supabaseUrl}/rest/v1/jobhunta_leads?id=in.(${encodeURIComponent(inList)})`, {
+        method: 'DELETE',
+        headers: supabaseHeaders({ Prefer: 'return=minimal' }),
+        signal: AbortSignal.timeout(6000)
+      });
+    }
+    if (store.leads.length) {
+      const rows = store.leads.map(leadToSupabaseRow);
+      await fetch(`${supabaseUrl}/rest/v1/jobhunta_leads?on_conflict=id`, {
+        method: 'POST',
+        headers: supabaseHeaders({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
+        body: JSON.stringify(rows),
+        signal: AbortSignal.timeout(9000)
+      });
+    }
+    if (wsRes.ok) {
+      supabaseStatus = { configured: true, connected: true, error: null };
+    }
+  } catch (error) {
+    supabaseStatus = { configured: true, connected: false, error: error.message };
+  }
+}
+
 let writeQueue = Promise.resolve();
-function saveStore() {
-  writeQueue = writeQueue.catch(() => {}).then(() =>
-    writeFile(dataFilePath, JSON.stringify(store, null, 2), 'utf8').catch(() => {})
-  );
+function saveStore(removedIds = []) {
+  writeQueue = writeQueue.catch(() => {}).then(async () => {
+    await writeFile(dataFilePath, JSON.stringify(store, null, 2), 'utf8').catch(() => {});
+    await syncToSupabase(removedIds);
+  });
   return writeQueue;
 }
+
+await loadFromSupabase();
 
 const sessions = new Map();
 const searches = new Map();
@@ -1422,6 +1580,8 @@ export async function handleRequest(req, res) {
       } catch { return redirect('/?gmail=failed#inbox'); }
     }
     if (req.method === 'GET' && path === '/api/status') {
+      if (supabaseConfigured) await loadFromSupabase();
+      hydrateSession(session, rawAuthCookie);
       return json({
         industries: Object.keys(industries),
         configured: gmailConfigured,
@@ -1429,13 +1589,17 @@ export async function handleRequest(req, res) {
         credentialError,
         redirectUri: activeRedirectUri,
         mailbox: session.mailbox ?? null,
+        supabase: supabaseStatus,
         leads: store.leads,
         settings: store.settings
       });
     }
     if (req.method === 'POST' && path === '/api/workspace') {
       const payload = await readJson(req, 2000000);
+      let removedIds = [];
       if (Array.isArray(payload.leads)) {
+        const incomingIds = new Set(payload.leads.map(l => l.id));
+        removedIds = store.leads.filter(l => l.id && !incomingIds.has(l.id)).map(l => l.id);
         store.leads = payload.leads.slice(0, 5000);
         for (const lead of store.leads) {
           for (const conv of lead.threads || []) {
@@ -1461,8 +1625,8 @@ export async function handleRequest(req, res) {
             : defaultTemplates
         };
       }
-      await saveStore();
-      return json({ ok: true });
+      await saveStore(removedIds);
+      return json({ ok: true, supabase: supabaseStatus });
     }
     if (req.method === 'POST' && path === '/api/disconnect') {
       delete session.tokens;
