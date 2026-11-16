@@ -10,6 +10,8 @@ import {
   buildLeadIntelligence,
   parseBingMapsHtml,
   resolveSearchLocations,
+  hashPassword,
+  verifyPassword,
   industries
 } from '../server.mjs';
 
@@ -204,4 +206,11 @@ test('resolveSearchLocations expands a State into constituent sub-cities for bit
   const texasCities = await resolveSearchLocations('Texas');
   assert.ok(texasCities.length >= 6);
   assert.ok(texasCities.some(c => c.startsWith('Houston')));
+});
+
+test('hashPassword and verifyPassword securely hash and verify user passwords', () => {
+  const hash = hashPassword('MySecretPass123!');
+  assert.ok(hash.includes(':'));
+  assert.equal(verifyPassword('MySecretPass123!', hash), true);
+  assert.equal(verifyPassword('WrongPassword', hash), false);
 });

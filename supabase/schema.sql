@@ -1,5 +1,15 @@
 -- Run this in your Supabase SQL Editor (https://supabase.com/dashboard/project/_/sql)
 
+create table if not exists public.jobhunta_users (
+  id uuid primary key default gen_random_uuid(),
+  email text unique not null,
+  name text not null default '',
+  password_hash text not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_jobhunta_users_email on public.jobhunta_users (email);
+
 create table if not exists public.jobhunta_workspace (
   id text primary key default 'default',
   settings jsonb not null default '{}'::jsonb,
@@ -10,6 +20,7 @@ create table if not exists public.jobhunta_workspace (
 
 create table if not exists public.jobhunta_leads (
   id text primary key,
+  user_id text not null default 'default',
   name text not null,
   industry text default '',
   city text default '',
@@ -30,24 +41,15 @@ create table if not exists public.jobhunta_leads (
 );
 
 create index if not exists idx_jobhunta_leads_updated_at on public.jobhunta_leads (updated_at desc);
+create index if not exists idx_jobhunta_leads_user_id on public.jobhunta_leads (user_id, updated_at desc);
 create index if not exists idx_jobhunta_leads_city on public.jobhunta_leads (city);
 create index if not exists idx_jobhunta_leads_industry on public.jobhunta_leads (industry);
 
+grant usage on schema public to anon, authenticated, service_role;
+grant select, insert, update, delete on table public.jobhunta_users to anon, authenticated, service_role;
+grant select, insert, update, delete on table public.jobhunta_workspace to anon, authenticated, service_role;
+grant select, insert, update, delete on table public.jobhunta_leads to anon, authenticated, service_role;
+
+alter table public.jobhunta_users enable row level security;
 alter table public.jobhunta_workspace enable row level security;
 alter table public.jobhunta_leads enable row level security;
-
--- Allow access when using SUPABASE_SERVICE_ROLE_KEY or authenticated/anon key for personal workspace
-do $$
-begin
-  if not exists (
-    select 1 from pg_policies where tablename = 'jobhunta_workspace' and policyname = 'Allow workspace access'
-  ) then
-    create policy "Allow workspace access" on public.jobhunta_workspace for all using (true) with check (true);
-  end if;
-
-  if not exists (
-    select 1 from pg_policies where tablename = 'jobhunta_leads' and policyname = 'Allow leads access'
-  ) then
-    create policy "Allow leads access" on public.jobhunta_leads for all using (true) with check (true);
-  end if;
-end $$;

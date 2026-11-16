@@ -2,8 +2,6 @@ import { readBusinessCsv, writeBusinessCsv } from './csv.mjs';
 
 const $ = selector => document.querySelector(selector);
 const dialog = $('#dialog');
-const storageKey = 'jobhunta.leads.v1';
-const settingsKey = 'jobhunta.settings.v1';
 const pageSize = 20;
 
 const defaultTemplates = [
@@ -27,16 +25,28 @@ const defaultTemplates = [
   }
 ];
 
-let leads = JSON.parse(localStorage.getItem(storageKey) || '[]');
+let currentUser = null;
+let leads = [];
 let settings = {
   senderName: '',
   senderService: '',
   defaultFollowUpDays: 4,
-  templates: defaultTemplates,
-  ...JSON.parse(localStorage.getItem(settingsKey) || '{}')
+  templates: defaultTemplates
 };
-if (!Array.isArray(settings.templates) || !settings.templates.length) {
-  settings.templates = defaultTemplates;
+
+const userLeadsKey = userId => `jobhunta.leads.v2.${userId}`;
+const userSettingsKey = userId => `jobhunta.settings.v2.${userId}`;
+
+function loadLocalUserCache(userId) {
+  if (!userId) return { cachedLeads: [], cachedSettings: {} };
+  try {
+    return {
+      cachedLeads: JSON.parse(localStorage.getItem(userLeadsKey(userId)) || '[]'),
+      cachedSettings: JSON.parse(localStorage.getItem(userSettingsKey(userId)) || '{}')
+    };
+  } catch {
+    return { cachedLeads: [], cachedSettings: {} };
+  }
 }
 
 let account = {};
@@ -104,13 +114,16 @@ function empty(icon, title, description) {
 }
 
 function syncWorkspaceToServer() {
+  if (!currentUser?.id) return;
   api('/api/workspace', { leads, settings }).catch(() => {});
 }
 
 function persist() {
-  localStorage.setItem(storageKey, JSON.stringify(leads));
-  localStorage.setItem(settingsKey, JSON.stringify(settings));
-  syncWorkspaceToServer();
+  if (currentUser?.id) {
+    localStorage.setItem(userLeadsKey(currentUser.id), JSON.stringify(leads));
+    localStorage.setItem(userSettingsKey(currentUser.id), JSON.stringify(settings));
+    syncWorkspaceToServer();
+  }
   renderDashboard();
   renderLeads();
   renderInbox();
@@ -1861,6 +1874,117 @@ renderInbox();
 renderSettings();
 navigate();
 
+let authMode = 'login';
+
+function setAuthMode(mode) {
+  authMode = mode;
+  const isSignup = mode === 'signup';
+  $('#tab-login').classList.toggle('active', !isSignup);
+  $('#tab-login').setAttribute('aria-selected', String(!isSignup));
+  $('#tab-signup').classList.toggle('active', isSignup);
+  $('#tab-signup').setAttribute('aria-selected', String(isSignup));
+  $('#auth-name-wrap').hidden = !isSignup;
+  $('#auth-name').required = isSignup;
+  $('#auth-service-wrap').hidden = !isSignup;
+  $('#auth-submit').textContent = isSignup ? 'Create account & enter →' : 'Sign in to workspace →';
+  $('#auth-error').hidden = true;
+}
+
+function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMailbox = null) {
+  currentUser = user;
+  account.user = user;
+  account.mailbox = serverMailbox;
+  document.body.classList.remove('auth-locked');
+
+  const sidebarUser = $('#sidebar-user');
+  if (sidebarUser) {
+    sidebarUser.replaceChildren(create('i'), document.createTextNode(' ' + (user.name || user.email)));
+  }
+
+  const { cachedLeads, cachedSettings } = loadLocalUserCache(user.id);
+  leads = Array.isArray(serverLeads) && serverLeads.length
+    ? serverLeads
+    : (Array.isArray(cachedLeads) ? cachedLeads : []);
+
+  if (Array.isArray(cachedLeads) && cachedLeads.length && Array.isArray(serverLeads) && serverLeads.length) {
+    for (const localLead of cachedLeads) {
+      if (!duplicate(localLead)) leads.push(localLead);
+    }
+  }
+
+  settings = {
+    senderName: user.name || '',
+    senderService: '',
+    defaultFollowUpDays: 4,
+    templates: defaultTemplates,
+    ...cachedSettings,
+    ...(serverSettings && typeof serverSettings === 'object' ? serverSettings : {})
+  };
+  if (!Array.isArray(settings.templates) || !settings.templates.length) {
+    settings.templates = defaultTemplates;
+  }
+
+  results = [];
+  resultsPage = 1;
+  activeBusinessId = null;
+  messages.clear();
+  $('#results').replaceChildren(empty('⌕', 'Start a search', 'Choose or enter an industry and enter the city you want to explore.'));
+  $('#save-all').hidden = true;
+  $('#results-pagination').hidden = true;
+  $('#results-count').textContent = '';
+
+  persist();
+  renderAccount();
+  navigate();
+  refresh();
+}
+
+function showAuthScreen() {
+  currentUser = null;
+  leads = [];
+  results = [];
+  activeBusinessId = null;
+  messages.clear();
+  document.body.classList.add('auth-locked');
+  setMobileNav(false);
+}
+
+$('#tab-login').onclick = () => setAuthMode('login');
+$('#tab-signup').onclick = () => setAuthMode('signup');
+
+$('#auth-form').onsubmit = async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = $('#auth-submit');
+  const errEl = $('#auth-error');
+  errEl.hidden = true;
+  submit.disabled = true;
+  submit.textContent = authMode === 'signup' ? 'Creating account…' : 'Signing in…';
+
+  try {
+    const payload = Object.fromEntries(new FormData(form));
+    const endpoint = authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
+    const data = await api(endpoint, payload);
+    form.reset();
+    applyUserSession(data.user, data.leads, data.settings, data.mailbox);
+  } catch (error) {
+    errEl.textContent = error.message;
+    errEl.hidden = false;
+  } finally {
+    submit.disabled = false;
+    setAuthMode(authMode);
+  }
+};
+
+$('#logout-btn').onclick = async () => {
+  try {
+    await api('/api/auth/logout', {});
+  } catch {
+    // Proceed with local lock
+  }
+  showAuthScreen();
+};
+
 const oauthResult = new URLSearchParams(location.search).get('gmail');
 if (oauthResult) {
   report(oauthResult === 'permissions' ? 'Allow both Gmail permissions and try again.' : 'Gmail could not be connected. Check your Google OAuth settings and try again.', true);
@@ -1870,21 +1994,10 @@ try {
   account = await api('/api/status');
   const datalist = $('#industries');
   datalist.replaceChildren(...account.industries.map(industry => new Option(industry, industry)));
-  if (Array.isArray(account.leads) && account.leads.length) {
-    for (const serverLead of account.leads) {
-      if (!duplicate(serverLead)) leads.push(serverLead);
-    }
+  if (account.user) {
+    applyUserSession(account.user, account.leads, account.settings, account.mailbox);
+  } else {
+    showAuthScreen();
   }
-  if (account.settings && typeof account.settings === 'object') {
-    settings = {
-      ...settings,
-      ...account.settings,
-      senderName: account.settings.senderName || settings.senderName,
-      senderService: account.settings.senderService || settings.senderService
-    };
-  }
-  persist();
-  renderAccount();
-  refresh();
-  setInterval(() => { if (!document.hidden) refresh(); }, 60000);
+  setInterval(() => { if (currentUser && !document.hidden) refresh(); }, 60000);
 } catch (error) { report(error.message, true); }

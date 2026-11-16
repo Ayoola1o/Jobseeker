@@ -11,7 +11,36 @@
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
-<body>
+<body class="auth-locked">
+  <section id="auth-screen" class="auth-screen">
+    <div class="surface auth-card">
+      <div class="auth-header">
+        <img src="/logo.png" alt="Jobhunta logo" width="48" height="48">
+        <h1>Jobhunta</h1>
+        <p>Personal business discovery, AI lead intelligence &amp; Gmail outreach workspace.</p>
+      </div>
+      <div class="auth-tabs" role="tablist">
+        <button id="tab-login" class="auth-tab active" type="button" role="tab" aria-selected="true">Sign in</button>
+        <button id="tab-signup" class="auth-tab" type="button" role="tab" aria-selected="false">Create account</button>
+      </div>
+      <form id="auth-form" class="stack">
+        <label id="auth-name-wrap" hidden>Full name
+          <input name="name" id="auth-name" placeholder="e.g. Ayoola Adebisi" maxlength="80">
+        </label>
+        <label>Email address
+          <input name="email" id="auth-email" type="email" placeholder="you@example.com" maxlength="254" required>
+        </label>
+        <label>Password
+          <input name="password" id="auth-password" type="password" placeholder="At least 6 characters" minlength="6" maxlength="128" required>
+        </label>
+        <label id="auth-service-wrap" hidden>Your service / offer (optional)
+          <input name="senderService" id="auth-service" placeholder="e.g. Shopify CRO, web design &amp; local SEO" maxlength="200">
+        </label>
+        <p id="auth-error" class="small" role="status" hidden></p>
+        <button id="auth-submit" type="submit">Sign in to workspace →</button>
+      </form>
+    </div>
+  </section>
   <div id="sidebar-backdrop" class="sidebar-backdrop" aria-hidden="true"></div>
   <aside id="sidebar">
     <div class="sidebar-top">
@@ -25,7 +54,10 @@
       <a href="#inbox"><span aria-hidden="true">✉</span> Inbox</a>
       <a href="#settings"><span aria-hidden="true">⚙</span> Settings</a>
     </nav>
-    <div class="sidebar-footer"><i></i> Personal workspace</div>
+    <div class="sidebar-footer">
+      <div id="sidebar-user"><i></i> Personal workspace</div>
+      <button id="logout-btn" class="secondary logout-btn" type="button">Log out</button>
+    </div>
   </aside>
   <main>
     <header>

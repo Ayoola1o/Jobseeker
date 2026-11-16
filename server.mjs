@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { randomBytes, createHash, createCipheriv, createDecipheriv } from 'node:crypto';
+import { randomBytes, randomUUID, createHash, createCipheriv, createDecipheriv, scryptSync, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
@@ -101,35 +101,70 @@ const defaultTemplates = [
   }
 ];
 
+export function hashPassword(password) {
+  const salt = randomBytes(16).toString('hex');
+  const derived = scryptSync(String(password), salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+export function verifyPassword(password, storedHash = '') {
+  const [salt, keyHex] = String(storedHash).split(':');
+  if (!salt || !keyHex) return false;
+  const keyBuf = Buffer.from(keyHex, 'hex');
+  const derivedBuf = scryptSync(String(password), salt, 64);
+  if (keyBuf.length !== derivedBuf.length) return false;
+  return timingSafeEqual(keyBuf, derivedBuf);
+}
+
+function createEmptyWorkspace(name = '', service = '') {
+  return {
+    auth: null,
+    leads: [],
+    settings: {
+      senderName: name,
+      senderService: service,
+      defaultFollowUpDays: 4,
+      templates: defaultTemplates
+    },
+    threadOwners: {}
+  };
+}
+
 const store = {
-  auth: null,
-  leads: [],
-  settings: {
-    senderName: '',
-    senderService: '',
-    defaultFollowUpDays: 4,
-    templates: defaultTemplates
-  },
-  threadOwners: {}
+  users: [],
+  workspaces: {
+    default: createEmptyWorkspace()
+  }
 };
+
+function getWorkspace(userId = 'default') {
+  const key = userId || 'default';
+  if (!store.workspaces[key]) {
+    store.workspaces[key] = createEmptyWorkspace();
+  }
+  return store.workspaces[key];
+}
 
 try {
   const saved = JSON.parse(await readFile(dataFilePath, 'utf8'));
   if (saved && typeof saved === 'object') {
-    if (saved.auth?.mailbox && saved.auth?.tokens) store.auth = saved.auth;
-    if (Array.isArray(saved.leads)) store.leads = saved.leads;
-    if (saved.settings && typeof saved.settings === 'object') {
-      store.settings = {
-        senderName: String(saved.settings.senderName || ''),
-        senderService: String(saved.settings.senderService || ''),
-        defaultFollowUpDays: Number(saved.settings.defaultFollowUpDays) || 4,
-        templates: Array.isArray(saved.settings.templates) && saved.settings.templates.length
-          ? saved.settings.templates
-          : defaultTemplates
+    if (Array.isArray(saved.users)) store.users = saved.users;
+    if (saved.workspaces && typeof saved.workspaces === 'object') {
+      store.workspaces = saved.workspaces;
+    } else if (Array.isArray(saved.leads) || saved.settings) {
+      store.workspaces.default = {
+        auth: saved.auth || null,
+        leads: Array.isArray(saved.leads) ? saved.leads : [],
+        settings: {
+          senderName: String(saved.settings?.senderName || ''),
+          senderService: String(saved.settings?.senderService || ''),
+          defaultFollowUpDays: Number(saved.settings?.defaultFollowUpDays) || 4,
+          templates: Array.isArray(saved.settings?.templates) && saved.settings.templates.length
+            ? saved.settings.templates
+            : defaultTemplates
+        },
+        threadOwners: saved.threadOwners || {}
       };
-    }
-    if (saved.threadOwners && typeof saved.threadOwners === 'object') {
-      store.threadOwners = saved.threadOwners;
     }
   }
 } catch (error) {
@@ -156,9 +191,21 @@ function supabaseHeaders(extra = {}) {
   };
 }
 
-function leadToSupabaseRow(lead) {
+function dbRowId(userId, leadId) {
+  const raw = String(leadId || randomBytes(12).toString('hex'));
+  return raw.startsWith(userId + ':') ? raw : `${userId}:${raw}`;
+}
+
+function stripUserPrefix(userId, rowId = '') {
+  const prefix = userId + ':';
+  return String(rowId).startsWith(prefix) ? String(rowId).slice(prefix.length) : String(rowId);
+}
+
+function leadToSupabaseRow(lead, userId = 'default') {
+  const cleanId = stripUserPrefix(userId, lead.id || randomBytes(12).toString('hex'));
   return {
-    id: String(lead.id || randomBytes(12).toString('hex')),
+    id: dbRowId(userId, cleanId),
+    user_id: userId,
     name: String(lead.name || 'Unnamed Business'),
     industry: String(lead.industry || ''),
     city: String(lead.city || ''),
@@ -174,15 +221,16 @@ function leadToSupabaseRow(lead) {
     classification: String(lead.classification || ''),
     due: String(lead.due || ''),
     about: String(lead.about || ''),
-    data: lead,
+    data: { ...lead, id: cleanId },
     updated_at: new Date().toISOString()
   };
 }
 
-function supabaseRowToLead(row) {
+function supabaseRowToLead(row, userId = 'default') {
+  const cleanId = stripUserPrefix(userId, row.id);
   return {
     ...(row.data && typeof row.data === 'object' ? row.data : {}),
-    id: row.id,
+    id: cleanId,
     name: row.name,
     industry: row.industry || '',
     city: row.city || '',
@@ -201,15 +249,67 @@ function supabaseRowToLead(row) {
   };
 }
 
-async function loadFromSupabase() {
-  if (!supabaseConfigured) return;
+async function findUserByEmail(email) {
+  const normalized = String(email || '').trim().toLowerCase();
+  if (!normalized) return null;
+  if (supabaseConfigured) {
+    try {
+      const res = await fetch(`${supabaseUrl}/rest/v1/jobhunta_users?email=eq.${encodeURIComponent(normalized)}&select=*&limit=1`, {
+        headers: supabaseHeaders(),
+        signal: AbortSignal.timeout(6000)
+      });
+      if (res.ok) {
+        const rows = await res.json();
+        if (Array.isArray(rows) && rows[0]) return rows[0];
+      }
+    } catch {
+      // Fallback to local store
+    }
+  }
+  return store.users.find(u => u.email.toLowerCase() === normalized) || null;
+}
+
+async function createUserAccount({ name, email, password, senderService = '' }) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const cleanName = String(name || '').trim();
+  const userRecord = {
+    id: randomUUID(),
+    email: normalizedEmail,
+    name: cleanName,
+    password_hash: hashPassword(password),
+    created_at: new Date().toISOString()
+  };
+  if (supabaseConfigured) {
+    const res = await fetch(`${supabaseUrl}/rest/v1/jobhunta_users`, {
+      method: 'POST',
+      headers: supabaseHeaders({ Prefer: 'return=representation' }),
+      body: JSON.stringify(userRecord),
+      signal: AbortSignal.timeout(7000)
+    });
+    if (!res.ok) {
+      fail(400, 'An account with this email already exists.');
+    }
+    const created = await res.json();
+    if (Array.isArray(created) && created[0]) {
+      userRecord.id = created[0].id;
+    }
+  }
+  store.users.push(userRecord);
+  store.workspaces[userRecord.id] = createEmptyWorkspace(cleanName, String(senderService || '').trim());
+  await saveStore(userRecord.id);
+  return { id: userRecord.id, email: userRecord.email, name: userRecord.name };
+}
+
+async function loadFromSupabase(userId = 'default') {
+  if (!supabaseConfigured || !userId) return;
+  const ws = getWorkspace(userId);
   try {
     const [wsRes, leadsRes] = await Promise.all([
-      fetch(`${supabaseUrl}/rest/v1/jobhunta_workspace?id=eq.default&select=*`, {
+      fetch(`${supabaseUrl}/rest/v1/jobhunta_workspace?id=eq.${encodeURIComponent(userId)}&select=*`, {
         headers: supabaseHeaders(),
         signal: AbortSignal.timeout(6000)
       }),
-      fetch(`${supabaseUrl}/rest/v1/jobhunta_leads?select=*&order=updated_at.desc&limit=5000`, {
+      fetch(`${supabaseUrl}/rest/v1/jobhunta_leads?user_id=eq.${encodeURIComponent(userId)}&select=*&order=updated_at.desc&limit=5000`, {
         headers: supabaseHeaders(),
         signal: AbortSignal.timeout(6000)
       })
@@ -218,32 +318,32 @@ async function loadFromSupabase() {
       supabaseStatus = {
         configured: true,
         connected: false,
-        error: `Supabase returned HTTP ${!wsRes.ok ? wsRes.status : leadsRes.status}. Run supabase/schema.sql in Supabase SQL Editor.`
+        error: `Supabase returned HTTP ${!wsRes.ok ? wsRes.status : leadsRes.status}.`
       };
       return;
     }
     const wsRows = await wsRes.json();
     const leadRows = await leadsRes.json();
     if (Array.isArray(wsRows) && wsRows[0]) {
-      const ws = wsRows[0];
-      const rawAuth = typeof ws.auth?.sealed === 'string' ? unsealCookie(ws.auth.sealed) : ws.auth;
-      if (rawAuth?.mailbox && rawAuth?.tokens) store.auth = rawAuth;
-      if (ws.settings && typeof ws.settings === 'object' && Object.keys(ws.settings).length) {
-        store.settings = {
-          senderName: String(ws.settings.senderName || ''),
-          senderService: String(ws.settings.senderService || ''),
-          defaultFollowUpDays: Number(ws.settings.defaultFollowUpDays) || 4,
-          templates: Array.isArray(ws.settings.templates) && ws.settings.templates.length
-            ? ws.settings.templates
+      const row = wsRows[0];
+      const rawAuth = typeof row.auth?.sealed === 'string' ? unsealCookie(row.auth.sealed) : row.auth;
+      if (rawAuth?.mailbox && rawAuth?.tokens) ws.auth = rawAuth;
+      if (row.settings && typeof row.settings === 'object' && Object.keys(row.settings).length) {
+        ws.settings = {
+          senderName: String(row.settings.senderName || ''),
+          senderService: String(row.settings.senderService || ''),
+          defaultFollowUpDays: Number(row.settings.defaultFollowUpDays) || 4,
+          templates: Array.isArray(row.settings.templates) && row.settings.templates.length
+            ? row.settings.templates
             : defaultTemplates
         };
       }
-      if (ws.thread_owners && typeof ws.thread_owners === 'object') {
-        store.threadOwners = { ...store.threadOwners, ...ws.thread_owners };
+      if (row.thread_owners && typeof row.thread_owners === 'object') {
+        ws.threadOwners = { ...ws.threadOwners, ...row.thread_owners };
       }
     }
     if (Array.isArray(leadRows)) {
-      store.leads = leadRows.map(supabaseRowToLead);
+      ws.leads = leadRows.map(r => supabaseRowToLead(r, userId));
     }
     supabaseStatus = { configured: true, connected: true, error: null };
   } catch (error) {
@@ -251,14 +351,15 @@ async function loadFromSupabase() {
   }
 }
 
-async function syncToSupabase(removedIds = []) {
-  if (!supabaseConfigured) return;
+async function syncToSupabase(userId = 'default', removedIds = []) {
+  if (!supabaseConfigured || !userId) return;
+  const ws = getWorkspace(userId);
   try {
     const wsPayload = {
-      id: 'default',
-      settings: store.settings,
-      auth: store.auth ? { sealed: sealCookie(store.auth) } : null,
-      thread_owners: store.threadOwners,
+      id: userId,
+      settings: ws.settings,
+      auth: ws.auth ? { sealed: sealCookie(ws.auth) } : null,
+      thread_owners: ws.threadOwners,
       updated_at: new Date().toISOString()
     };
     const wsRes = await fetch(`${supabaseUrl}/rest/v1/jobhunta_workspace?on_conflict=id`, {
@@ -268,15 +369,15 @@ async function syncToSupabase(removedIds = []) {
       signal: AbortSignal.timeout(7000)
     });
     if (removedIds.length) {
-      const inList = removedIds.map(id => `"${String(id).replace(/"/g, '')}"`).join(',');
-      await fetch(`${supabaseUrl}/rest/v1/jobhunta_leads?id=in.(${encodeURIComponent(inList)})`, {
+      const inList = removedIds.map(id => `"${dbRowId(userId, id).replace(/"/g, '')}"`).join(',');
+      await fetch(`${supabaseUrl}/rest/v1/jobhunta_leads?user_id=eq.${encodeURIComponent(userId)}&id=in.(${encodeURIComponent(inList)})`, {
         method: 'DELETE',
         headers: supabaseHeaders({ Prefer: 'return=minimal' }),
         signal: AbortSignal.timeout(6000)
       });
     }
-    if (store.leads.length) {
-      const rows = store.leads.map(leadToSupabaseRow);
+    if (ws.leads.length) {
+      const rows = ws.leads.map(lead => leadToSupabaseRow(lead, userId));
       await fetch(`${supabaseUrl}/rest/v1/jobhunta_leads?on_conflict=id`, {
         method: 'POST',
         headers: supabaseHeaders({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
@@ -293,15 +394,15 @@ async function syncToSupabase(removedIds = []) {
 }
 
 let writeQueue = Promise.resolve();
-function saveStore(removedIds = []) {
+function saveStore(userId = 'default', removedIds = []) {
   writeQueue = writeQueue.catch(() => {}).then(async () => {
     await writeFile(dataFilePath, JSON.stringify(store, null, 2), 'utf8').catch(() => {});
-    await syncToSupabase(removedIds);
+    await syncToSupabase(userId, removedIds);
   });
   return writeQueue;
 }
 
-await loadFromSupabase();
+await loadFromSupabase('default');
 
 const sessions = new Map();
 const searches = new Map();
@@ -366,13 +467,15 @@ function exchange(params) {
 
 async function gmail(session, path, payload) {
   if (!session.tokens) fail(401, 'Connect your Gmail account first.');
+  const userId = session.userId || 'default';
+  const ws = getWorkspace(userId);
   if (session.tokens.expires < Date.now() + 60000) {
     session.refresh ??= exchange({ grant_type: 'refresh_token', refresh_token: session.tokens.refresh_token })
       .then(tokens => {
         session.tokens = { ...session.tokens, ...tokens, expires: Date.now() + tokens.expires_in * 1000 };
-        if (store.auth && store.auth.mailbox === session.mailbox) {
-          store.auth.tokens = session.tokens;
-          saveStore();
+        if (ws.auth && ws.auth.mailbox === session.mailbox) {
+          ws.auth.tokens = session.tokens;
+          saveStore(userId);
         }
       }).finally(() => { session.refresh = null; });
     await session.refresh;
@@ -433,7 +536,8 @@ function extractAddress(value = '') {
 
 async function thread(session, id) {
   if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id || '')) fail(400, 'Invalid Gmail thread.');
-  const owner = session.threadOwners.get(id) || store.threadOwners[id];
+  const ws = getWorkspace(session.userId || 'default');
+  const owner = session.threadOwners.get(id) || ws.threadOwners[id];
   if (owner && owner !== session.mailbox) fail(404, 'This conversation is unavailable in the connected mailbox.');
   const result = await gmail(session, 'threads/' + id + '?format=full');
   return (result.messages || []).map(message => ({
@@ -494,9 +598,11 @@ async function send(session, data) {
     const encodedBody = Buffer.from(body).toString('base64').match(/.{1,76}/g).join('\r\n');
     const raw = Buffer.from(headers.join('\r\n') + '\r\n\r\n' + encodedBody).toString('base64url');
     const result = await gmail(session, 'messages/send', { raw, ...(threadId ? { threadId } : {}) });
+    const userId = session.userId || 'default';
+    const ws = getWorkspace(userId);
     session.threadOwners.set(result.threadId, session.mailbox);
-    store.threadOwners[result.threadId] = session.mailbox;
-    saveStore();
+    ws.threadOwners[result.threadId] = session.mailbox;
+    saveStore(userId);
     return result;
   })();
   session.sends.set(key, operation);
@@ -1469,19 +1575,31 @@ async function readJson(req, limit = 512000) {
   } catch { fail(400, 'Invalid form data.'); }
 }
 
-function hydrateSession(session, rawAuthCookie) {
+function hydrateSession(session, rawAuthCookie, rawUserCookie) {
+  const cookieUser = unsealCookie(rawUserCookie);
+  if (cookieUser?.id && cookieUser?.email) {
+    session.user = { id: cookieUser.id, email: cookieUser.email, name: cookieUser.name || '' };
+    session.userId = cookieUser.id;
+  } else {
+    session.user = null;
+    session.userId = null;
+  }
+  const ws = getWorkspace(session.userId || 'default');
   const cookieAuth = unsealCookie(rawAuthCookie);
-  if (cookieAuth?.mailbox && cookieAuth?.tokens) {
+  if (cookieAuth?.mailbox && cookieAuth?.tokens && (!cookieAuth.userId || cookieAuth.userId === session.userId)) {
     session.mailbox = cookieAuth.mailbox;
     session.tokens = cookieAuth.tokens;
-  } else if (!session.mailbox && store.auth?.mailbox && store.auth?.tokens) {
-    session.mailbox = store.auth.mailbox;
-    session.tokens = store.auth.tokens;
+  } else if (session.userId && ws.auth?.mailbox && ws.auth?.tokens) {
+    session.mailbox = ws.auth.mailbox;
+    session.tokens = ws.auth.tokens;
+  } else {
+    delete session.mailbox;
+    delete session.tokens;
   }
   if (cookieAuth?.oauth) {
     session.oauth = cookieAuth.oauth;
   }
-  for (const [threadId, owner] of Object.entries(store.threadOwners)) {
+  for (const [threadId, owner] of Object.entries(ws.threadOwners)) {
     session.threadOwners.set(threadId, owner);
   }
 }
@@ -1513,28 +1631,108 @@ export async function handleRequest(req, res) {
     const cookiesToSet = [];
     const sessionToken = req.headers.cookie?.match(/(?:^|;\s*)jobhunta=([\w-]+)/)?.[1];
     const rawAuthCookie = req.headers.cookie?.match(/(?:^|;\s*)jobhunta_auth=([\w.-]+)/)?.[1] || '';
+    const rawUserCookie = req.headers.cookie?.match(/(?:^|;\s*)jobhunta_user=([\w.-]+)/)?.[1] || '';
     for (const [key, session] of sessions) if (session.expires < Date.now()) sessions.delete(key);
     let session = sessions.get(sessionToken);
     if (!session) {
       const token = nonce();
       session = { expires: Date.now() + maxAge, sends: new Map(), threadOwners: new Map() };
-      hydrateSession(session, rawAuthCookie);
+      hydrateSession(session, rawAuthCookie, rawUserCookie);
       sessions.set(token, session);
       cookiesToSet.push(`jobhunta=${token}; ${cookieFlags}`);
     } else {
-      hydrateSession(session, rawAuthCookie);
+      hydrateSession(session, rawAuthCookie, rawUserCookie);
     }
     const writeAuthCookie = data => {
-      const sealed = data ? sealCookie(data) : '';
+      const sealed = data ? sealCookie({ ...data, userId: session.userId }) : '';
       cookiesToSet.push(`jobhunta_auth=${sealed}; ${cookieFlags}${data ? '; Max-Age=2592000' : '; Max-Age=0'}`);
+      res.setHeader('Set-Cookie', cookiesToSet);
+    };
+    const writeUserCookie = userData => {
+      const sealed = userData ? sealCookie(userData) : '';
+      cookiesToSet.push(`jobhunta_user=${sealed}; ${cookieFlags}${userData ? '; Max-Age=2592000' : '; Max-Age=0'}`);
       res.setHeader('Set-Cookie', cookiesToSet);
     };
     if (cookiesToSet.length) res.setHeader('Set-Cookie', cookiesToSet);
 
+    if (req.method === 'POST' && path === '/api/auth/signup') {
+      const { name, email, password, senderService } = await readJson(req);
+      if (typeof name !== 'string' || name.trim().length < 2 || name.trim().length > 80) {
+        fail(400, 'Enter your name (2–80 characters).');
+      }
+      if (!validEmail(email)) {
+        fail(400, 'Enter a valid email address.');
+      }
+      if (typeof password !== 'string' || password.length < 6 || password.length > 128) {
+        fail(400, 'Password must be at least 6 characters.');
+      }
+      const existing = await findUserByEmail(email);
+      if (existing) {
+        fail(409, 'An account with this email already exists. Please sign in.');
+      }
+      const user = await createUserAccount({ name, email, password, senderService });
+      session.user = user;
+      session.userId = user.id;
+      delete session.mailbox;
+      delete session.tokens;
+      writeUserCookie(user);
+      writeAuthCookie(null);
+      const ws = getWorkspace(user.id);
+      return json({
+        user,
+        leads: ws.leads,
+        settings: ws.settings,
+        mailbox: null
+      });
+    }
+
+    if (req.method === 'POST' && path === '/api/auth/login') {
+      const { email, password } = await readJson(req);
+      if (!validEmail(email) || typeof password !== 'string' || !password) {
+        fail(400, 'Enter your email and password.');
+      }
+      const record = await findUserByEmail(email);
+      if (!record || !verifyPassword(password, record.password_hash)) {
+        fail(401, 'Invalid email or password.');
+      }
+      const user = { id: record.id, email: record.email, name: record.name || '' };
+      session.user = user;
+      session.userId = user.id;
+      await loadFromSupabase(user.id);
+      const ws = getWorkspace(user.id);
+      if (ws.auth?.mailbox && ws.auth?.tokens) {
+        session.mailbox = ws.auth.mailbox;
+        session.tokens = ws.auth.tokens;
+        writeAuthCookie({ mailbox: session.mailbox, tokens: session.tokens });
+      } else {
+        delete session.mailbox;
+        delete session.tokens;
+        writeAuthCookie(null);
+      }
+      writeUserCookie(user);
+      return json({
+        user,
+        leads: ws.leads,
+        settings: ws.settings,
+        mailbox: session.mailbox ?? null
+      });
+    }
+
+    if (req.method === 'POST' && path === '/api/auth/logout') {
+      session.user = null;
+      session.userId = null;
+      delete session.mailbox;
+      delete session.tokens;
+      writeUserCookie(null);
+      writeAuthCookie(null);
+      return json({ ok: true });
+    }
+
     if (req.method === 'POST' && path === '/api/connect') {
+      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
       if (!gmailConfigured) fail(503, credentialError || 'Add a Google web OAuth client to enable Gmail.');
       const verifier = nonce();
-      const stateToken = sealCookie({ v: verifier, r: activeRedirectUri, e: Date.now() + 600000 });
+      const stateToken = sealCookie({ u: session.userId, v: verifier, r: activeRedirectUri, e: Date.now() + 600000 });
       session.oauth = { state: stateToken, verifier, expires: Date.now() + 600000 };
       writeAuthCookie({ mailbox: session.mailbox, tokens: session.tokens, oauth: session.oauth });
       const params = new URLSearchParams({
@@ -1554,7 +1752,7 @@ export async function handleRequest(req, res) {
       const stateParam = url.searchParams.get('state') || '';
       const unsealed = unsealCookie(stateParam);
       const pending = unsealed?.v
-        ? { state: stateParam, verifier: unsealed.v, redirectUri: unsealed.r || activeRedirectUri, expires: unsealed.e }
+        ? { state: stateParam, userId: unsealed.u || session.userId || 'default', verifier: unsealed.v, redirectUri: unsealed.r || activeRedirectUri, expires: unsealed.e }
         : session.oauth;
       delete session.oauth;
       if (!pending || pending.expires < Date.now() || stateParam !== pending.state ||
@@ -1569,50 +1767,59 @@ export async function handleRequest(req, res) {
         if (!tokens.refresh_token || !gmailScopes.every(scope => (tokens.scope || '').split(' ').includes(scope))) {
           return redirect('/?gmail=permissions#inbox');
         }
-        const candidate = { tokens: { ...tokens, expires: Date.now() + tokens.expires_in * 1000 } };
+        const candidate = { userId: pending.userId, tokens: { ...tokens, expires: Date.now() + tokens.expires_in * 1000 } };
         const account = await gmail(candidate, 'profile');
         if (!validEmail(account.emailAddress)) return redirect('/?gmail=failed#inbox');
+        const targetUserId = pending.userId || session.userId || 'default';
+        const ws = getWorkspace(targetUserId);
+        session.userId = targetUserId;
         session.tokens = candidate.tokens;
         session.mailbox = account.emailAddress;
-        store.auth = { mailbox: account.emailAddress, tokens: candidate.tokens };
+        ws.auth = { mailbox: account.emailAddress, tokens: candidate.tokens };
         writeAuthCookie({ mailbox: session.mailbox, tokens: session.tokens });
-        await saveStore();
+        await saveStore(targetUserId);
         return redirect('/#inbox');
       } catch { return redirect('/?gmail=failed#inbox'); }
     }
     if (req.method === 'GET' && path === '/api/status') {
-      if (supabaseConfigured) await loadFromSupabase();
-      hydrateSession(session, rawAuthCookie);
+      if (session.userId && supabaseConfigured) {
+        await loadFromSupabase(session.userId);
+        hydrateSession(session, rawAuthCookie, rawUserCookie);
+      }
+      const ws = session.userId ? getWorkspace(session.userId) : createEmptyWorkspace();
       return json({
+        user: session.user ?? null,
         industries: Object.keys(industries),
         configured: gmailConfigured,
         clientId: client_id || null,
         credentialError,
         redirectUri: activeRedirectUri,
-        mailbox: session.mailbox ?? null,
+        mailbox: session.userId ? (session.mailbox ?? null) : null,
         supabase: supabaseStatus,
-        leads: store.leads,
-        settings: store.settings
+        leads: session.userId ? ws.leads : [],
+        settings: session.userId ? ws.settings : createEmptyWorkspace().settings
       });
     }
     if (req.method === 'POST' && path === '/api/workspace') {
+      if (!session.userId) fail(401, 'Sign in to save your workspace.');
+      const ws = getWorkspace(session.userId);
       const payload = await readJson(req, 2000000);
       let removedIds = [];
       if (Array.isArray(payload.leads)) {
         const incomingIds = new Set(payload.leads.map(l => l.id));
-        removedIds = store.leads.filter(l => l.id && !incomingIds.has(l.id)).map(l => l.id);
-        store.leads = payload.leads.slice(0, 5000);
-        for (const lead of store.leads) {
+        removedIds = ws.leads.filter(l => l.id && !incomingIds.has(l.id)).map(l => l.id);
+        ws.leads = payload.leads.slice(0, 5000);
+        for (const lead of ws.leads) {
           for (const conv of lead.threads || []) {
             if (conv.id && conv.mailbox) {
-              store.threadOwners[conv.id] = conv.mailbox;
+              ws.threadOwners[conv.id] = conv.mailbox;
               session.threadOwners.set(conv.id, conv.mailbox);
             }
           }
         }
       }
       if (payload.settings && typeof payload.settings === 'object') {
-        store.settings = {
+        ws.settings = {
           senderName: String(payload.settings.senderName || '').slice(0, 120),
           senderService: String(payload.settings.senderService || '').slice(0, 300),
           defaultFollowUpDays: Math.max(0, Math.min(90, Number(payload.settings.defaultFollowUpDays) || 0)),
@@ -1626,15 +1833,17 @@ export async function handleRequest(req, res) {
             : defaultTemplates
         };
       }
-      await saveStore(removedIds);
+      await saveStore(session.userId, removedIds);
       return json({ ok: true, supabase: supabaseStatus });
     }
     if (req.method === 'POST' && path === '/api/disconnect') {
+      const targetUserId = session.userId || 'default';
+      const ws = getWorkspace(targetUserId);
       delete session.tokens;
       delete session.mailbox;
-      store.auth = null;
+      ws.auth = null;
       writeAuthCookie(null);
-      await saveStore();
+      await saveStore(targetUserId);
       return json({ ok: true });
     }
     if (req.method === 'GET' && path === '/api/search') {
@@ -1652,7 +1861,8 @@ export async function handleRequest(req, res) {
     if (req.method === 'POST' && path === '/api/analyze') {
       const { lead } = await readJson(req);
       if (!lead || typeof lead !== 'object') fail(400, 'Provide business details to analyze.');
-      return json(await analyzeLeadWithAi(lead, store.settings));
+      const ws = getWorkspace(session.userId || 'default');
+      return json(await analyzeLeadWithAi(lead, ws.settings));
     }
     if (req.method === 'POST' && path === '/api/send') return json(await send(session, await readJson(req)));
     if (req.method === 'POST' && path === '/api/thread') {
@@ -1660,9 +1870,11 @@ export async function handleRequest(req, res) {
       if (!session.mailbox) fail(401, 'Connect your Gmail account first.');
       if (session.mailbox !== mailbox) fail(403, 'Connect the Gmail account that sent this conversation.');
       if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id || '')) fail(400, 'Invalid Gmail thread.');
+      const targetUserId = session.userId || 'default';
+      const ws = getWorkspace(targetUserId);
       session.threadOwners.set(id, mailbox);
-      store.threadOwners[id] = mailbox;
-      saveStore();
+      ws.threadOwners[id] = mailbox;
+      saveStore(targetUserId);
       return json(await thread(session, id));
     }
     return json({ error: 'Page not found.' }, 404);
