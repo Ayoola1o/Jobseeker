@@ -367,9 +367,10 @@ function extractBingInfoboxRating(infoboxHtml = '') {
   return { rating: stars > 0 ? String(stars) : '', ratingInfo };
 }
 
-export function parseBingMapsHtml(html = '', fallbackIndustry = '', city = '') {
+export function parseBingMapsHtml(html = '', fallbackIndustry = '', city = '', startRank = 1, pageNumber = 1) {
   const results = [];
   const cardRegex = /data-entity="([^"]+)"([\s\S]*?)(?=data-entity="|$)/g;
+  let itemOffset = 0;
   for (const match of html.matchAll(cardRegex)) {
     let parsed;
     try {
@@ -379,6 +380,8 @@ export function parseBingMapsHtml(html = '', fallbackIndustry = '', city = '') {
     }
     const entity = parsed?.entity;
     if (!entity?.id || !entity?.title) continue;
+    const searchRank = startRank + itemOffset;
+    itemOffset++;
     const cardSnippet = match[2] || '';
     const opHoursMatch = cardSnippet.match(/class=["'][^"']*opHours[^"']*["'][^>]*>([\s\S]*?)<\/span>\s*<\/span>/i);
     const cardHours = opHoursMatch
@@ -394,6 +397,7 @@ export function parseBingMapsHtml(html = '', fallbackIndustry = '', city = '') {
       : `https://www.bing.com/maps?q=${encodeURIComponent(entity.title + ' ' + (address || city))}`;
     const category = entity.primaryCategoryName || fallbackIndustry;
     const aboutParts = [
+      `Bing Rank #${searchRank} (Page ${pageNumber})`,
       category && category !== fallbackIndustry ? category : '',
       rating ? `★ ${rating}` : '',
       ratingInfo,
@@ -420,6 +424,8 @@ export function parseBingMapsHtml(html = '', fallbackIndustry = '', city = '') {
       rating,
       ratingInfo,
       openHours,
+      searchRank,
+      searchPage: pageNumber,
       facebook: '',
       instagram: '',
       twitter: ''
@@ -428,11 +434,36 @@ export function parseBingMapsHtml(html = '', fallbackIndustry = '', city = '') {
   return results;
 }
 
-async function searchBingMaps(cleanIndustry, city) {
-  const query = `${cleanIndustry} in ${city}`;
+function getSearchOffsets(rankMode = 'all') {
+  if (rankMode === 'low') {
+    return [
+      { first: 21, page: 3 },
+      { first: 41, page: 4 },
+      { first: 61, page: 5 },
+      { first: 81, page: 6 },
+      { first: 101, page: 7 },
+      { first: 121, page: 8 }
+    ];
+  }
+  return [
+    { first: 1, page: 1 },
+    { first: 11, page: 2 },
+    { first: 21, page: 3 },
+    { first: 31, page: 4 },
+    { first: 41, page: 5 },
+    { first: 51, page: 6 },
+    { first: 61, page: 7 },
+    { first: 71, page: 8 }
+  ];
+}
+
+async function searchBingMaps(cleanIndustry, city, rankMode = 'all') {
+  const query = rankMode === 'shopify'
+    ? `${cleanIndustry} shop store in ${city}`
+    : `${cleanIndustry} in ${city}`;
   const seen = new Map();
-  const offsets = [1, 11, 21, 31, 41];
-  const pages = await Promise.allSettled(offsets.map(async first => {
+  const offsetConfigs = getSearchOffsets(rankMode === 'shopify' ? 'low' : rankMode);
+  const pages = await Promise.allSettled(offsetConfigs.map(async ({ first, page }) => {
     const url = `https://www.bing.com/maps/overlaybfpr?q=${encodeURIComponent(query)}&count=20&first=${first}`;
     const response = await fetch(url, {
       headers: {
@@ -444,7 +475,7 @@ async function searchBingMaps(cleanIndustry, city) {
     });
     if (!response.ok) return [];
     const html = await response.text();
-    return parseBingMapsHtml(html, cleanIndustry, city);
+    return parseBingMapsHtml(html, cleanIndustry, city, first, page);
   }));
 
   for (const page of pages) {
@@ -518,7 +549,7 @@ async function searchOverpassFallback(cleanIndustry, city) {
   }));
 }
 
-async function streamSearch(req, res, industry, city) {
+async function streamSearch(req, res, industry, city, rankMode = 'all') {
   const cleanIndustry = (industry || '').trim();
   if (!/^[\p{L}\p{M}\p{N} .,'’&/()-]{2,50}$/u.test(cleanIndustry) ||
       !/^[\p{L}\p{M}\p{N} .,'’()-]{2,75}$/u.test(city)) {
@@ -540,52 +571,58 @@ async function streamSearch(req, res, industry, city) {
   };
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const query = `${cleanIndustry} in ${city}`;
+  const queries = rankMode === 'shopify'
+    ? [`${cleanIndustry} store in ${city}`, `${cleanIndustry} boutique shop in ${city}`]
+    : [`${cleanIndustry} in ${city}`];
   const seen = new Set();
-  const offsets = [1, 11, 21, 31, 41, 51, 61, 71];
+  const offsetConfigs = getSearchOffsets(rankMode === 'shopify' ? 'low' : rankMode);
   let emptyStreak = 0;
 
-  for (let pageIndex = 0; pageIndex < offsets.length; pageIndex++) {
-    if (closed) break;
-    const first = offsets[pageIndex];
-    sendEvent({
-      type: 'status',
-      page: pageIndex + 1,
-      totalPages: offsets.length,
-      totalFound: seen.size,
-      message: `Scraping Bing Maps page ${pageIndex + 1} of ${offsets.length}…`
-    });
-    try {
-      const url = `https://www.bing.com/maps/overlaybfpr?q=${encodeURIComponent(query)}&count=20&first=${first}`;
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9'
-        },
-        signal: AbortSignal.timeout(10000)
+  for (const query of queries) {
+    for (let idx = 0; idx < offsetConfigs.length; idx++) {
+      if (closed) break;
+      const { first, page } = offsetConfigs[idx];
+      sendEvent({
+        type: 'status',
+        page,
+        totalPages: offsetConfigs.length,
+        totalFound: seen.size,
+        message: rankMode === 'low' || rankMode === 'shopify'
+          ? `Scraping low-ranked Bing results (Page ${page}, Rank #${first}+)…`
+          : `Scraping Bing Maps page ${page} (Rank #${first}+)…`
       });
-      if (!response.ok) break;
-      const html = await response.text();
-      const items = parseBingMapsHtml(html, cleanIndustry, city);
-      let addedOnPage = 0;
-      for (const item of items) {
-        if (closed) break;
-        if (!seen.has(item.id)) {
-          seen.add(item.id);
-          addedOnPage++;
-          sendEvent({ type: 'business', item, totalFound: seen.size });
-          await pause(75);
+      try {
+        const url = `https://www.bing.com/maps/overlaybfpr?q=${encodeURIComponent(query)}&count=20&first=${first}`;
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9'
+          },
+          signal: AbortSignal.timeout(10000)
+        });
+        if (!response.ok) break;
+        const html = await response.text();
+        const items = parseBingMapsHtml(html, cleanIndustry, city, first, page);
+        let addedOnPage = 0;
+        for (const item of items) {
+          if (closed) break;
+          if (!seen.has(item.id)) {
+            seen.add(item.id);
+            addedOnPage++;
+            sendEvent({ type: 'business', item, totalFound: seen.size });
+            await pause(65);
+          }
         }
+        if (addedOnPage === 0) {
+          emptyStreak++;
+          if (emptyStreak >= 2) break;
+        } else {
+          emptyStreak = 0;
+        }
+      } catch {
+        break;
       }
-      if (addedOnPage === 0) {
-        emptyStreak++;
-        if (emptyStreak >= 2) break;
-      } else {
-        emptyStreak = 0;
-      }
-    } catch {
-      break;
     }
   }
 
@@ -983,6 +1020,9 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}) {
   const overviewParts = [
     `${name} operates as a ${industry} in ${city}${lead.address ? ` (${lead.address})` : ''}.`
   ];
+  if (lead.searchRank) {
+    overviewParts.push(`Current Bing Search Position: Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)}).`);
+  }
   if (lead.platform && lead.platform !== 'Custom / Website') {
     overviewParts.push(`Website platform: ${lead.platform}${lead.shopifyMeta?.themeName ? ` (Theme: ${lead.shopifyMeta.themeName})` : ''}.`);
   }
@@ -1003,6 +1043,9 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}) {
   }
 
   const gaps = [];
+  if (lead.searchRank && lead.searchRank > 10) {
+    gaps.push(`Buried at Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)}) in Bing search for "${industry} in ${city}" — losing high-intent buyers to Page 1 competitors.`);
+  }
   if (!lead.website) {
     gaps.push('No official website linked on their map listing — high-intent customers searching online have no dedicated landing page to convert.');
   } else {
@@ -1313,8 +1356,9 @@ export async function handleRequest(req, res) {
       return json({ ok: true });
     }
     if (req.method === 'GET' && path === '/api/search') {
+      const rankMode = url.searchParams.get('rankMode') || 'all';
       if (url.searchParams.get('stream') === '1') {
-        return await streamSearch(req, res, url.searchParams.get('industry'), (url.searchParams.get('city') || '').trim());
+        return await streamSearch(req, res, url.searchParams.get('industry'), (url.searchParams.get('city') || '').trim(), rankMode);
       }
       return json(await search(url.searchParams.get('industry'), (url.searchParams.get('city') || '').trim()));
     }

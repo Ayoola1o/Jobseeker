@@ -42,12 +42,19 @@
           <h1>Find local businesses</h1>
           <p>Search by industry and city to build your outreach list.</p>
         </div>
-        <form id="search" class="surface search">
+        <form id="search" class="surface search search-4">
           <label>Industry / E-commerce Niche
-            <input name="industry" id="industry-input" list="industries" placeholder="e.g. Dentists, Clothing &amp; Fashion, Cosmetics" minlength="2" maxlength="50" required>
+            <input name="industry" id="industry-input" list="industries" placeholder="e.g. Clothing &amp; Fashion, Cosmetics, Dentists" minlength="2" maxlength="50" required>
             <datalist id="industries"></datalist>
           </label>
           <label>City / Region<input name="city" placeholder="e.g. Ikeja, New York, London" minlength="2" maxlength="75" required></label>
+          <label>Ranking &amp; Store Target
+            <select name="rankMode" id="rank-mode">
+              <option value="all">All Ranks (Pages 1–8)</option>
+              <option value="low">Low-Ranked Prospects (Pages 3–8 · Rank #21+)</option>
+              <option value="shopify">Low-Ranked Shopify &amp; Retail Stores</option>
+            </select>
+          </label>
           <button>Search businesses <span aria-hidden="true">↗</span></button>
         </form>
         <form id="inspect-url" class="surface search url-inspector">
@@ -60,6 +67,12 @@
         <div class="heading">
           <h2>Search results <small id="results-count" class="small"></small></h2>
           <div class="actions">
+            <select id="results-filter" aria-label="Filter search results">
+              <option value="">Show all scraped results</option>
+              <option value="shopify">Shopify stores only</option>
+              <option value="ecommerce">Shopify &amp; WooCommerce only</option>
+              <option value="low">Low-ranked only (Rank #21+)</option>
+            </select>
             <button id="stop-search" class="danger" type="button" hidden>Stop scraping</button>
             <button id="save-all" class="secondary" type="button" hidden>Save all results</button>
             <a href="https://www.bing.com/maps" target="_blank" rel="noreferrer">Bing Maps &amp; OpenStreetMap</a>

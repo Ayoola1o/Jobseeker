@@ -232,17 +232,18 @@ function updateScrapeBanner() {
   banner.classList.toggle('done', !isWorking);
 
   const emailsFound = results.filter(item => item.email).length;
+  const shopifyFound = results.filter(item => item.platform === 'Shopify').length;
   const socialsFound = results.filter(item => item.facebook || item.instagram || item.twitter || item.linkedin).length;
 
   if (streamActive) {
     statusEl.textContent = currentScrapeStep || 'Scraping businesses in real time…';
   } else if (activeEnrichment) {
-    statusEl.textContent = `Scanning business websites for emails & socials (${scanningWebsites + pendingWebsites} remaining)…`;
+    statusEl.textContent = `Scanning business websites for Shopify, emails & socials (${scanningWebsites + pendingWebsites} remaining)…`;
   } else {
     statusEl.textContent = `Scrape complete — ${results.length} businesses discovered.`;
   }
 
-  metricsEl.textContent = `${results.length} scraped · ${emailsFound} email${emailsFound === 1 ? '' : 's'} · ${socialsFound} social profile${socialsFound === 1 ? '' : 's'}`;
+  metricsEl.textContent = `${results.length} scraped · ${shopifyFound} Shopify · ${emailsFound} email${emailsFound === 1 ? '' : 's'} · ${socialsFound} social${socialsFound === 1 ? '' : 's'}`;
 }
 
 async function enrichItemEmail(item, triggerButton) {
@@ -472,33 +473,46 @@ function renderDashboard() {
   container.replaceChildren(headerBar, kpiGrid, dashboardGrid);
 }
 
+function getVisibleSearchResults() {
+  const mode = $('#results-filter')?.value || '';
+  if (mode === 'shopify') return results.filter(item => item.platform === 'Shopify');
+  if (mode === 'ecommerce') return results.filter(item => item.platform === 'Shopify' || item.platform === 'WooCommerce');
+  if (mode === 'low') return results.filter(item => (item.searchRank || 0) >= 21);
+  return results;
+}
+
 function renderResults() {
-  const unsavedCount = results.filter(item => !duplicate(item)).length;
+  const visibleResults = getVisibleSearchResults();
+  const unsavedCount = visibleResults.filter(item => !duplicate(item)).length;
   const saveAllBtn = $('#save-all');
   if (saveAllBtn) {
-    saveAllBtn.hidden = results.length === 0;
+    saveAllBtn.hidden = visibleResults.length === 0;
     saveAllBtn.disabled = unsavedCount === 0;
     saveAllBtn.textContent = unsavedCount ? `Save all (${unsavedCount})` : 'All results saved';
   }
   const withEmailCount = results.filter(item => item.email).length;
+  const shopifyCount = results.filter(item => item.platform === 'Shopify').length;
   const countEl = $('#results-count');
   if (countEl) {
     countEl.textContent = results.length
-      ? `(${results.length} found · ${withEmailCount} with email)`
+      ? `(${visibleResults.length}/${results.length} shown · ${shopifyCount} Shopify · ${withEmailCount} with email)`
       : '';
   }
 
   const paginationEl = $('#results-pagination');
-  if (!results.length) {
+  if (!visibleResults.length) {
     if (paginationEl) paginationEl.hidden = true;
+    if (results.length) {
+      $('#results').replaceChildren(empty('⌕', 'No matching results for this filter yet', streamActive ? 'Still scanning websites in the background…' : 'Switch filter to "Show all scraped results" to view all businesses.'));
+    }
     return;
   }
 
-  const totalPages = Math.max(1, Math.ceil(results.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(visibleResults.length / pageSize));
   if (resultsPage > totalPages) resultsPage = totalPages;
   if (resultsPage < 1) resultsPage = 1;
   const startIndex = (resultsPage - 1) * pageSize;
-  const pageItems = results.slice(startIndex, startIndex + pageSize);
+  const pageItems = visibleResults.slice(startIndex, startIndex + pageSize);
 
   $('#results').replaceChildren(...pageItems.map(item => {
     const saved = duplicate(item);
@@ -514,6 +528,9 @@ function renderResults() {
       persist();
       renderResults();
     });
+    const rankPill = item.searchRank
+      ? create('span', `Rank #${item.searchRank}`, item.searchRank >= 21 ? 'pill wait' : 'pill')
+      : '';
     const statusPill = item.email
       ? create('span', 'Email found', 'pill')
       : item.scanning
@@ -526,6 +543,7 @@ function renderResults() {
       ? create('span', item.platform, 'pill')
       : '';
     return row(item, [item.industry, item.city, item.address, item.email, item.phone], [
+      rankPill,
       platformPill,
       statusPill,
       enrichBtn,
@@ -537,11 +555,11 @@ function renderResults() {
   }));
 
   if (paginationEl) {
-    if (results.length > pageSize) {
+    if (visibleResults.length > pageSize) {
       paginationEl.hidden = false;
       const startNum = startIndex + 1;
-      const endNum = Math.min(results.length, startIndex + pageSize);
-      const info = create('span', `Showing ${startNum}–${endNum} of ${results.length} businesses (Page ${resultsPage} of ${totalPages})`, 'small');
+      const endNum = Math.min(visibleResults.length, startIndex + pageSize);
+      const info = create('span', `Showing ${startNum}–${endNum} of ${visibleResults.length} businesses (Page ${resultsPage} of ${totalPages})`, 'small');
       const controls = create('div', '', 'actions');
       const prevBtn = button('← Previous page', () => {
         if (resultsPage > 1) {
@@ -798,6 +816,7 @@ function renderBusinessPage() {
     kvItem('Website', website(lead.website, lead.website) || 'No website listed'),
     kvItem('Map / Listing Source', website(lead.source, 'Open on Bing Maps / Source') || 'Manual / CSV entry'),
     kvItem('Star Rating & Reviews', [lead.rating && `★ ${lead.rating}`, lead.ratingInfo].filter(Boolean).join(' · ') || 'No rating listed'),
+    kvItem('Bing Search Position', lead.searchRank ? `Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)})` : 'Direct / Manual'),
     kvItem('Operating Hours', lead.openHours || 'Not listed'),
     kvItem('Coordinates', (lead.latitude && lead.longitude) ? `${lead.latitude}, ${lead.longitude}` : 'Not listed')
   );
@@ -1676,7 +1695,7 @@ $('#inspect-url').onsubmit = async event => {
 
 $('#save-all').onclick = () => {
   let added = 0;
-  for (const item of results) {
+  for (const item of getVisibleSearchResults()) {
     if (!duplicate(item)) {
       const copy = { ...item, threads: [] };
       delete copy.scanning;
@@ -1690,6 +1709,11 @@ $('#save-all').onclick = () => {
     renderResults();
     report(`Saved ${added} business${added === 1 ? '' : 'es'} to your leads.`);
   }
+};
+
+$('#results-filter').onchange = () => {
+  resultsPage = 1;
+  renderResults();
 };
 
 function navigate() {
