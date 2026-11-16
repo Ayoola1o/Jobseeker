@@ -1,0 +1,6 @@
+.env
+.google-oauth.json
+.jobhunta-data.json
+node_modules/
+mapleedsscapper/
+

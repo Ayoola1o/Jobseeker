@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Find local businesses and manage Gmail outreach.">
+  <title>Jobhunta</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <aside>
+    <a href="#discover" class="brand"><span>J</span> Jobhunta</a>
+    <nav aria-label="Workspace">
+      <a href="#discover"><span aria-hidden="true">⌕</span> Find businesses</a>
+      <a href="#leads"><span aria-hidden="true">▤</span> Saved leads <small id="nav-leads-count" class="badge" hidden></small></a>
+      <a href="#inbox"><span aria-hidden="true">✉</span> Inbox</a>
+    </nav>
+    <div class="sidebar-footer"><i></i> Personal workspace</div>
+  </aside>
+  <main>
+    <header>
+      <span>Workspace <b>/</b> <strong id="breadcrumb">Find businesses</strong></span>
+      <div class="actions">
+        <button id="templates" class="secondary" type="button">Templates &amp; profile</button>
+        <button id="connect" class="secondary" type="button">Connect Gmail</button>
+      </div>
+    </header>
+    <div class="content">
+      <p id="notice" role="status" hidden></p>
+      <section id="discover" class="page">
+        <div class="hero">
+          <div class="radar" aria-hidden="true"><i></i><i></i><i></i><i></i><b>⌖</b></div>
+          <p class="eyebrow">BUSINESS DISCOVERY</p>
+          <h1>Find local businesses</h1>
+          <p>Search by industry and city to build your outreach list.</p>
+        </div>
+        <form id="search" class="surface search">
+          <label>Industry
+            <input name="industry" id="industry-input" list="industries" placeholder="Choose or type an industry (e.g. Dentists)" minlength="2" maxlength="50" required>
+            <datalist id="industries"></datalist>
+          </label>
+          <label>City<input name="city" placeholder="e.g. Ikeja" minlength="2" maxlength="75" required></label>
+          <button>Search businesses <span aria-hidden="true">↗</span></button>
+        </form>
+        <div class="heading">
+          <h2>Search results <small id="results-count" class="small"></small></h2>
+          <div class="actions">
+            <button id="save-all" class="secondary" type="button" hidden>Save all results</button>
+            <a href="https://www.bing.com/maps" target="_blank" rel="noreferrer">Bing Maps &amp; OpenStreetMap</a>
+          </div>
+        </div>
+        <div id="results" aria-live="polite"></div>
+      </section>
+      <section id="leads" class="page" hidden>
+        <div class="heading section-title">
+          <div>
+            <h1>Saved leads</h1>
+            <p>Manage contacts, enrich emails and keep track of your next follow-up.</p>
+          </div>
+          <div class="actions">
+            <button id="enrich-all" class="secondary" type="button">Find missing emails</button>
+            <button id="import" class="secondary" type="button">Import CSV</button>
+            <button id="export" class="secondary" type="button">Export CSV</button>
+            <button id="add" type="button">Add lead</button>
+          </div>
+        </div>
+        <div class="surface filters" id="lead-filters">
+          <label>Search leads<input id="filter-query" type="search" placeholder="Filter by name, city, email, phone or notes…"></label>
+          <label>Status
+            <select id="filter-status">
+              <option value="">All statuses</option>
+              <option value="New">New</option>
+              <option value="Needs email">Needs email</option>
+              <option value="Contacted">Contacted</option>
+              <option value="Follow-up due">Follow-up due</option>
+              <option value="Replied">Replied</option>
+              <option value="Interested">Interested</option>
+              <option value="Declined">Declined</option>
+              <option value="Out of office">Out of office</option>
+              <option value="Unsubscribed">Unsubscribed</option>
+              <option value="Bounced">Bounced</option>
+            </select>
+          </label>
+          <label>Sort by
+            <select id="filter-sort">
+              <option value="recent">Newest saved</option>
+              <option value="due">Follow-up date</option>
+              <option value="name">Business name (A–Z)</option>
+            </select>
+          </label>
+        </div>
+        <div class="heading"><span id="lead-summary" class="small"></span></div>
+        <div id="lead-list"></div>
+      </section>
+      <section id="inbox" class="page" hidden>
+        <div class="heading section-title">
+          <div>
+            <h1>Outreach inbox</h1>
+            <p>Read, follow up and reply to your Jobhunta conversations.</p>
+          </div>
+          <button id="refresh" class="secondary" type="button">Refresh inbox</button>
+        </div>
+        <div id="conversations"></div>
+      </section>
+    </div>
+  </main>
+  <dialog id="dialog">
+    <div class="heading"><h2 id="dialog-title"></h2><button id="close" class="secondary" type="button" aria-label="Close">×</button></div>
+    <div id="dialog-body"></div>
+  </dialog>
+</body>
+</html>

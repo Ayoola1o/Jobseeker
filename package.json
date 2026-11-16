@@ -1,0 +1,16 @@
+{
+  "name": "jobhunta",
+  "version": "1.1.0",
+  "description": "Find local businesses, save leads and manage one-to-one Gmail outreach from a personal workspace.",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "dev": "node --watch-path=server.mjs --watch-path=public server.mjs",
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "private": true
+}
