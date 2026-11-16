@@ -5,6 +5,8 @@ import {
   extractMessageBody,
   extractEmailsFromHtml,
   extractSocialsFromHtml,
+  extractWebsiteInsights,
+  buildLeadIntelligence,
   parseBingMapsHtml,
   industries
 } from '../server.mjs';
@@ -129,4 +131,39 @@ test('extractEmailsFromHtml and extractSocialsFromHtml extract emails and social
 
 test('Expanded industry catalog has over 20 presets', () => {
   assert.ok(Object.keys(industries).length >= 20);
+});
+
+test('extractWebsiteInsights and buildLeadIntelligence extract about info, digital signals, gaps, and pitch', () => {
+  const html = `
+    <html>
+      <head>
+        <title>Downtown Pharmacy | Prescription & Wellness in NYC</title>
+        <meta name="description" content="Downtown Pharmacy provides fast prescription delivery and compounding services in Lower Manhattan." />
+      </head>
+      <body>
+        <h1>Downtown Pharmacy NYC</h1>
+        <h2>Same-Day Prescription Delivery</h2>
+        <p>We are an independent neighborhood pharmacy serving Lower Manhattan with personalized care, vaccinations, and free local delivery.</p>
+      </body>
+    </html>
+  `;
+  const insights = extractWebsiteInsights(html, 'https://downtownpharmacy.com');
+  assert.equal(insights.siteTitle, 'Downtown Pharmacy | Prescription & Wellness in NYC');
+  assert.match(insights.aboutSummary, /independent neighborhood pharmacy/);
+  assert.equal(insights.signals.https, true);
+  assert.equal(insights.signals.hasMetaDescription, true);
+
+  const brief = buildLeadIntelligence({
+    name: 'Downtown Pharmacy',
+    industry: 'Pharmacies',
+    city: 'New York',
+    rating: '4',
+    ratingInfo: 'Yelp (38)',
+    website: 'https://downtownpharmacy.com',
+    ...insights
+  }, { senderName: 'Ayoola', senderService: 'automated patient booking & local SEO' });
+
+  assert.ok(brief.gaps.length >= 1);
+  assert.match(brief.pitchSubject, /Downtown Pharmacy/);
+  assert.match(brief.pitchBody, /Ayoola/);
 });

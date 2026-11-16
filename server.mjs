@@ -692,18 +692,70 @@ export function extractEmailsFromHtml(html = '') {
 }
 
 export function extractSocialsFromHtml(html = '') {
-  const socials = { facebook: '', instagram: '', twitter: '', linkedin: '' };
-  const urlRegex = /https?:\/\/(?:www\.)?(facebook\.com|instagram\.com|twitter\.com|x\.com|linkedin\.com)\/[^\s"'<>)]+/gi;
+  const socials = { facebook: '', instagram: '', twitter: '', linkedin: '', youtube: '', tiktok: '' };
+  const urlRegex = /https?:\/\/(?:www\.)?(facebook\.com|instagram\.com|twitter\.com|x\.com|linkedin\.com|youtube\.com|tiktok\.com)\/[^\s"'<>)]+/gi;
   for (const match of html.matchAll(urlRegex)) {
     const raw = decodeHtmlEntities(match[0]).replace(/[.,;:'")\]}>]+$/, '');
     const host = match[1].toLowerCase();
-    if (/\/(tr\?|sharer|share|plugins|dialog|intent\/)/i.test(raw)) continue;
+    if (/\/(tr\?|sharer|share|plugins|dialog|intent\/|watch\?)/i.test(raw)) continue;
     if (host === 'facebook.com' && !socials.facebook) socials.facebook = raw;
     else if (host === 'instagram.com' && !socials.instagram) socials.instagram = raw;
     else if ((host === 'twitter.com' || host === 'x.com') && !socials.twitter) socials.twitter = raw;
     else if (host === 'linkedin.com' && !socials.linkedin) socials.linkedin = raw;
+    else if (host === 'youtube.com' && !socials.youtube) socials.youtube = raw;
+    else if (host === 'tiktok.com' && !socials.tiktok) socials.tiktok = raw;
   }
   return socials;
+}
+
+export function extractWebsiteInsights(html = '', urlStr = '') {
+  const cleanHtml = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ');
+
+  const titleMatch = cleanHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const siteTitle = decodeHtmlEntities((titleMatch?.[1] || '').replace(/\s+/g, ' ').trim()).slice(0, 180);
+
+  const metaDescMatch =
+    cleanHtml.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
+    cleanHtml.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i) ||
+    cleanHtml.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i);
+  const metaDescription = decodeHtmlEntities((metaDescMatch?.[1] || '').replace(/\s+/g, ' ').trim()).slice(0, 400);
+
+  const headings = [];
+  for (const match of cleanHtml.matchAll(/<h[12][^>]*>([\s\S]*?)<\/h[12]>/gi)) {
+    const text = decodeHtmlEntities(match[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    if (text.length >= 4 && text.length <= 120 && !headings.includes(text)) {
+      headings.push(text);
+      if (headings.length >= 6) break;
+    }
+  }
+
+  const paragraphs = [];
+  for (const match of cleanHtml.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)) {
+    const text = decodeHtmlEntities(match[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    if (text.length >= 45 && text.length <= 420 && !/(cookie|privacy policy|all rights reserved|copyright|terms of use)/i.test(text)) {
+      if (!paragraphs.includes(text)) paragraphs.push(text);
+      if (paragraphs.length >= 4) break;
+    }
+  }
+
+  const aboutSummary = [metaDescription, ...paragraphs]
+    .filter(Boolean)
+    .filter((val, idx, arr) => arr.indexOf(val) === idx)
+    .join('\n\n')
+    .slice(0, 1500);
+
+  const signals = {
+    https: urlStr.startsWith('https://'),
+    hasMetaDescription: Boolean(metaDescription),
+    hasBookingOrForm: /(book online|schedule appointment|book now|appointment|calendly|contact-form|<form\b)/i.test(html),
+    hasChatWidget: /(tawk\.to|intercom|crisp\.chat|drift|livechat|whatsapp\.com|wa\.me|tidio|zendesk)/i.test(html),
+    hasAnalytics: /(googletagmanager|gtag\(|google-analytics|fbq\(|fbevents\.js)/i.test(html)
+  };
+
+  return { siteTitle, metaDescription, headings, aboutSummary, signals };
 }
 
 async function fetchWebsiteEmails(websiteUrl) {
@@ -732,21 +784,44 @@ async function fetchWebsiteEmails(websiteUrl) {
   }
   const emails = new Set(extractEmailsFromHtml(homepageHtml));
   const socials = extractSocialsFromHtml(homepageHtml);
-  if (!emails.size && homepageHtml) {
-    const contactMatch = [...homepageHtml.matchAll(/href\s*=\s*["']([^"'#]+)["']/gi)]
+  const insights = extractWebsiteInsights(homepageHtml, base.href);
+
+  if (homepageHtml) {
+    const subLinks = [...homepageHtml.matchAll(/href\s*=\s*["']([^"'#]+)["']/gi)]
       .map(match => match[1])
-      .find(href => /(contact|about|impressum|get-in-touch|reach-us)/i.test(href));
-    if (contactMatch) {
+      .filter(href => /(contact|about|services|our-story|who-we-are|impressum|get-in-touch|reach-us)/i.test(href));
+    const uniqueSubUrls = [];
+    for (const href of subLinks) {
       try {
-        const contactUrl = new URL(contactMatch, base.href);
-        if (contactUrl.hostname === base.hostname && ['http:', 'https:'].includes(contactUrl.protocol)) {
-          const contactHtml = await fetchHtml(contactUrl.href);
-          for (const email of extractEmailsFromHtml(contactHtml)) emails.add(email);
-          const subSocials = extractSocialsFromHtml(contactHtml);
-          for (const key of Object.keys(socials)) {
-            if (!socials[key] && subSocials[key]) socials[key] = subSocials[key];
-          }
+        const subUrl = new URL(href, base.href);
+        if (subUrl.hostname === base.hostname && subUrl.href !== base.href &&
+            ['http:', 'https:'].includes(subUrl.protocol) && !uniqueSubUrls.includes(subUrl.href)) {
+          uniqueSubUrls.push(subUrl.href);
+          if (uniqueSubUrls.length >= 2) break;
         }
+      } catch {
+        // Ignore invalid sublink
+      }
+    }
+    for (const subHref of uniqueSubUrls) {
+      try {
+        const subHtml = await fetchHtml(subHref);
+        for (const email of extractEmailsFromHtml(subHtml)) emails.add(email);
+        const subSocials = extractSocialsFromHtml(subHtml);
+        for (const key of Object.keys(socials)) {
+          if (!socials[key] && subSocials[key]) socials[key] = subSocials[key];
+        }
+        const subInsights = extractWebsiteInsights(subHtml, subHref);
+        if (!insights.aboutSummary && subInsights.aboutSummary) {
+          insights.aboutSummary = subInsights.aboutSummary;
+        } else if (subInsights.aboutSummary && insights.aboutSummary.length < 500 && !insights.aboutSummary.includes(subInsights.aboutSummary)) {
+          insights.aboutSummary = (insights.aboutSummary + '\n\n' + subInsights.aboutSummary).slice(0, 1500);
+        }
+        for (const h of subInsights.headings) {
+          if (insights.headings.length < 8 && !insights.headings.includes(h)) insights.headings.push(h);
+        }
+        insights.signals.hasBookingOrForm ||= subInsights.signals.hasBookingOrForm;
+        insights.signals.hasChatWidget ||= subInsights.signals.hasChatWidget;
       } catch {
         // Ignore subpage fetch failure
       }
@@ -758,8 +833,170 @@ async function fetchWebsiteEmails(websiteUrl) {
     socials,
     facebook: socials.facebook,
     instagram: socials.instagram,
-    twitter: socials.twitter
+    twitter: socials.twitter,
+    linkedin: socials.linkedin,
+    youtube: socials.youtube,
+    tiktok: socials.tiktok,
+    siteTitle: insights.siteTitle,
+    metaDescription: insights.metaDescription,
+    headings: insights.headings,
+    aboutSummary: insights.aboutSummary,
+    signals: insights.signals
   };
+}
+
+export function buildLeadIntelligence(lead = {}, senderSettings = {}) {
+  const name = lead.name || 'this business';
+  const industry = lead.industry || 'local business';
+  const city = lead.city || 'their area';
+  const senderName = senderSettings.senderName || '[your name]';
+  const senderService = senderSettings.senderService || 'digital growth, lead capture, and client acquisition';
+
+  const socialChannels = [
+    lead.facebook && 'Facebook',
+    lead.instagram && 'Instagram',
+    lead.twitter && 'X/Twitter',
+    lead.linkedin && 'LinkedIn',
+    lead.youtube && 'YouTube',
+    lead.tiktok && 'TikTok'
+  ].filter(Boolean);
+
+  const missingSocials = ['Instagram', 'Facebook', 'LinkedIn'].filter(ch => !socialChannels.includes(ch));
+  const ratingNum = parseFloat(lead.rating);
+  const signals = lead.signals || {};
+
+  const overviewParts = [
+    `${name} operates as a ${industry} in ${city}${lead.address ? ` (${lead.address})` : ''}.`
+  ];
+  if (lead.siteTitle || lead.metaDescription) {
+    overviewParts.push(`Website positioning: "${lead.siteTitle || lead.metaDescription}".`);
+  }
+  if (lead.rating) {
+    overviewParts.push(`Listed rating: ★ ${lead.rating}${lead.ratingInfo ? ` (${lead.ratingInfo})` : ''}.`);
+  }
+  if (lead.openHours) {
+    overviewParts.push(`Operating hours: ${lead.openHours}.`);
+  }
+
+  const gaps = [];
+  if (!lead.website) {
+    gaps.push('No official website linked on their map listing — high-intent customers searching online have no dedicated landing page to convert.');
+  } else {
+    if (signals.https === false) {
+      gaps.push('Website is not using HTTPS security, which triggers browser warnings and hurts local search trust.');
+    }
+    if (signals.hasMetaDescription === false) {
+      gaps.push('Missing SEO meta description on their website, reducing click-through rates from Google and Bing local search.');
+    }
+    if (signals.hasBookingOrForm === false) {
+      gaps.push('No clear online booking / instant lead capture form detected — visitors must call manually during open hours.');
+    }
+    if (signals.hasChatWidget === false) {
+      gaps.push('No live chat or WhatsApp quick-response widget on site to capture after-hours inquiries.');
+    }
+    if (signals.hasAnalytics === false) {
+      gaps.push('No conversion tracking / ad pixel detected (Google Tag or Meta Pixel), meaning missed retargeting opportunities.');
+    }
+  }
+  if (!lead.email) {
+    gaps.push('No public business email is easily accessible for direct customer or B2B inquiries.');
+  }
+  if (socialChannels.length === 0) {
+    gaps.push('No social media profiles (Instagram, Facebook, LinkedIn) are linked from their website.');
+  } else if (missingSocials.length) {
+    gaps.push(`Active on ${socialChannels.join(', ')}, but missing linked presence on ${missingSocials.join(' & ')}.`);
+  }
+  if (!lead.rating || (!Number.isNaN(ratingNum) && ratingNum < 4.2)) {
+    gaps.push('Local map rating / review volume has room for growth to stand out against top-ranked local competitors.');
+  }
+  if (!gaps.length) {
+    gaps.push(`Strong baseline presence; primary opportunity is scaling inbound client flow and automating follow-ups via ${senderService}.`);
+  }
+
+  const primaryGap = !lead.website
+    ? 'building a high-converting web presence and local search capture'
+    : signals.hasBookingOrForm === false
+      ? 'turning website visitors into booked appointments automatically'
+      : socialChannels.length === 0
+        ? 'connecting their website with active social proof and local lead capture'
+        : `strengthening their local visibility and conversion flow in ${city}`;
+
+  const angle = `Lead with a compliment on their ${industry.toLowerCase()} presence in ${city}${lead.rating ? ` (★ ${lead.rating})` : ''}, then highlight a concrete quick win around ${primaryGap} using ${senderService}.`;
+
+  const specificHook = !lead.website
+    ? `I noticed ${name} on Bing Maps in ${city}, but saw there wasn’t a website linked for customers looking to book online`
+    : lead.headings?.length
+      ? `I was looking through ${name}’s website (${lead.headings[0]}) in ${city}`
+      : `I came across ${name} while researching ${industry.toLowerCase()} businesses in ${city}`;
+
+  const pitchSubject = `Quick idea for ${name} in ${city}`;
+  const pitchBody =
+    `Hi ${name} team,\n\n` +
+    `${specificHook}.\n\n` +
+    `I’m ${senderName}, and I help ${industry.toLowerCase()} businesses with ${senderService}. ` +
+    `While reviewing your online presence, I spotted a quick opportunity around ${primaryGap} (${gaps[0].charAt(0).toLowerCase() + gaps[0].slice(1)})\n\n` +
+    `Would you be open to a short 5-minute chat this week so I can share a few practical ideas tailored for ${name}?\n\n` +
+    `Best regards,\n${senderName}`;
+
+  return {
+    overview: overviewParts.join(' '),
+    gaps,
+    angle,
+    pitchSubject,
+    pitchBody,
+    generatedAt: new Date().toISOString()
+  };
+}
+
+async function analyzeLeadWithAi(lead, senderSettings) {
+  const baseline = buildLeadIntelligence(lead, senderSettings);
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey) return baseline;
+
+  try {
+    const prompt = `You are a B2B lead intelligence analyst. Analyze this local business and return a JSON object with keys: "overview" (string), "gaps" (array of 3-5 specific actionable strings about what they are missing online/in marketing), "angle" (string strategy for pitching them), "pitchSubject" (string under 80 chars), "pitchBody" (string personalized cold outreach email with no unreplaced brackets).\n\nBusiness data:\n${JSON.stringify({
+      name: lead.name,
+      industry: lead.industry,
+      city: lead.city,
+      address: lead.address,
+      website: lead.website,
+      email: lead.email,
+      phone: lead.phone,
+      rating: lead.rating,
+      ratingInfo: lead.ratingInfo,
+      openHours: lead.openHours,
+      siteTitle: lead.siteTitle,
+      metaDescription: lead.metaDescription,
+      headings: lead.headings,
+      aboutSummary: lead.aboutSummary,
+      socials: { facebook: lead.facebook, instagram: lead.instagram, twitter: lead.twitter, linkedin: lead.linkedin },
+      signals: lead.signals
+    })}\n\nSender profile:\nName: ${senderSettings?.senderName || 'Outreach Specialist'}\nService offered: ${senderSettings?.senderService || 'digital growth & client acquisition'}`;
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json' }
+      }),
+      signal: AbortSignal.timeout(12000)
+    });
+    if (!response.ok) return baseline;
+    const result = await response.json();
+    const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const parsed = JSON.parse(rawText);
+    return {
+      overview: String(parsed.overview || baseline.overview),
+      gaps: Array.isArray(parsed.gaps) && parsed.gaps.length ? parsed.gaps.map(String) : baseline.gaps,
+      angle: String(parsed.angle || baseline.angle),
+      pitchSubject: String(parsed.pitchSubject || baseline.pitchSubject).slice(0, 150),
+      pitchBody: String(parsed.pitchBody || baseline.pitchBody),
+      generatedAt: new Date().toISOString()
+    };
+  } catch {
+    return baseline;
+  }
 }
 
 async function readJson(req, limit = 512000) {
@@ -929,6 +1166,11 @@ export async function handleRequest(req, res) {
       const { website } = await readJson(req);
       if (typeof website !== 'string' || !website.trim()) fail(400, 'Provide a website URL to scan.');
       return json(await fetchWebsiteEmails(website.trim()));
+    }
+    if (req.method === 'POST' && path === '/api/analyze') {
+      const { lead } = await readJson(req);
+      if (!lead || typeof lead !== 'object') fail(400, 'Provide business details to analyze.');
+      return json(await analyzeLeadWithAi(lead, store.settings));
     }
     if (req.method === 'POST' && path === '/api/send') return json(await send(session, await readJson(req)));
     if (req.method === 'POST' && path === '/api/thread') {

@@ -59,12 +59,13 @@
           <span id="scrape-metrics" class="small"></span>
         </div>
         <div id="results" aria-live="polite"></div>
+        <div id="results-pagination" class="surface pagination" hidden></div>
       </section>
       <section id="leads" class="page" hidden>
         <div class="heading section-title">
           <div>
             <h1>Saved leads</h1>
-            <p>Manage contacts, enrich emails and keep track of your next follow-up.</p>
+            <p>Click any business card to open its full dossier, comb its website, and generate an AI lead pitch.</p>
           </div>
           <div class="actions">
             <button id="enrich-all" class="secondary" type="button">Find missing emails</button>
@@ -100,6 +101,9 @@
         </div>
         <div class="heading"><span id="lead-summary" class="small"></span></div>
         <div id="lead-list"></div>
+      </section>
+      <section id="business" class="page" hidden>
+        <div id="business-detail"></div>
       </section>
       <section id="inbox" class="page" hidden>
         <div class="heading section-title">

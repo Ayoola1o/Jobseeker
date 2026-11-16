@@ -4,6 +4,7 @@ const $ = selector => document.querySelector(selector);
 const dialog = $('#dialog');
 const storageKey = 'jobhunta.leads.v1';
 const settingsKey = 'jobhunta.settings.v1';
+const pageSize = 20;
 
 const defaultTemplates = [
   {
@@ -40,6 +41,8 @@ if (!Array.isArray(settings.templates) || !settings.templates.length) {
 
 let account = {};
 let results = [];
+let resultsPage = 1;
+let activeBusinessId = null;
 let searchGeneration = 0;
 let searchController = null;
 let streamActive = false;
@@ -104,6 +107,7 @@ function persist() {
   syncWorkspaceToServer();
   renderLeads();
   renderInbox();
+  if (activeBusinessId) renderBusinessPage();
 }
 
 const norm = value => (value || '').trim().toLowerCase();
@@ -136,16 +140,31 @@ function socialLinks(item) {
   return [
     website(item.facebook, 'Facebook'),
     website(item.instagram, 'Instagram'),
-    website(item.twitter, 'X/Twitter')
+    website(item.twitter, 'X/Twitter'),
+    website(item.linkedin, 'LinkedIn'),
+    website(item.youtube, 'YouTube'),
+    website(item.tiktok, 'TikTok')
   ].filter(Boolean);
 }
 
-function row(item, details, actions) {
-  const card = create('article', '', 'surface row');
-  const summary = create('div');
+function row(item, details, actions, onSelect) {
+  const card = create('article', '', 'surface row' + (onSelect ? ' clickable' : ''));
+  const summary = create('div', '', onSelect ? 'card-summary' : '');
   summary.append(create('h3', item.name), create('p', details.filter(Boolean).join(' · ')));
   if (item.about) {
     summary.append(create('p', item.about, 'note'));
+  }
+  if (onSelect) {
+    summary.tabIndex = 0;
+    summary.setAttribute('role', 'button');
+    summary.setAttribute('aria-label', 'View details for ' + item.name);
+    summary.onclick = onSelect;
+    summary.onkeydown = event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        onSelect();
+      }
+    };
   }
   const controls = create('div', '', 'actions');
   controls.append(...actions.filter(Boolean));
@@ -155,15 +174,21 @@ function row(item, details, actions) {
 
 function applyEnrichmentToItem(item, found) {
   if (found.email && !item.email) item.email = found.email;
-  if (found.facebook && !item.facebook) item.facebook = found.facebook;
-  if (found.instagram && !item.instagram) item.instagram = found.instagram;
-  if (found.twitter && !item.twitter) item.twitter = found.twitter;
+  if (Array.isArray(found.emails) && found.emails.length) {
+    item.emails = [...new Set([...(item.emails || []), ...found.emails])];
+  }
+  for (const fieldName of ['facebook', 'instagram', 'twitter', 'linkedin', 'youtube', 'tiktok', 'siteTitle', 'metaDescription', 'aboutSummary']) {
+    if (found[fieldName] && !item[fieldName]) item[fieldName] = found[fieldName];
+  }
+  if (Array.isArray(found.headings) && found.headings.length) {
+    item.headings = found.headings;
+  }
+  if (found.signals) {
+    item.signals = { ...(item.signals || {}), ...found.signals };
+  }
   const savedLead = duplicate(item);
-  if (savedLead) {
-    if (found.email && !savedLead.email) savedLead.email = found.email;
-    if (found.facebook && !savedLead.facebook) savedLead.facebook = found.facebook;
-    if (found.instagram && !savedLead.instagram) savedLead.instagram = found.instagram;
-    if (found.twitter && !savedLead.twitter) savedLead.twitter = found.twitter;
+  if (savedLead && savedLead !== item) {
+    applyEnrichmentToItem(savedLead, found);
   }
 }
 
@@ -188,7 +213,7 @@ function updateScrapeBanner() {
   banner.classList.toggle('done', !isWorking);
 
   const emailsFound = results.filter(item => item.email).length;
-  const socialsFound = results.filter(item => item.facebook || item.instagram || item.twitter).length;
+  const socialsFound = results.filter(item => item.facebook || item.instagram || item.twitter || item.linkedin).length;
 
   if (streamActive) {
     statusEl.textContent = currentScrapeStep || 'Scraping businesses in real time…';
@@ -205,7 +230,7 @@ async function enrichItemEmail(item, triggerButton) {
   if (!item.website) return;
   if (triggerButton) {
     triggerButton.disabled = true;
-    triggerButton.textContent = 'Scanning…';
+    triggerButton.textContent = 'Combing website…';
   }
   try {
     const found = await api('/api/enrich', { website: item.website });
@@ -213,18 +238,18 @@ async function enrichItemEmail(item, triggerButton) {
     applyEnrichmentToItem(item, found);
     persist();
     if (results.length) renderResults();
-    if (found.email) {
-      report(`Found email for ${item.name}: ${found.email}`);
+    if (found.email || found.aboutSummary) {
+      report(`Combed ${item.name}'s website: ${found.email ? 'found ' + found.email : 'extracted website insights'}.`);
     } else {
-      report(`No public email found on ${item.name}'s website.`, true);
-      if (triggerButton) triggerButton.textContent = 'No email found';
+      report(`Scanned ${item.name}'s website; no public email address listed on the page.`, true);
+      if (triggerButton) triggerButton.textContent = 'Website scanned';
     }
   } catch (error) {
     item.scanned = true;
     report(error.message, true);
     if (triggerButton) {
       triggerButton.disabled = false;
-      triggerButton.textContent = 'Find email';
+      triggerButton.textContent = 'Have a look (Comb website)';
     }
   }
 }
@@ -261,6 +286,21 @@ function triggerEnrichmentWorkers(generation) {
   }
 }
 
+function openBusinessPage(item) {
+  let saved = duplicate(item);
+  if (!saved) {
+    const copy = { ...item, id: item.id || crypto.randomUUID(), threads: [] };
+    delete copy.scanning;
+    delete copy.scanned;
+    leads.unshift(copy);
+    persist();
+    saved = copy;
+  }
+  activeBusinessId = saved.id;
+  location.hash = '#business';
+  renderBusinessPage();
+}
+
 function renderResults() {
   const unsavedCount = results.filter(item => !duplicate(item)).length;
   const saveAllBtn = $('#save-all');
@@ -277,12 +317,25 @@ function renderResults() {
       : '';
   }
 
-  if (!results.length) return;
+  const paginationEl = $('#results-pagination');
+  if (!results.length) {
+    if (paginationEl) paginationEl.hidden = true;
+    return;
+  }
 
-  $('#results').replaceChildren(...results.map(item => {
+  const totalPages = Math.max(1, Math.ceil(results.length / pageSize));
+  if (resultsPage > totalPages) resultsPage = totalPages;
+  if (resultsPage < 1) resultsPage = 1;
+  const startIndex = (resultsPage - 1) * pageSize;
+  const pageItems = results.slice(startIndex, startIndex + pageSize);
+
+  $('#results').replaceChildren(...pageItems.map(item => {
     const saved = duplicate(item);
-    const save = button(saved ? 'Saved' : 'Save lead', () => {
-      if (duplicate(item)) return;
+    const save = button(saved ? 'Open lead' : 'Save lead', () => {
+      if (saved) {
+        openBusinessPage(saved);
+        return;
+      }
       const copy = { ...item, threads: [] };
       delete copy.scanning;
       delete copy.scanned;
@@ -290,7 +343,6 @@ function renderResults() {
       persist();
       renderResults();
     });
-    save.disabled = Boolean(saved);
     const statusPill = item.email
       ? create('span', 'Email found', 'pill')
       : item.scanning
@@ -306,8 +358,38 @@ function renderResults() {
       ...socialLinks(item),
       website(item.source, 'Bing Maps'),
       save
-    ]);
+    ], () => openBusinessPage(item));
   }));
+
+  if (paginationEl) {
+    if (results.length > pageSize) {
+      paginationEl.hidden = false;
+      const startNum = startIndex + 1;
+      const endNum = Math.min(results.length, startIndex + pageSize);
+      const info = create('span', `Showing ${startNum}–${endNum} of ${results.length} businesses (Page ${resultsPage} of ${totalPages})`, 'small');
+      const controls = create('div', '', 'actions');
+      const prevBtn = button('← Previous page', () => {
+        if (resultsPage > 1) {
+          resultsPage--;
+          renderResults();
+          $('#results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, true);
+      prevBtn.disabled = resultsPage <= 1;
+      const nextBtn = button('Next page →', () => {
+        if (resultsPage < totalPages) {
+          resultsPage++;
+          renderResults();
+          $('#results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+      nextBtn.disabled = resultsPage >= totalPages;
+      controls.append(prevBtn, nextBtn);
+      paginationEl.replaceChildren(info, controls);
+    } else {
+      paginationEl.hidden = true;
+    }
+  }
 }
 
 function leadStatus(lead) {
@@ -356,6 +438,10 @@ function deleteLead(lead) {
   const idx = leads.findIndex(item => item.id === lead.id);
   if (idx === -1) return;
   leads.splice(idx, 1);
+  if (activeBusinessId === lead.id) {
+    activeBusinessId = null;
+    if (location.hash === '#business') location.hash = '#leads';
+  }
   persist();
   if (results.length) renderResults();
   report(`Removed ${lead.name} from saved leads.`);
@@ -384,7 +470,7 @@ function renderLeads() {
   const summary = $('#lead-summary');
   if (summary) {
     summary.textContent = leads.length
-      ? `Showing ${filtered.length} of ${leads.length} saved lead${leads.length === 1 ? '' : 's'}`
+      ? `Showing ${filtered.length} of ${leads.length} saved lead${leads.length === 1 ? '' : 's'} — click any business card to open its full dossier & AI lead analyzer.`
       : '';
   }
 
@@ -401,12 +487,222 @@ function renderLeads() {
       website(lead.source, 'Listing'),
       create('span', status, statusPillClass(status)),
       enrichBtn,
+      button('View business', () => openBusinessPage(lead), true),
       button('Edit', () => editLead(lead), true),
       button('Delete', () => deleteLead(lead), 'danger'),
       button('Draft email', () => compose(lead))
-    ]);
+    ], () => openBusinessPage(lead));
   }) : [empty('▤', leads.length ? 'No matching leads' : 'No leads yet',
     leads.length ? 'Try clearing or changing your search and status filters.' : 'Save a business from search or add a contact manually.')]));
+}
+
+function kvItem(label, valueNodeOrText) {
+  const box = create('div', '', 'kv-item');
+  box.append(create('small', label));
+  const val = create('div');
+  if (valueNodeOrText instanceof Node) val.append(valueNodeOrText);
+  else val.textContent = valueNodeOrText || 'Not listed';
+  box.append(val);
+  return box;
+}
+
+function renderBusinessPage() {
+  const container = $('#business-detail');
+  if (!container) return;
+  const lead = leads.find(item => item.id === activeBusinessId) || leads[0];
+  if (!lead) {
+    container.replaceChildren(
+      empty('▤', 'No business selected', 'Choose a business from Saved leads or Search results to view its full dossier.')
+    );
+    return;
+  }
+  activeBusinessId = lead.id;
+  if (location.hash === '#business') {
+    $('#breadcrumb').textContent = 'Saved leads / ' + lead.name;
+  }
+
+  const status = leadStatus(lead);
+  const topBar = create('div', '', 'heading section-title');
+  const titleWrap = create('div');
+  const backBtn = button('← Back to saved leads', () => { location.hash = '#leads'; }, true);
+  backBtn.style.marginBottom = '12px';
+  const titleRow = create('div', '', 'actions');
+  titleRow.append(create('h1', lead.name), create('span', status, statusPillClass(status)));
+  const subTitle = create('p', [lead.industry, lead.city, lead.address].filter(Boolean).join(' · '));
+  titleWrap.append(backBtn, titleRow, subTitle);
+
+  const actionGroup = create('div', '', 'actions');
+  if (lead.website) {
+    const combBtn = button('Have a look (Comb website)', event => enrichItemEmail(lead, event.currentTarget), true);
+    actionGroup.append(combBtn);
+  }
+  const analyzeBtn = button('Generate AI Lead Brief & Pitch', async event => {
+    const btn = event.currentTarget;
+    btn.disabled = true;
+    btn.textContent = 'Analyzing business…';
+    try {
+      if (lead.website && !lead.aboutSummary && !lead.scanned) {
+        try {
+          const enriched = await api('/api/enrich', { website: lead.website });
+          lead.scanned = true;
+          applyEnrichmentToItem(lead, enriched);
+        } catch {
+          // Proceed with existing data if website is unreachable
+        }
+      }
+      lead.aiBrief = await api('/api/analyze', { lead });
+      persist();
+      report(`Generated AI lead intelligence & outreach pitch for ${lead.name}.`);
+    } catch (error) {
+      report(error.message, true);
+      btn.disabled = false;
+      btn.textContent = 'Generate AI Lead Brief & Pitch';
+    }
+  });
+  actionGroup.append(
+    analyzeBtn,
+    button('Draft email', () => compose(lead)),
+    button('Edit details', () => editLead(lead), true),
+    button('Delete', () => deleteLead(lead), 'danger')
+  );
+  topBar.append(titleWrap, actionGroup);
+
+  const grid = create('div', '', 'dossier-grid');
+
+  // 1. All Scraped & Contact Details Card
+  const detailsCard = create('article', '', 'surface dossier-card full');
+  detailsCard.append(create('h2', 'Scraped Business Details & Contact Fields'));
+  const kvGrid = create('div', '', 'kv-grid');
+  const allEmails = [...new Set([lead.email, ...(lead.emails || [])].filter(Boolean))];
+  kvGrid.append(
+    kvItem('Business Name', lead.name),
+    kvItem('Category / Industry', lead.industry || 'Not specified'),
+    kvItem('City', lead.city || 'Not specified'),
+    kvItem('Street Address', lead.address || 'Not listed'),
+    kvItem('Phone Number', lead.phone || 'Not listed'),
+    kvItem('Primary Email', lead.email || 'Needs email'),
+    kvItem('All Discovered Emails', allEmails.length ? allEmails.join(', ') : 'None found yet'),
+    kvItem('Website', website(lead.website, lead.website) || 'No website listed'),
+    kvItem('Map / Listing Source', website(lead.source, 'Open on Bing Maps / Source') || 'Manual / CSV entry'),
+    kvItem('Star Rating & Reviews', [lead.rating && `★ ${lead.rating}`, lead.ratingInfo].filter(Boolean).join(' · ') || 'No rating listed'),
+    kvItem('Operating Hours', lead.openHours || 'Not listed'),
+    kvItem('Coordinates', (lead.latitude && lead.longitude) ? `${lead.latitude}, ${lead.longitude}` : 'Not listed'),
+    kvItem('Follow-up Date', lead.due || 'None scheduled'),
+    kvItem('Listing Summary', lead.about || 'None')
+  );
+  detailsCard.append(kvGrid);
+
+  // 2. Website Combing & Social Media Presence Card
+  const webCard = create('article', '', 'surface dossier-card');
+  const webHeader = create('div', '', 'heading');
+  webHeader.style.margin = '0';
+  webHeader.append(
+    create('h2', 'Website & Social Media Presence'),
+    lead.website
+      ? button('Comb website now', event => enrichItemEmail(lead, event.currentTarget), true)
+      : create('span', 'No website URL', 'pill warn')
+  );
+  webCard.append(webHeader);
+
+  const socialsRow = create('div', '', 'actions');
+  const foundSocials = socialLinks(lead);
+  if (foundSocials.length) {
+    socialsRow.append(...foundSocials);
+  } else {
+    socialsRow.append(create('span', 'No social media links discovered yet.', 'small'));
+  }
+  webCard.append(create('small', 'DISCOVERED SOCIAL LINKS', 'small'), socialsRow);
+
+  const sig = lead.signals || {};
+  const signalList = create('div', '', 'signal-list');
+  const addSignalPill = (label, ok) => {
+    if (ok === undefined) return;
+    signalList.append(create('span', (ok ? '✓ ' : '✗ Missing: ') + label, ok ? 'pill' : 'pill warn'));
+  };
+  if (lead.website) {
+    addSignalPill('HTTPS Security', sig.https ?? lead.website.startsWith('https://'));
+    addSignalPill('SEO Meta Description', sig.hasMetaDescription);
+    addSignalPill('Online Booking / Lead Form', sig.hasBookingOrForm);
+    addSignalPill('Live Chat / WhatsApp Widget', sig.hasChatWidget);
+    addSignalPill('Analytics / Retargeting Pixel', sig.hasAnalytics);
+  } else {
+    signalList.append(create('span', '✗ Missing: Official Website', 'pill warn'));
+  }
+  if (!lead.email) signalList.append(create('span', '✗ Missing: Public Email', 'pill warn'));
+  if (!foundSocials.length) signalList.append(create('span', '✗ Missing: Linked Social Profiles', 'pill warn'));
+  webCard.append(create('small', 'DIGITAL PRESENCE SIGNALS & WHAT IS MISSING', 'small'), signalList);
+
+  const aboutBox = create('div', '', 'stack');
+  if (lead.siteTitle) {
+    aboutBox.append(kvItem('Website Title', lead.siteTitle));
+  }
+  if (lead.headings?.length) {
+    aboutBox.append(kvItem('Key Website Headings', lead.headings.join(' • ')));
+  }
+  if (lead.aboutSummary) {
+    aboutBox.append(kvItem('Combed "About the Business" Summary', lead.aboutSummary));
+  } else if (lead.website) {
+    aboutBox.append(create('p', 'Click "Have a look (Comb website)" above to crawl their website for About text, services, emails, and social links.', 'small'));
+  }
+  webCard.append(aboutBox);
+
+  // 3. AI Lead Intelligence & Professional Outreach Pitch Card
+  const aiCard = create('article', '', 'surface dossier-card ai-panel');
+  const aiHeader = create('div', '', 'heading');
+  aiHeader.style.margin = '0';
+  aiHeader.append(
+    create('h2', 'AI Lead Intelligence & Professional Pitch'),
+    button(lead.aiBrief ? 'Regenerate AI Analysis' : 'Analyze & Generate Pitch', async event => {
+      const btn = event.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Analyzing…';
+      try {
+        lead.aiBrief = await api('/api/analyze', { lead });
+        persist();
+      } catch (error) {
+        report(error.message, true);
+        btn.disabled = false;
+        btn.textContent = 'Analyze & Generate Pitch';
+      }
+    }, true)
+  );
+  aiCard.append(aiHeader);
+
+  if (lead.aiBrief) {
+    const overviewSec = create('div', '', 'ai-section');
+    overviewSec.append(create('h3', 'Business Positioning & Overview'), create('p', lead.aiBrief.overview));
+
+    const gapsSec = create('div', '', 'ai-section');
+    gapsSec.append(create('h3', 'What They Are Missing (Opportunities to Pitch)'));
+    const gapList = create('ul');
+    for (const gap of lead.aiBrief.gaps || []) {
+      gapList.append(create('li', gap));
+    }
+    gapsSec.append(gapList);
+
+    const angleSec = create('div', '', 'ai-section');
+    angleSec.append(create('h3', 'Recommended Outreach Strategy'), create('p', lead.aiBrief.angle));
+
+    const pitchSec = create('div', '', 'ai-section stack');
+    pitchSec.append(
+      create('h3', 'Tailored Professional Lead Pitch'),
+      create('strong', 'Subject: ' + lead.aiBrief.pitchSubject),
+      create('div', lead.aiBrief.pitchBody, 'pitch-preview'),
+      button('Use this pitch & Draft Email', () => compose(lead, null, null, {
+        subject: lead.aiBrief.pitchSubject,
+        body: lead.aiBrief.pitchBody
+      }))
+    );
+    aiCard.append(overviewSec, gapsSec, angleSec, pitchSec);
+  } else {
+    aiCard.append(
+      empty('✦', 'Ready to analyze ' + lead.name,
+        'Click "Generate AI Lead Brief & Pitch" to evaluate what this business is missing online and craft a personalized outreach email.')
+    );
+  }
+
+  grid.append(detailsCard, webCard, aiCard);
+  container.replaceChildren(topBar, grid);
 }
 
 function field(label, name, value = '', { type = 'text', required = false, maxLength = 160, placeholder = '' } = {}) {
@@ -662,7 +958,7 @@ function futureDateString(days) {
   return date.toLocaleDateString('en-CA');
 }
 
-function compose(lead, conversation, parent) {
+function compose(lead, conversation, parent, customPitch = null) {
   const form = create('form', '', 'stack');
   const recipient = parent
     ? (parent.sent
@@ -677,21 +973,25 @@ function compose(lead, conversation, parent) {
 
   const templateWrapper = create('label', 'Template');
   const templateSelect = create('select');
-  templateSelect.add(new Option(parent ? 'Blank reply / custom' : 'Select a template…', ''));
+  templateSelect.add(new Option(customPitch ? 'AI Generated Pitch' : (parent ? 'Blank reply / custom' : 'Select a template…'), ''));
   for (const tpl of settings.templates) {
     templateSelect.add(new Option(tpl.name, tpl.id));
   }
-  if (!parent && defaultTpl) templateSelect.value = defaultTpl.id;
+  if (!parent && !customPitch && defaultTpl) templateSelect.value = defaultTpl.id;
   templateWrapper.append(templateSelect);
 
   const to = field('To', 'to', recipient, { type: 'email', required: true, maxLength: 254 });
-  const initialSubject = parent
-    ? (/^re:/i.test(parent.subject || '') ? parent.subject : 'Re: ' + (parent.subject || conversation?.subject || ''))
-    : interpolateTemplate(defaultTpl?.subject || 'Quick introduction to {{business_name}}', lead);
+  const initialSubject = customPitch?.subject
+    ? customPitch.subject
+    : parent
+      ? (/^re:/i.test(parent.subject || '') ? parent.subject : 'Re: ' + (parent.subject || conversation?.subject || ''))
+      : interpolateTemplate(defaultTpl?.subject || 'Quick introduction to {{business_name}}', lead);
   const subject = field('Subject', 'subject', initialSubject, { required: true });
-  const initialDraft = parent
-    ? (parent.sent ? interpolateTemplate(defaultTpl?.body || '', lead) : '')
-    : interpolateTemplate(defaultTpl?.body || '', lead);
+  const initialDraft = customPitch?.body
+    ? customPitch.body
+    : parent
+      ? (parent.sent ? interpolateTemplate(defaultTpl?.body || '', lead) : '')
+      : interpolateTemplate(defaultTpl?.body || '', lead);
 
   if (parent) {
     to.lastChild.readOnly = true;
@@ -761,7 +1061,7 @@ function renderInbox() {
     return row(lead, [conversation.subject, conversation.to || lead.email, statusLabel], [
       create('span', statusLabel, statusPillClass(statusLabel)),
       button('Open thread', () => openThread(lead, conversation), true)
-    ]);
+    ], () => openBusinessPage(lead));
   }) : [empty('✉', account.mailbox ? 'No conversations yet' : 'Connect your Gmail account',
     account.mailbox ? 'Send an email to a saved lead to start a conversation.' : 'Your Jobhunta replies will appear here after you connect.')]));
 }
@@ -907,12 +1207,14 @@ $('#search').onsubmit = async event => {
   const generation = ++searchGeneration;
   activeWorkers = 0;
   results = [];
+  resultsPage = 1;
   streamActive = true;
   currentScrapeStep = 'Connecting to Bing Maps…';
   submit.disabled = true;
   report();
   updateScrapeBanner();
   $('#save-all').hidden = true;
+  $('#results-pagination').hidden = true;
   $('#results-count').textContent = '';
   $('#results').replaceChildren(empty('⌕', 'Scraping live from Bing Maps…', 'Businesses will appear here in real time as each page is scraped.'));
 
@@ -996,15 +1298,17 @@ $('#save-all').onclick = () => {
 };
 
 function navigate() {
-  const pageTitles = { discover: 'Find businesses', leads: 'Saved leads', inbox: 'Inbox' };
+  const pageTitles = { discover: 'Find businesses', leads: 'Saved leads', business: 'Business dossier', inbox: 'Inbox' };
   const requested = location.hash.slice(1);
   const page = Object.hasOwn(pageTitles, requested) ? requested : 'discover';
   for (const section of document.querySelectorAll('.page')) section.hidden = section.id !== page;
   for (const link of document.querySelectorAll('nav a')) {
-    if (link.hash === '#' + page) link.setAttribute('aria-current', 'page');
+    const activeNav = page === 'business' ? 'leads' : page;
+    if (link.hash === '#' + activeNav) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
   $('#breadcrumb').textContent = pageTitles[page];
+  if (page === 'business') renderBusinessPage();
   if (page === 'inbox') refresh();
 }
 
