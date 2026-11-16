@@ -1,8 +1,10 @@
 import { createServer } from 'node:http';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, createCipheriv, createDecipheriv } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { loadEnvFile } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -12,9 +14,11 @@ try {
   if (error.code !== 'ENOENT') throw error;
 }
 const port = Number(process.env.PORT || 4173);
-const origin = `http://localhost:${port}`;
-const redirect_uri = origin + '/oauth/callback';
-const dataFilePath = fileURLToPath(new URL('./.jobhunta-data.json', import.meta.url));
+const localOrigin = `http://localhost:${port}`;
+const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const dataFilePath = isServerless
+  ? join(tmpdir(), 'jobhunta-data.json')
+  : fileURLToPath(new URL('./.jobhunta-data.json', import.meta.url));
 
 let googleClient;
 let credentialError;
@@ -28,6 +32,35 @@ const client_id = process.env.GOOGLE_CLIENT_ID?.trim() || googleClient?.client_i
 const client_secret = process.env.GOOGLE_CLIENT_SECRET?.trim() || googleClient?.client_secret;
 const gmailConfigured = Boolean(client_id?.endsWith('.apps.googleusercontent.com') && client_secret);
 const gmailScopes = ['gmail.send', 'gmail.readonly'].map(scope => 'https://www.googleapis.com/auth/' + scope);
+
+const cookieKey = createHash('sha256')
+  .update(process.env.SESSION_SECRET || client_secret || 'jobhunta-local-key')
+  .digest();
+
+function sealCookie(payload) {
+  try {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', cookieKey, iv);
+    const encrypted = Buffer.concat([cipher.update(JSON.stringify(payload), 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return [iv.toString('base64url'), tag.toString('base64url'), encrypted.toString('base64url')].join('.');
+  } catch {
+    return '';
+  }
+}
+
+function unsealCookie(token = '') {
+  try {
+    const [ivB64, tagB64, dataB64] = token.split('.');
+    if (!ivB64 || !tagB64 || !dataB64) return null;
+    const decipher = createDecipheriv('aes-256-gcm', cookieKey, Buffer.from(ivB64, 'base64url'));
+    decipher.setAuthTag(Buffer.from(tagB64, 'base64url'));
+    const decrypted = Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64url')), decipher.final()]);
+    return JSON.parse(decrypted.toString('utf8'));
+  } catch {
+    return null;
+  }
+}
 
 export const industries = {
   Dentists: ['amenity', 'dentist'], Restaurants: ['amenity', 'restaurant'],
@@ -102,7 +135,7 @@ try {
 let writeQueue = Promise.resolve();
 function saveStore() {
   writeQueue = writeQueue.catch(() => {}).then(() =>
-    writeFile(dataFilePath, JSON.stringify(store, null, 2), 'utf8')
+    writeFile(dataFilePath, JSON.stringify(store, null, 2), 'utf8').catch(() => {})
   );
   return writeQueue;
 }
@@ -127,6 +160,21 @@ const maxAge = 30 * 24 * 60 * 60 * 1000;
 
 function fail(status, message) {
   throw Object.assign(new Error(message), { status });
+}
+
+function getRequestOrigin(req) {
+  const host = (req.headers['x-forwarded-host'] || req.headers.host || `localhost:${port}`).split(',')[0].trim();
+  const forwardedProto = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const proto = forwardedProto || (host.startsWith('localhost') || host.startsWith('127.0.0.1') ? 'http' : 'https');
+  return `${proto}://${host}`;
+}
+
+function getRedirectUri(reqOrigin) {
+  const envRedirect = process.env.GOOGLE_REDIRECT_URI?.trim();
+  if (envRedirect && (!isServerless || !envRedirect.includes('localhost'))) {
+    return envRedirect;
+  }
+  return reqOrigin + '/oauth/callback';
 }
 
 async function provider(url, options, label) {
@@ -220,7 +268,7 @@ function extractAddress(value = '') {
 async function thread(session, id) {
   if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id || '')) fail(400, 'Invalid Gmail thread.');
   const owner = session.threadOwners.get(id) || store.threadOwners[id];
-  if (owner !== session.mailbox) fail(404, 'This conversation is unavailable in the connected mailbox.');
+  if (owner && owner !== session.mailbox) fail(404, 'This conversation is unavailable in the connected mailbox.');
   const result = await gmail(session, 'threads/' + id + '?format=full');
   return (result.messages || []).map(message => ({
     id: message.id, from: header(message, 'from'), to: header(message, 'to'),
@@ -637,17 +685,24 @@ async function readJson(req, limit = 512000) {
   } catch { fail(400, 'Invalid form data.'); }
 }
 
-function hydrateSessionFromStore(session) {
-  if (!session.mailbox && store.auth?.mailbox && store.auth?.tokens) {
+function hydrateSession(session, rawAuthCookie) {
+  const cookieAuth = unsealCookie(rawAuthCookie);
+  if (cookieAuth?.mailbox && cookieAuth?.tokens) {
+    session.mailbox = cookieAuth.mailbox;
+    session.tokens = cookieAuth.tokens;
+  } else if (!session.mailbox && store.auth?.mailbox && store.auth?.tokens) {
     session.mailbox = store.auth.mailbox;
     session.tokens = store.auth.tokens;
+  }
+  if (cookieAuth?.oauth) {
+    session.oauth = cookieAuth.oauth;
   }
   for (const [threadId, owner] of Object.entries(store.threadOwners)) {
     session.threadOwners.set(threadId, owner);
   }
 }
 
-export const server = createServer(async (req, res) => {
+export async function handleRequest(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
@@ -655,8 +710,11 @@ export const server = createServer(async (req, res) => {
   const json = (value, status = 200) => { res.writeHead(status, jsonHeaders); res.end(JSON.stringify(value)); };
   const redirect = location => { res.writeHead(303, { Location: location }); res.end(); };
   try {
-    if (req.headers.host !== new URL(origin).host) fail(403, 'Open Jobhunta using ' + origin);
-    const url = new URL(req.url, origin);
+    const reqOrigin = getRequestOrigin(req);
+    const activeRedirectUri = getRedirectUri(reqOrigin);
+    const isHttps = reqOrigin.startsWith('https://');
+    const cookieFlags = `HttpOnly; SameSite=Lax; Path=/${isHttps ? '; Secure' : ''}`;
+    const url = new URL(req.url, reqOrigin);
     const path = url.pathname;
     if (req.method === 'GET' && Object.hasOwn(files, path)) {
       const [file, contentType] = files[path];
@@ -664,23 +722,35 @@ export const server = createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': contentType });
       return res.end(content);
     }
-    if (req.method === 'POST' && req.headers.origin !== origin) fail(403, 'Open Jobhunta directly to submit this request.');
+    if (req.method === 'POST' && req.headers.origin && req.headers.origin !== reqOrigin) {
+      fail(403, 'Open Jobhunta directly to submit this request.');
+    }
+    const cookiesToSet = [];
     const sessionToken = req.headers.cookie?.match(/(?:^|;\s*)jobhunta=([\w-]+)/)?.[1];
+    const rawAuthCookie = req.headers.cookie?.match(/(?:^|;\s*)jobhunta_auth=([\w.-]+)/)?.[1] || '';
     for (const [key, session] of sessions) if (session.expires < Date.now()) sessions.delete(key);
     let session = sessions.get(sessionToken);
     if (!session) {
       const token = nonce();
       session = { expires: Date.now() + maxAge, sends: new Map(), threadOwners: new Map() };
-      hydrateSessionFromStore(session);
+      hydrateSession(session, rawAuthCookie);
       sessions.set(token, session);
-      res.setHeader('Set-Cookie', `jobhunta=${token}; HttpOnly; SameSite=Lax; Path=/`);
+      cookiesToSet.push(`jobhunta=${token}; ${cookieFlags}`);
     } else {
-      hydrateSessionFromStore(session);
+      hydrateSession(session, rawAuthCookie);
     }
+    const writeAuthCookie = data => {
+      const sealed = data ? sealCookie(data) : '';
+      cookiesToSet.push(`jobhunta_auth=${sealed}; ${cookieFlags}${data ? '; Max-Age=2592000' : '; Max-Age=0'}`);
+      res.setHeader('Set-Cookie', cookiesToSet);
+    };
+    if (cookiesToSet.length) res.setHeader('Set-Cookie', cookiesToSet);
+
     if (req.method === 'POST' && path === '/api/connect') {
       if (!gmailConfigured) fail(503, credentialError || 'Add a Google web OAuth client to enable Gmail.');
       session.oauth = { state: nonce(), verifier: nonce(), expires: Date.now() + 600000 };
-      const params = new URLSearchParams({ client_id, redirect_uri, response_type: 'code', scope: gmailScopes.join(' '),
+      writeAuthCookie({ mailbox: session.mailbox, tokens: session.tokens, oauth: session.oauth });
+      const params = new URLSearchParams({ client_id, redirect_uri: activeRedirectUri, response_type: 'code', scope: gmailScopes.join(' '),
         access_type: 'offline', prompt: 'consent', state: session.oauth.state,
         code_challenge: createHash('sha256').update(session.oauth.verifier).digest('base64url'), code_challenge_method: 'S256' });
       return json({ url: 'https://accounts.google.com/o/oauth2/v2/auth?' + params });
@@ -692,7 +762,7 @@ export const server = createServer(async (req, res) => {
           !url.searchParams.get('code')) return redirect('/?gmail=failed#inbox');
       try {
         const tokens = await exchange({ grant_type: 'authorization_code', code: url.searchParams.get('code'),
-          redirect_uri, code_verifier: pending.verifier });
+          redirect_uri: activeRedirectUri, code_verifier: pending.verifier });
         if (!tokens.refresh_token || !gmailScopes.every(scope => (tokens.scope || '').split(' ').includes(scope))) {
           return redirect('/?gmail=permissions#inbox');
         }
@@ -702,6 +772,7 @@ export const server = createServer(async (req, res) => {
         session.tokens = candidate.tokens;
         session.mailbox = account.emailAddress;
         store.auth = { mailbox: account.emailAddress, tokens: candidate.tokens };
+        writeAuthCookie({ mailbox: session.mailbox, tokens: session.tokens });
         await saveStore();
         return redirect('/#inbox');
       } catch { return redirect('/?gmail=failed#inbox'); }
@@ -711,7 +782,7 @@ export const server = createServer(async (req, res) => {
         industries: Object.keys(industries),
         configured: gmailConfigured,
         credentialError,
-        redirectUri: redirect_uri,
+        redirectUri: activeRedirectUri,
         mailbox: session.mailbox ?? null,
         leads: store.leads,
         settings: store.settings
@@ -752,6 +823,7 @@ export const server = createServer(async (req, res) => {
       delete session.tokens;
       delete session.mailbox;
       store.auth = null;
+      writeAuthCookie(null);
       await saveStore();
       return json({ ok: true });
     }
@@ -778,8 +850,11 @@ export const server = createServer(async (req, res) => {
   } catch (error) {
     return json({ error: error.status ? error.message : 'Jobhunta could not complete the request.' }, error.status || 500);
   }
-});
+}
+
+export const server = createServer(handleRequest);
+export default handleRequest;
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  server.listen(port, 'localhost', () => console.log('Jobhunta is running at ' + origin));
+  server.listen(port, 'localhost', () => console.log('Jobhunta is running at ' + localOrigin));
 }

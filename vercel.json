@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index.mjs" },
+    { "source": "/oauth/callback", "destination": "/api/index.mjs" }
+  ]
+}
