@@ -1716,7 +1716,14 @@ $('#results-filter').onchange = () => {
   renderResults();
 };
 
+function setMobileNav(open) {
+  document.body.classList.toggle('nav-open', open);
+  const toggleBtn = $('#menu-toggle');
+  if (toggleBtn) toggleBtn.setAttribute('aria-expanded', String(open));
+}
+
 function navigate() {
+  setMobileNav(false);
   const pageTitles = {
     dashboard: 'Dashboard',
     discover: 'Find businesses',
@@ -1737,6 +1744,18 @@ function navigate() {
   if (page === 'business') renderBusinessPage();
   if (page === 'inbox') refresh();
 }
+
+$('#menu-toggle').onclick = () => setMobileNav(!document.body.classList.contains('nav-open'));
+$('#sidebar-close').onclick = () => setMobileNav(false);
+$('#sidebar-backdrop').onclick = () => setMobileNav(false);
+for (const navLink of document.querySelectorAll('aside a')) {
+  navLink.addEventListener('click', () => setMobileNav(false));
+}
+window.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && document.body.classList.contains('nav-open')) {
+    setMobileNav(false);
+  }
+});
 
 $('#templates').onclick = openTemplatesSettings;
 $('#add').onclick = () => editLead();

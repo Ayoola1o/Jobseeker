@@ -12,8 +12,12 @@
   <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <aside>
-    <a href="#dashboard" class="brand"><img src="/logo.png" alt="Jobhunta logo" width="35" height="35"> Jobhunta</a>
+  <div id="sidebar-backdrop" class="sidebar-backdrop" aria-hidden="true"></div>
+  <aside id="sidebar">
+    <div class="sidebar-top">
+      <a href="#dashboard" class="brand"><img src="/logo.png" alt="Jobhunta logo" width="35" height="35"> Jobhunta</a>
+      <button id="sidebar-close" class="icon-btn sidebar-close" type="button" aria-label="Close navigation">✕</button>
+    </div>
     <nav aria-label="Workspace">
       <a href="#dashboard"><span aria-hidden="true">⊞</span> Dashboard</a>
       <a href="#discover"><span aria-hidden="true">⌕</span> Find businesses</a>
@@ -24,8 +28,13 @@
   </aside>
   <main>
     <header>
-      <span>Workspace <b>/</b> <strong id="breadcrumb">Dashboard</strong></span>
-      <div class="actions">
+      <div class="header-left">
+        <button id="menu-toggle" class="hamburger" type="button" aria-label="Toggle navigation" aria-expanded="false" aria-controls="sidebar">
+          <span></span><span></span><span></span>
+        </button>
+        <span class="breadcrumb-wrap"><span class="hide-xs">Workspace <b>/</b> </span><strong id="breadcrumb">Dashboard</strong></span>
+      </div>
+      <div class="actions header-actions">
         <button id="templates" class="secondary" type="button">Templates &amp; profile</button>
         <button id="connect" class="secondary" type="button">Connect Gmail</button>
       </div>
