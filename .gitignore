@@ -1,6 +1,7 @@
 .env
 .google-oauth.json
 .jobhunta-data.json
+keep.txt
 node_modules/
 mapleedsscapper/
-
+keep.txt

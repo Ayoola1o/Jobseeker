@@ -1218,9 +1218,11 @@ $('#connect').onclick = async () => {
   actionsRow.append(proceedBtn, copyBtn, website('https://console.cloud.google.com/apis/credentials', 'Google Cloud Credentials'));
 
   show('Connect Gmail',
-    create('p', 'Before continuing, make sure this exact Authorized Redirect URI is saved in your Google Cloud OAuth Client:'),
+    create('p', '1. In Google Cloud Console → Credentials, open OAuth Client ID:'),
+    create('code', account.clientId || 'Not configured'),
+    create('p', '2. Under "Authorized redirect URIs", add this exact URL (no trailing slash) and click Save:'),
     uriCode,
-    create('p', 'Also ensure your Gmail address is added under "Test users" in the Google OAuth Consent Screen if your app is in Testing mode.', 'small'),
+    create('p', '3. Ensure ayoolaadebisi5@gmail.com is added under "Test users" in OAuth Consent Screen / Audience.', 'small'),
     actionsRow
   );
 };

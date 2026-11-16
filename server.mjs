@@ -162,6 +162,9 @@ function fail(status, message) {
 }
 
 function getRequestOrigin(req) {
+  if (req.headers.origin && /^https?:\/\//i.test(req.headers.origin)) {
+    return req.headers.origin.replace(/\/$/, '');
+  }
   const host = (req.headers['x-forwarded-host'] || req.headers.host || `localhost:${port}`).split(',')[0].trim();
   const forwardedProto = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
   const proto = forwardedProto || (host.startsWith('localhost') || host.startsWith('127.0.0.1') ? 'http' : 'https');
@@ -1128,6 +1131,7 @@ export async function handleRequest(req, res) {
       return json({
         industries: Object.keys(industries),
         configured: gmailConfigured,
+        clientId: client_id || null,
         credentialError,
         redirectUri: activeRedirectUri,
         mailbox: session.mailbox ?? null,
