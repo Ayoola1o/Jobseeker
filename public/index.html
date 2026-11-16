@@ -25,16 +25,13 @@
       </div>
       <form id="auth-form" class="stack">
         <label id="auth-name-wrap" hidden>Full name
-          <input name="name" id="auth-name" placeholder="e.g. Ayoola Adebisi" maxlength="80">
+          <input name="name" id="auth-name" autocomplete="name" placeholder="e.g. Ayoola Adebisi" maxlength="80">
         </label>
         <label>Email address
-          <input name="email" id="auth-email" type="email" placeholder="you@example.com" maxlength="254" required>
+          <input name="email" id="auth-email" type="email" autocomplete="email" placeholder="you@example.com" maxlength="254" required>
         </label>
         <label>Password
-          <input name="password" id="auth-password" type="password" placeholder="At least 6 characters" minlength="6" maxlength="128" required>
-        </label>
-        <label id="auth-service-wrap" hidden>Your service / offer (optional)
-          <input name="senderService" id="auth-service" placeholder="e.g. Shopify CRO, web design &amp; local SEO" maxlength="200">
+          <input name="password" id="auth-password" type="password" autocomplete="current-password" placeholder="Enter your password" minlength="6" maxlength="128" required>
         </label>
         <p id="auth-error" class="small" role="status" hidden></p>
         <button id="auth-submit" type="submit">Sign in to workspace →</button>

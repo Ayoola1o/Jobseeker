@@ -2013,7 +2013,7 @@ function setAuthMode(mode) {
   $('#tab-signup').setAttribute('aria-selected', String(isSignup));
   $('#auth-name-wrap').hidden = !isSignup;
   $('#auth-name').required = isSignup;
-  $('#auth-service-wrap').hidden = !isSignup;
+  $('#auth-password').autocomplete = isSignup ? 'new-password' : 'current-password';
   $('#auth-submit').textContent = isSignup ? 'Create account & enter →' : 'Sign in to workspace →';
   $('#auth-error').hidden = true;
 }
@@ -2073,6 +2073,7 @@ function showAuthScreen() {
   results = [];
   activeBusinessId = null;
   messages.clear();
+  setAuthMode('login');
   document.body.classList.add('auth-locked');
   setMobileNav(false);
 }
