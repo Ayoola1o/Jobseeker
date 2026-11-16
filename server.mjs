@@ -434,7 +434,107 @@ export function parseBingMapsHtml(html = '', fallbackIndustry = '', city = '', s
   return results;
 }
 
-function getSearchOffsets(rankMode = 'all') {
+export const stateSubCities = {
+  'lagos': ['Ikeja', 'Lekki', 'Victoria Island', 'Ikoyi', 'Surulere', 'Yaba', 'Ajah', 'Maryland', 'Gbagada', 'Festac', 'Ikorodu', 'Apapa'],
+  'lagos state': ['Ikeja', 'Lekki', 'Victoria Island', 'Ikoyi', 'Surulere', 'Yaba', 'Ajah', 'Maryland', 'Gbagada', 'Festac', 'Ikorodu', 'Apapa'],
+  'abuja': ['Wuse', 'Maitama', 'Garki', 'Gwarinpa', 'Asokoro', 'Jabi', 'Utako', 'Kubwa', 'Lugbe'],
+  'fct': ['Wuse', 'Maitama', 'Garki', 'Gwarinpa', 'Asokoro', 'Jabi', 'Utako', 'Kubwa', 'Lugbe'],
+  'ogun': ['Abeokuta', 'Ota', 'Ijebu Ode', 'Sagamu', 'Mowe', 'Ilaro'],
+  'ogun state': ['Abeokuta', 'Ota', 'Ijebu Ode', 'Sagamu', 'Mowe', 'Ilaro'],
+  'oyo': ['Ibadan', 'Bodija', 'Ring Road Ibadan', 'Challenge Ibadan', 'Ogbomosho', 'Oyo'],
+  'oyo state': ['Ibadan', 'Bodija', 'Ring Road Ibadan', 'Challenge Ibadan', 'Ogbomosho', 'Oyo'],
+  'rivers': ['Port Harcourt', 'GRA Port Harcourt', 'Trans Amadi', 'Rumuola', 'Obio-Akpor', 'Bonny'],
+  'rivers state': ['Port Harcourt', 'GRA Port Harcourt', 'Trans Amadi', 'Rumuola', 'Obio-Akpor', 'Bonny'],
+  'kano': ['Kano Municipal', 'Nassarawa Kano', 'Fagge', 'Tarauni', 'Gwale'],
+  'kano state': ['Kano Municipal', 'Nassarawa Kano', 'Fagge', 'Tarauni', 'Gwale'],
+  'enugu': ['Enugu', 'Independence Layout Enugu', 'New Haven Enugu', 'Achara Layout', 'Nsukka'],
+  'enugu state': ['Enugu', 'Independence Layout Enugu', 'New Haven Enugu', 'Achara Layout', 'Nsukka'],
+  'delta': ['Asaba', 'Warri', 'Effurun', 'Sapele', 'Ughelli'],
+  'delta state': ['Asaba', 'Warri', 'Effurun', 'Sapele', 'Ughelli'],
+  'edo': ['Benin City', 'GRA Benin City', 'Ekpoma', 'Auchi', 'Uromi'],
+  'edo state': ['Benin City', 'GRA Benin City', 'Ekpoma', 'Auchi', 'Uromi'],
+  'california': ['Los Angeles', 'San Francisco', 'San Diego', 'San Jose', 'Sacramento', 'Irvine', 'Oakland', 'Pasadena', 'Santa Monica', 'Beverly Hills'],
+  'texas': ['Houston', 'Dallas', 'Austin', 'San Antonio', 'Fort Worth', 'Plano', 'El Paso', 'Arlington', 'Frisco'],
+  'florida': ['Miami', 'Orlando', 'Tampa', 'Jacksonville', 'Fort Lauderdale', 'St. Petersburg', 'West Palm Beach', 'Boca Raton'],
+  'new york state': ['Manhattan', 'Brooklyn', 'Queens', 'Bronx', 'Buffalo', 'Rochester', 'Albany', 'White Plains'],
+  'illinois': ['Chicago', 'Naperville', 'Aurora', 'Evanston', 'Schaumburg', 'Oak Brook', 'Springfield'],
+  'georgia': ['Atlanta', 'Savannah', 'Augusta', 'Alpharetta', 'Marietta', 'Sandy Springs'],
+  'pennsylvania': ['Philadelphia', 'Pittsburgh', 'Allentown', 'King of Prussia', 'Harrisburg'],
+  'ohio': ['Columbus', 'Cleveland', 'Cincinnati', 'Toledo', 'Akron', 'Dayton'],
+  'north carolina': ['Charlotte', 'Raleigh', 'Durham', 'Greensboro', 'Winston-Salem', 'Cary'],
+  'new jersey': ['Newark', 'Jersey City', 'Hoboken', 'Princeton', 'Paramus', 'Cherry Hill'],
+  'washington': ['Seattle', 'Bellevue', 'Tacoma', 'Spokane', 'Redmond', 'Kirkland'],
+  'massachusetts': ['Boston', 'Cambridge', 'Somerville', 'Worcester', 'Waltham', 'Quincy'],
+  'ontario': ['Toronto', 'Ottawa', 'Mississauga', 'Brampton', 'Hamilton', 'London Ontario', 'Markham'],
+  'british columbia': ['Vancouver', 'Victoria', 'Burnaby', 'Surrey', 'Richmond', 'Kelowna'],
+  'england': ['London', 'Manchester', 'Birmingham', 'Leeds', 'Liverpool', 'Bristol', 'Sheffield', 'Newcastle']
+};
+
+export async function resolveSearchLocations(rawLocation = '') {
+  const cleaned = rawLocation.trim();
+  if (!cleaned) return [];
+  if (cleaned.includes(',')) {
+    const parts = cleaned.split(',').map(s => s.trim()).filter(Boolean);
+    if (parts.length > 1) return parts.slice(0, 12);
+  }
+  const key = cleaned.toLowerCase();
+  if (Object.hasOwn(stateSubCities, key)) {
+    const parentName = cleaned.replace(/\s+state$/i, '');
+    return stateSubCities[key].map(sub => `${sub}, ${parentName}`);
+  }
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleaned)}&format=json&limit=1`, {
+      headers: { 'User-Agent': 'Jobhunta/1.1 (local business discovery)' },
+      signal: AbortSignal.timeout(3500)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const top = data?.[0];
+      if (top && ['state', 'province', 'region', 'county'].includes(top.addresstype)) {
+        const apiKey = process.env.GEMINI_API_KEY?.trim();
+        if (apiKey) {
+          try {
+            const aiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
+              method: 'POST',
+              headers: jsonHeaders,
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: `Return a JSON array of strings listing the 8 largest commercial cities or districts inside "${cleaned}". Only return the JSON array.` }] }],
+                generationConfig: { responseMimeType: 'application/json' }
+              }),
+              signal: AbortSignal.timeout(5000)
+            });
+            if (aiRes.ok) {
+              const aiData = await aiRes.json();
+              const parsed = JSON.parse(aiData.candidates?.[0]?.content?.parts?.[0]?.text || '[]');
+              if (Array.isArray(parsed) && parsed.length >= 2) {
+                return parsed.slice(0, 10).map(city => `${String(city).trim()}, ${cleaned}`);
+              }
+            }
+          } catch {
+            // Fallback below
+          }
+        }
+        return [
+          `Central ${cleaned}`,
+          `North ${cleaned}`,
+          `South ${cleaned}`,
+          `East ${cleaned}`,
+          `West ${cleaned}`
+        ];
+      }
+    }
+  } catch {
+    // Treat as a single city if lookup times out
+  }
+  return [cleaned];
+}
+
+function getSearchOffsets(rankMode = 'all', isMultiCity = false) {
+  if (isMultiCity) {
+    return rankMode === 'low' || rankMode === 'shopify'
+      ? [{ first: 21, page: 3 }, { first: 41, page: 4 }]
+      : [{ first: 1, page: 1 }, { first: 11, page: 2 }];
+  }
   if (rankMode === 'low') {
     return [
       { first: 21, page: 3 },
@@ -553,7 +653,7 @@ async function streamSearch(req, res, industry, city, rankMode = 'all') {
   const cleanIndustry = (industry || '').trim();
   if (!/^[\p{L}\p{M}\p{N} .,'’&/()-]{2,50}$/u.test(cleanIndustry) ||
       !/^[\p{L}\p{M}\p{N} .,'’()-]{2,75}$/u.test(city)) {
-    fail(400, 'Choose or enter an industry and enter a city.');
+    fail(400, 'Choose or enter an industry and enter a city or state.');
   }
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -571,57 +671,74 @@ async function streamSearch(req, res, industry, city, rankMode = 'all') {
   };
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const queries = rankMode === 'shopify'
-    ? [`${cleanIndustry} store in ${city}`, `${cleanIndustry} boutique shop in ${city}`]
-    : [`${cleanIndustry} in ${city}`];
+  const subLocations = await resolveSearchLocations(city);
+  const isStateBreakdown = subLocations.length > 1;
+  const offsetConfigs = getSearchOffsets(rankMode === 'shopify' ? 'low' : rankMode, isStateBreakdown);
   const seen = new Set();
-  const offsetConfigs = getSearchOffsets(rankMode === 'shopify' ? 'low' : rankMode);
-  let emptyStreak = 0;
 
-  for (const query of queries) {
-    for (let idx = 0; idx < offsetConfigs.length; idx++) {
-      if (closed) break;
-      const { first, page } = offsetConfigs[idx];
-      sendEvent({
-        type: 'status',
-        page,
-        totalPages: offsetConfigs.length,
-        totalFound: seen.size,
-        message: rankMode === 'low' || rankMode === 'shopify'
-          ? `Scraping low-ranked Bing results (Page ${page}, Rank #${first}+)…`
-          : `Scraping Bing Maps page ${page} (Rank #${first}+)…`
-      });
-      try {
-        const url = `https://www.bing.com/maps/overlaybfpr?q=${encodeURIComponent(query)}&count=20&first=${first}`;
-        const response = await fetch(url, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9'
-          },
-          signal: AbortSignal.timeout(10000)
+  if (isStateBreakdown) {
+    sendEvent({
+      type: 'status',
+      totalFound: 0,
+      message: `Breaking "${city}" into ${subLocations.length} cities/districts (${subLocations.slice(0, 4).map(s => s.split(',')[0]).join(', ')}…) to scrape bit-by-bit…`
+    });
+  }
+
+  for (let locIndex = 0; locIndex < subLocations.length; locIndex++) {
+    if (closed) break;
+    const subCity = subLocations[locIndex];
+    const queries = rankMode === 'shopify'
+      ? [`${cleanIndustry} store in ${subCity}`, `${cleanIndustry} boutique shop in ${subCity}`]
+      : [`${cleanIndustry} in ${subCity}`];
+
+    let emptyStreak = 0;
+    for (const query of queries) {
+      for (let idx = 0; idx < offsetConfigs.length; idx++) {
+        if (closed) break;
+        const { first, page } = offsetConfigs[idx];
+        sendEvent({
+          type: 'status',
+          page,
+          totalPages: offsetConfigs.length,
+          totalFound: seen.size,
+          message: isStateBreakdown
+            ? `Scraping ${city} bit-by-bit [${locIndex + 1}/${subLocations.length}: ${subCity} · Page ${page}]…`
+            : (rankMode === 'low' || rankMode === 'shopify'
+                ? `Scraping low-ranked Bing results in ${subCity} (Page ${page}, Rank #${first}+)…`
+                : `Scraping Bing Maps in ${subCity} (Page ${page}, Rank #${first}+)…`)
         });
-        if (!response.ok) break;
-        const html = await response.text();
-        const items = parseBingMapsHtml(html, cleanIndustry, city, first, page);
-        let addedOnPage = 0;
-        for (const item of items) {
-          if (closed) break;
-          if (!seen.has(item.id)) {
-            seen.add(item.id);
-            addedOnPage++;
-            sendEvent({ type: 'business', item, totalFound: seen.size });
-            await pause(65);
+        try {
+          const url = `https://www.bing.com/maps/overlaybfpr?q=${encodeURIComponent(query)}&count=20&first=${first}`;
+          const response = await fetch(url, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.9'
+            },
+            signal: AbortSignal.timeout(10000)
+          });
+          if (!response.ok) break;
+          const html = await response.text();
+          const items = parseBingMapsHtml(html, cleanIndustry, subCity, first, page);
+          let addedOnPage = 0;
+          for (const item of items) {
+            if (closed) break;
+            if (!seen.has(item.id)) {
+              seen.add(item.id);
+              addedOnPage++;
+              sendEvent({ type: 'business', item, totalFound: seen.size });
+              await pause(60);
+            }
           }
+          if (addedOnPage === 0) {
+            emptyStreak++;
+            if (emptyStreak >= 2) break;
+          } else {
+            emptyStreak = 0;
+          }
+        } catch {
+          break;
         }
-        if (addedOnPage === 0) {
-          emptyStreak++;
-          if (emptyStreak >= 2) break;
-        } else {
-          emptyStreak = 0;
-        }
-      } catch {
-        break;
       }
     }
   }

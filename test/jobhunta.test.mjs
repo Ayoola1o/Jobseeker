@@ -9,6 +9,7 @@ import {
   detectPlatformAndTech,
   buildLeadIntelligence,
   parseBingMapsHtml,
+  resolveSearchLocations,
   industries
 } from '../server.mjs';
 
@@ -192,4 +193,15 @@ test('detectPlatformAndTech detects Shopify stores, theme, currency, and install
   assert.equal(detected.shopifyMeta.currency, 'USD');
   assert.ok(detected.techStack.includes('Klaviyo'));
   assert.ok(detected.techStack.includes('Meta Pixel'));
+});
+
+test('resolveSearchLocations expands a State into constituent sub-cities for bit-by-bit scraping', async () => {
+  const lagosCities = await resolveSearchLocations('Lagos State');
+  assert.ok(lagosCities.length >= 8);
+  assert.ok(lagosCities.some(c => c.startsWith('Ikeja')));
+  assert.ok(lagosCities.some(c => c.startsWith('Lekki')));
+
+  const texasCities = await resolveSearchLocations('Texas');
+  assert.ok(texasCities.length >= 6);
+  assert.ok(texasCities.some(c => c.startsWith('Houston')));
 });
