@@ -184,8 +184,20 @@ function applyEnrichmentToItem(item, found) {
   if (Array.isArray(found.emails) && found.emails.length) {
     item.emails = [...new Set([...(item.emails || []), ...found.emails])];
   }
-  for (const fieldName of ['facebook', 'instagram', 'twitter', 'linkedin', 'youtube', 'tiktok', 'siteTitle', 'metaDescription', 'aboutSummary']) {
+  for (const fieldName of ['facebook', 'instagram', 'twitter', 'linkedin', 'youtube', 'tiktok', 'siteTitle', 'metaDescription', 'aboutSummary', 'platform']) {
     if (found[fieldName] && !item[fieldName]) item[fieldName] = found[fieldName];
+  }
+  if (found.platform && found.platform !== 'Custom / Website') {
+    item.platform = found.platform;
+  }
+  if (Array.isArray(found.techStack) && found.techStack.length) {
+    item.techStack = [...new Set([...(item.techStack || []), ...found.techStack])];
+  }
+  if (found.shopifyMeta) {
+    item.shopifyMeta = { ...(item.shopifyMeta || {}), ...found.shopifyMeta };
+  }
+  if (Array.isArray(found.shopifyProducts) && found.shopifyProducts.length) {
+    item.shopifyProducts = found.shopifyProducts;
   }
   if (Array.isArray(found.headings) && found.headings.length) {
     item.headings = found.headings;
@@ -423,6 +435,7 @@ function renderDashboard() {
   };
   addStatRow('Gmail Connection', account.mailbox ? `Connected (${account.mailbox})` : 'Not connected');
   addStatRow('Leads with Verified Email', leads.filter(l => l.email).length);
+  addStatRow('Shopify / E-commerce Stores', leads.filter(l => l.platform === 'Shopify' || l.platform === 'WooCommerce').length);
   addStatRow('Leads with Social Media Links', leads.filter(l => l.facebook || l.instagram || l.twitter || l.linkedin).length);
   addStatRow('Leads Audited with AI Pitch', counts.aiAudited);
   const topIndustries = [...industryCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} (${v})`).join(', ') || 'None yet';
@@ -509,7 +522,11 @@ function renderResults() {
     const enrichBtn = (!item.email && item.website && !item.scanning && !item.scanned)
       ? button('Find email', event => enrichItemEmail(item, event.currentTarget), true)
       : '';
+    const platformPill = (item.platform && item.platform !== 'Custom / Website')
+      ? create('span', item.platform, 'pill')
+      : '';
     return row(item, [item.industry, item.city, item.address, item.email, item.phone], [
+      platformPill,
       statusPill,
       enrichBtn,
       website(item.website, 'Website'),
@@ -553,13 +570,15 @@ function renderResults() {
 function getFilteredLeads() {
   const query = norm($('#filter-query')?.value);
   const statusFilter = $('#filter-status')?.value || '';
+  const platformFilter = $('#filter-platform')?.value || '';
   const sortOrder = $('#filter-sort')?.value || 'recent';
 
   const filtered = leads.filter(lead => {
     const status = leadStatus(lead);
     if (statusFilter && status !== statusFilter) return false;
+    if (platformFilter && (lead.platform || '') !== platformFilter) return false;
     if (!query) return true;
-    const haystack = [lead.name, lead.industry, lead.city, lead.email, lead.phone, lead.address, lead.about]
+    const haystack = [lead.name, lead.industry, lead.city, lead.email, lead.phone, lead.address, lead.about, lead.platform]
       .map(norm)
       .join(' ');
     return haystack.includes(query);
@@ -646,12 +665,16 @@ function renderLeads() {
     const enrichBtn = (!lead.email && lead.website)
       ? button('Find email', event => enrichItemEmail(lead, event.currentTarget), true)
       : '';
+    const platformPill = (lead.platform && lead.platform !== 'Custom / Website')
+      ? create('span', lead.platform, 'pill')
+      : '';
     return row(lead, [
       lead.industry, lead.city, lead.email, lead.phone, lead.address, lead.due && 'Follow up ' + lead.due
     ], [
       website(lead.website, 'Website'),
       ...socialLinks(lead),
       website(lead.source, 'Listing'),
+      platformPill,
       create('span', status, statusPillClass(status)),
       lead.aiBrief ? create('span', '✦ AI Pitch', 'pill') : '',
       enrichBtn,
@@ -875,6 +898,24 @@ function renderBusinessPage() {
   webCard.append(create('small', 'DIGITAL PRESENCE SIGNALS & WHAT IS MISSING', 'small'), signalList);
 
   const aboutBox = create('div', '', 'stack');
+  if (lead.platform) {
+    const platDetails = [
+      lead.platform,
+      lead.shopifyMeta?.themeName && `Theme: ${lead.shopifyMeta.themeName}`,
+      lead.shopifyMeta?.myshopifyDomain,
+      lead.shopifyMeta?.currency && `Currency: ${lead.shopifyMeta.currency}`
+    ].filter(Boolean).join(' · ');
+    aboutBox.append(kvItem('Detected Website Platform', platDetails));
+  }
+  if (Array.isArray(lead.techStack) && lead.techStack.length) {
+    aboutBox.append(kvItem('Installed Apps & Tech Stack', lead.techStack.join(' • ')));
+  }
+  if (Array.isArray(lead.shopifyProducts) && lead.shopifyProducts.length) {
+    const prodList = lead.shopifyProducts
+      .map(p => `${p.title}${p.type ? ` (${p.type})` : ''}${p.price ? ` — $${p.price}` : ''}`)
+      .join('\n• ');
+    aboutBox.append(kvItem('Shopify Product Catalog Sample', '• ' + prodList));
+  }
   if (lead.siteTitle) {
     aboutBox.append(kvItem('Website Title', lead.siteTitle));
   }
@@ -1591,6 +1632,48 @@ $('#search').onsubmit = async event => {
   }
 };
 
+$('#inspect-url').onsubmit = async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = form.querySelector('button');
+  const formData = new FormData(form);
+  let rawUrl = (formData.get('website') || '').trim();
+  const cityVal = (formData.get('city') || '').trim();
+  if (!rawUrl) return;
+  if (!/^https?:\/\//i.test(rawUrl)) rawUrl = 'https://' + rawUrl;
+
+  submit.disabled = true;
+  submit.textContent = 'Combing URL…';
+  report();
+  try {
+    const enriched = await api('/api/enrich', { website: rawUrl });
+    const parsedHost = new URL(enriched.website || rawUrl).hostname.replace(/^www\./, '');
+    const newItem = {
+      id: crypto.randomUUID(),
+      name: enriched.brandName || parsedHost,
+      industry: enriched.platform === 'Shopify' ? 'Shopify Store' : (enriched.platform || 'Online Business'),
+      city: cityVal || 'Online',
+      address: '',
+      website: enriched.website || rawUrl,
+      phone: '',
+      email: enriched.email || '',
+      source: enriched.website || rawUrl,
+      about: [enriched.platform, enriched.shopifyMeta?.themeName && `Theme: ${enriched.shopifyMeta.themeName}`].filter(Boolean).join(' · '),
+      scanned: true,
+      threads: []
+    };
+    applyEnrichmentToItem(newItem, enriched);
+    form.reset();
+    openBusinessPage(newItem);
+    report(`Combed ${newItem.name} (${newItem.platform || 'Website'}) and opened its dossier.`);
+  } catch (error) {
+    report(error.message, true);
+  } finally {
+    submit.disabled = false;
+    submit.textContent = 'Comb URL & Open Dossier ✦';
+  }
+};
+
 $('#save-all').onclick = () => {
   let added = 0;
   for (const item of results) {
@@ -1640,6 +1723,7 @@ $('#close').onclick = () => dialog.close();
 $('#refresh').onclick = () => refresh(true);
 $('#filter-query').oninput = renderLeads;
 $('#filter-status').onchange = renderLeads;
+$('#filter-platform').onchange = renderLeads;
 $('#filter-sort').onchange = renderLeads;
 window.addEventListener('hashchange', navigate);
 $('#results').replaceChildren(empty('⌕', 'Start a search', 'Choose or enter an industry and enter the city you want to explore.'));

@@ -72,7 +72,12 @@ export const industries = {
   Veterinarians: ['amenity', 'veterinary'], Plumbers: ['craft', 'plumber'],
   Electricians: ['craft', 'electrician'], Florists: ['shop', 'florist'],
   'Travel agencies': ['shop', 'travel_agency'], Schools: ['amenity', 'school'],
-  'Dry cleaners': ['shop', 'dry_cleaning'], Coworking: ['amenity', 'coworking_space']
+  'Dry cleaners': ['shop', 'dry_cleaning'], Coworking: ['amenity', 'coworking_space'],
+  'Clothing & Fashion': ['shop', 'clothes'], 'Cosmetics & Skincare': ['shop', 'cosmetics'],
+  'Jewelry stores': ['shop', 'jewelry'], 'Furniture & Home': ['shop', 'furniture'],
+  'Electronics stores': ['shop', 'electronics'], 'Shoe stores': ['shop', 'shoes'],
+  'Sporting goods': ['shop', 'sports'], 'Pet stores': ['shop', 'pet'],
+  'Gift shops': ['shop', 'gift']
 };
 
 const defaultTemplates = [
@@ -710,6 +715,60 @@ export function extractSocialsFromHtml(html = '') {
   return socials;
 }
 
+export function detectPlatformAndTech(html = '') {
+  let platform = 'Custom / Website';
+  if (/(cdn\.shopify\.com|Shopify\.shop|Shopify\.theme|myshopify\.com)/i.test(html)) {
+    platform = 'Shopify';
+  } else if (/(woocommerce|wc-blocks|wp-content\/plugins\/woocommerce)/i.test(html)) {
+    platform = 'WooCommerce';
+  } else if (/(wp-content|wp-includes)/i.test(html)) {
+    platform = 'WordPress';
+  } else if (/(wixstatic\.com|wix\.com)/i.test(html)) {
+    platform = 'Wix';
+  } else if (/(squarespace\.com|sqsp\.net)/i.test(html)) {
+    platform = 'Squarespace';
+  } else if (/(webflow\.com|data-wf-site)/i.test(html)) {
+    platform = 'Webflow';
+  }
+
+  const techStack = [];
+  const checks = [
+    ['Klaviyo', /klaviyo/i],
+    ['Mailchimp', /mailchimp/i],
+    ['Omnisend', /omnisend/i],
+    ['Judge.me Reviews', /judge\.me/i],
+    ['Loox Reviews', /loox\.io/i],
+    ['Yotpo Reviews', /yotpo/i],
+    ['Trustpilot', /trustpilot/i],
+    ['Gorgias Chat', /gorgias/i],
+    ['Tidio Chat', /tidio/i],
+    ['Shopify Inbox', /shopify-chat|shopifyinbox/i],
+    ['WhatsApp Widget', /wa\.me|whatsapp\.com/i],
+    ['Meta Pixel', /fbevents\.js|fbq\(/i],
+    ['TikTok Pixel', /analytics\.tiktok\.com|ttq\./i],
+    ['Google Tag / Analytics', /googletagmanager|gtag\(|google-analytics/i],
+    ['Shop Pay', /shop-pay|shopify-payment-button/i],
+    ['Klarna / Afterpay', /klarna|afterpay/i]
+  ];
+  for (const [label, regex] of checks) {
+    if (regex.test(html)) techStack.push(label);
+  }
+
+  const myshopifyMatch = html.match(/Shopify\.shop\s*=\s*["']([^"']+)["']/i);
+  const themeMatch = html.match(/Shopify\.theme\s*=\s*\{[^}]*?"name"\s*:\s*"([^"]+)"/i);
+  const currencyMatch = html.match(/Shopify\.currency\s*=\s*\{[^}]*?"active"\s*:\s*"([^"]+)"/i);
+
+  return {
+    platform,
+    techStack,
+    shopifyMeta: platform === 'Shopify' ? {
+      myshopifyDomain: myshopifyMatch?.[1] || '',
+      themeName: themeMatch?.[1] || '',
+      currency: currencyMatch?.[1] || ''
+    } : null
+  };
+}
+
 export function extractWebsiteInsights(html = '', urlStr = '') {
   const cleanHtml = html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -718,6 +777,11 @@ export function extractWebsiteInsights(html = '', urlStr = '') {
 
   const titleMatch = cleanHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const siteTitle = decodeHtmlEntities((titleMatch?.[1] || '').replace(/\s+/g, ' ').trim()).slice(0, 180);
+
+  const ogSiteNameMatch =
+    html.match(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:site_name["']/i);
+  const brandName = decodeHtmlEntities((ogSiteNameMatch?.[1] || '').replace(/\s+/g, ' ').trim()).slice(0, 100);
 
   const metaDescMatch =
     cleanHtml.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
@@ -749,15 +813,48 @@ export function extractWebsiteInsights(html = '', urlStr = '') {
     .join('\n\n')
     .slice(0, 1500);
 
+  const { platform, techStack, shopifyMeta } = detectPlatformAndTech(html);
+
   const signals = {
     https: urlStr.startsWith('https://'),
     hasMetaDescription: Boolean(metaDescription),
-    hasBookingOrForm: /(book online|schedule appointment|book now|appointment|calendly|contact-form|<form\b)/i.test(html),
-    hasChatWidget: /(tawk\.to|intercom|crisp\.chat|drift|livechat|whatsapp\.com|wa\.me|tidio|zendesk)/i.test(html),
-    hasAnalytics: /(googletagmanager|gtag\(|google-analytics|fbq\(|fbevents\.js)/i.test(html)
+    hasBookingOrForm: /(book online|schedule appointment|book now|appointment|calendly|contact-form|<form\b|newsletter|klaviyo|mailchimp)/i.test(html),
+    hasChatWidget: /(tawk\.to|intercom|crisp\.chat|drift|livechat|whatsapp\.com|wa\.me|tidio|zendesk|gorgias|shopify-chat)/i.test(html),
+    hasAnalytics: /(googletagmanager|gtag\(|google-analytics|fbq\(|fbevents\.js|analytics\.tiktok\.com)/i.test(html),
+    hasReviewsApp: /(judge\.me|loox\.io|yotpo|trustpilot|stamped\.io)/i.test(html)
   };
 
-  return { siteTitle, metaDescription, headings, aboutSummary, signals };
+  return {
+    siteTitle,
+    brandName,
+    metaDescription,
+    headings,
+    aboutSummary,
+    platform,
+    techStack,
+    shopifyMeta,
+    signals
+  };
+}
+
+async function fetchShopifyProducts(originUrl) {
+  try {
+    const res = await fetch(new URL('/products.json?limit=6', originUrl).href, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Jobhunta/1.1)', Accept: 'application/json' },
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data?.products)) return [];
+    return data.products.slice(0, 6).map(p => ({
+      title: String(p.title || '').slice(0, 100),
+      type: String(p.product_type || '').slice(0, 60),
+      vendor: String(p.vendor || '').slice(0, 60),
+      price: String(p.variants?.[0]?.price || '')
+    })).filter(p => p.title);
+  } catch {
+    return [];
+  }
 }
 
 async function fetchWebsiteEmails(websiteUrl) {
@@ -788,10 +885,16 @@ async function fetchWebsiteEmails(websiteUrl) {
   const socials = extractSocialsFromHtml(homepageHtml);
   const insights = extractWebsiteInsights(homepageHtml, base.href);
 
+  let shopifyProducts = [];
+  if (insights.platform === 'Shopify' || base.hostname.endsWith('.myshopify.com')) {
+    insights.platform = 'Shopify';
+    shopifyProducts = await fetchShopifyProducts(base.origin);
+  }
+
   if (homepageHtml) {
     const subLinks = [...homepageHtml.matchAll(/href\s*=\s*["']([^"'#]+)["']/gi)]
       .map(match => match[1])
-      .filter(href => /(contact|about|services|our-story|who-we-are|impressum|get-in-touch|reach-us)/i.test(href));
+      .filter(href => /(contact|about|services|our-story|who-we-are|impressum|get-in-touch|reach-us|pages\/contact|pages\/about)/i.test(href));
     const uniqueSubUrls = [];
     for (const href of subLinks) {
       try {
@@ -822,14 +925,20 @@ async function fetchWebsiteEmails(websiteUrl) {
         for (const h of subInsights.headings) {
           if (insights.headings.length < 8 && !insights.headings.includes(h)) insights.headings.push(h);
         }
+        for (const appName of subInsights.techStack || []) {
+          if (!insights.techStack.includes(appName)) insights.techStack.push(appName);
+        }
         insights.signals.hasBookingOrForm ||= subInsights.signals.hasBookingOrForm;
         insights.signals.hasChatWidget ||= subInsights.signals.hasChatWidget;
+        insights.signals.hasReviewsApp ||= subInsights.signals.hasReviewsApp;
       } catch {
         // Ignore subpage fetch failure
       }
     }
   }
   return {
+    website: base.href,
+    brandName: insights.brandName || insights.siteTitle?.split(/[|\-–—]/)[0]?.trim() || base.hostname.replace(/^www\./, ''),
     emails: [...emails],
     email: [...emails][0] || '',
     socials,
@@ -843,6 +952,10 @@ async function fetchWebsiteEmails(websiteUrl) {
     metaDescription: insights.metaDescription,
     headings: insights.headings,
     aboutSummary: insights.aboutSummary,
+    platform: insights.platform,
+    techStack: insights.techStack,
+    shopifyMeta: insights.shopifyMeta,
+    shopifyProducts,
     signals: insights.signals
   };
 }
@@ -870,6 +983,15 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}) {
   const overviewParts = [
     `${name} operates as a ${industry} in ${city}${lead.address ? ` (${lead.address})` : ''}.`
   ];
+  if (lead.platform && lead.platform !== 'Custom / Website') {
+    overviewParts.push(`Website platform: ${lead.platform}${lead.shopifyMeta?.themeName ? ` (Theme: ${lead.shopifyMeta.themeName})` : ''}.`);
+  }
+  if (Array.isArray(lead.shopifyProducts) && lead.shopifyProducts.length) {
+    overviewParts.push(`Catalog sample: ${lead.shopifyProducts.slice(0, 3).map(p => `${p.title}${p.price ? ` ($${p.price})` : ''}`).join(', ')}.`);
+  }
+  if (Array.isArray(lead.techStack) && lead.techStack.length) {
+    overviewParts.push(`Detected tech stack: ${lead.techStack.join(', ')}.`);
+  }
   if (lead.siteTitle || lead.metaDescription) {
     overviewParts.push(`Website positioning: "${lead.siteTitle || lead.metaDescription}".`);
   }
@@ -890,6 +1012,14 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}) {
     if (signals.hasMetaDescription === false) {
       gaps.push('Missing SEO meta description on their website, reducing click-through rates from Google and Bing local search.');
     }
+    if (lead.platform === 'Shopify' || lead.platform === 'WooCommerce') {
+      if (!signals.hasReviewsApp) {
+        gaps.push(`Running on ${lead.platform} without a dedicated product review widget (Judge.me, Loox, or Yotpo) to boost product page conversion.`);
+      }
+      if (!(lead.techStack || []).some(t => /Klaviyo|Omnisend|Mailchimp/i.test(t))) {
+        gaps.push(`No automated e-commerce email retention stack (Klaviyo / Omnisend) detected for abandoned cart and repeat buyer flows.`);
+      }
+    }
     if (signals.hasBookingOrForm === false) {
       gaps.push('No clear online booking / instant lead capture form detected — visitors must call manually during open hours.');
     }
@@ -897,7 +1027,7 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}) {
       gaps.push('No live chat or WhatsApp quick-response widget on site to capture after-hours inquiries.');
     }
     if (signals.hasAnalytics === false) {
-      gaps.push('No conversion tracking / ad pixel detected (Google Tag or Meta Pixel), meaning missed retargeting opportunities.');
+      gaps.push('No conversion tracking / ad pixel detected (Google Tag, Meta Pixel, or TikTok Pixel), meaning missed retargeting opportunities.');
     }
   }
   if (!lead.email) {
@@ -971,6 +1101,10 @@ async function analyzeLeadWithAi(lead, senderSettings) {
       metaDescription: lead.metaDescription,
       headings: lead.headings,
       aboutSummary: lead.aboutSummary,
+      platform: lead.platform,
+      techStack: lead.techStack,
+      shopifyMeta: lead.shopifyMeta,
+      shopifyProducts: lead.shopifyProducts,
       socials: { facebook: lead.facebook, instagram: lead.instagram, twitter: lead.twitter, linkedin: lead.linkedin },
       signals: lead.signals
     })}\n\nSender profile:\nName: ${senderSettings?.senderName || 'Outreach Specialist'}\nService offered: ${senderSettings?.senderService || 'digital growth & client acquisition'}`;

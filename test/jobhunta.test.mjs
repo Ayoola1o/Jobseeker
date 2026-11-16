@@ -6,6 +6,7 @@ import {
   extractEmailsFromHtml,
   extractSocialsFromHtml,
   extractWebsiteInsights,
+  detectPlatformAndTech,
   buildLeadIntelligence,
   parseBingMapsHtml,
   industries
@@ -166,4 +167,29 @@ test('extractWebsiteInsights and buildLeadIntelligence extract about info, digit
   assert.ok(brief.gaps.length >= 1);
   assert.match(brief.pitchSubject, /Downtown Pharmacy/);
   assert.match(brief.pitchBody, /Ayoola/);
+});
+
+test('detectPlatformAndTech detects Shopify stores, theme, currency, and installed apps', () => {
+  const shopifyHtml = `
+    <html>
+      <head>
+        <link href="https://cdn.shopify.com/s/files/1/0001/assets/base.css" rel="stylesheet">
+        <script>
+          Shopify.shop = "glow-skincare-ng.myshopify.com";
+          Shopify.theme = {"name":"Dawn","id":123};
+          Shopify.currency = {"active":"USD","rate":"1.0"};
+        </script>
+        <script src="https://static.klaviyo.com/onsite/js/klaviyo.js"></script>
+        <script src="https://connect.facebook.net/en_US/fbevents.js"></script>
+      </head>
+      <body></body>
+    </html>
+  `;
+  const detected = detectPlatformAndTech(shopifyHtml);
+  assert.equal(detected.platform, 'Shopify');
+  assert.equal(detected.shopifyMeta.myshopifyDomain, 'glow-skincare-ng.myshopify.com');
+  assert.equal(detected.shopifyMeta.themeName, 'Dawn');
+  assert.equal(detected.shopifyMeta.currency, 'USD');
+  assert.ok(detected.techStack.includes('Klaviyo'));
+  assert.ok(detected.techStack.includes('Meta Pixel'));
 });

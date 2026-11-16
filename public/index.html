@@ -43,12 +43,19 @@
           <p>Search by industry and city to build your outreach list.</p>
         </div>
         <form id="search" class="surface search">
-          <label>Industry
-            <input name="industry" id="industry-input" list="industries" placeholder="Choose or type an industry (e.g. Dentists)" minlength="2" maxlength="50" required>
+          <label>Industry / E-commerce Niche
+            <input name="industry" id="industry-input" list="industries" placeholder="e.g. Dentists, Clothing &amp; Fashion, Cosmetics" minlength="2" maxlength="50" required>
             <datalist id="industries"></datalist>
           </label>
-          <label>City<input name="city" placeholder="e.g. Ikeja" minlength="2" maxlength="75" required></label>
+          <label>City / Region<input name="city" placeholder="e.g. Ikeja, New York, London" minlength="2" maxlength="75" required></label>
           <button>Search businesses <span aria-hidden="true">↗</span></button>
+        </form>
+        <form id="inspect-url" class="surface search url-inspector">
+          <label>Direct Shopify Store or Business Website Inspector
+            <input name="website" type="text" placeholder="Paste any Shopify store or business URL (e.g. allbirds.com or mystore.myshopify.com)…" required>
+          </label>
+          <label>City / Market (optional)<input name="city" placeholder="e.g. Lagos / Online"></label>
+          <button class="secondary">Comb URL &amp; Open Dossier ✦</button>
         </form>
         <div class="heading">
           <h2>Search results <small id="results-count" class="small"></small></h2>
@@ -94,6 +101,17 @@
               <option value="Out of office">Out of office</option>
               <option value="Unsubscribed">Unsubscribed</option>
               <option value="Bounced">Bounced</option>
+            </select>
+          </label>
+          <label>Platform
+            <select id="filter-platform">
+              <option value="">All platforms</option>
+              <option value="Shopify">Shopify</option>
+              <option value="WooCommerce">WooCommerce</option>
+              <option value="WordPress">WordPress</option>
+              <option value="Wix">Wix</option>
+              <option value="Squarespace">Squarespace</option>
+              <option value="Webflow">Webflow</option>
             </select>
           </label>
           <label>Sort by
