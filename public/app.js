@@ -1171,18 +1171,58 @@ $('#connect').onclick = async () => {
     }, true));
     return;
   }
+  const expectedUri = account.redirectUri || (location.origin + '/oauth/callback');
+  const uriCode = create('code', expectedUri);
+  uriCode.style.display = 'block';
+  uriCode.style.padding = '10px 12px';
+  uriCode.style.background = '#f5f9f6';
+  uriCode.style.border = '1px solid #cbd8d0';
+  uriCode.style.borderRadius = '8px';
+  uriCode.style.userSelect = 'all';
+
+  const copyBtn = button('Copy Redirect URI', async event => {
+    const btn = event.currentTarget;
+    try {
+      await navigator.clipboard.writeText(expectedUri);
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy Redirect URI'; }, 2000);
+    } catch {
+      btn.textContent = 'Select & copy above';
+    }
+  }, true);
+
   if (!account.configured) {
-    show('Set up Gmail',
-      create('p', account.credentialError || 'Jobhunta needs your Google Cloud OAuth client to connect Gmail.'),
-      create('p', 'Enable Gmail API and create a Web application OAuth client. Add this authorized redirect URI:'),
-      create('code', account.redirectUri || location.origin + '/oauth/callback'),
-      create('p', 'Download the client JSON into the Jobhunta folder as .google-oauth.json, or add the credentials to .env. Restart Jobhunta when you’re done.'),
-      website('https://console.cloud.google.com/auth/clients', 'Open Google Cloud OAuth clients'));
+    show('Set up Gmail on this server',
+      create('p', account.credentialError || 'Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your environment variables (Vercel Settings → Environment Variables or local .env).'),
+      create('p', 'In Google Cloud Console → Credentials, add this exact Authorized Redirect URI to your Web application OAuth client:'),
+      uriCode,
+      create('div', '', 'actions'),
+      copyBtn,
+      website('https://console.cloud.google.com/apis/credentials', 'Open Google Cloud Credentials'));
     return;
   }
-  $('#connect').disabled = true;
-  try { location.assign((await api('/api/connect', {})).url); }
-  catch (error) { report(error.message, true); $('#connect').disabled = false; }
+
+  const proceedBtn = button('Continue to Google Sign-In →', async event => {
+    const btn = event.currentTarget;
+    btn.disabled = true;
+    btn.textContent = 'Redirecting to Google…';
+    try {
+      location.assign((await api('/api/connect', {})).url);
+    } catch (error) {
+      dialog.close();
+      report(error.message, true);
+    }
+  });
+
+  const actionsRow = create('div', '', 'actions');
+  actionsRow.append(proceedBtn, copyBtn, website('https://console.cloud.google.com/apis/credentials', 'Google Cloud Credentials'));
+
+  show('Connect Gmail',
+    create('p', 'Before continuing, make sure this exact Authorized Redirect URI is saved in your Google Cloud OAuth Client:'),
+    uriCode,
+    create('p', 'Also ensure your Gmail address is added under "Test users" in the Google OAuth Consent Screen if your app is in Testing mode.', 'small'),
+    actionsRow
+  );
 };
 
 $('#stop-search').onclick = () => {

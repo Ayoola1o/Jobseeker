@@ -1077,21 +1077,39 @@ export async function handleRequest(req, res) {
 
     if (req.method === 'POST' && path === '/api/connect') {
       if (!gmailConfigured) fail(503, credentialError || 'Add a Google web OAuth client to enable Gmail.');
-      session.oauth = { state: nonce(), verifier: nonce(), expires: Date.now() + 600000 };
+      const verifier = nonce();
+      const stateToken = sealCookie({ v: verifier, r: activeRedirectUri, e: Date.now() + 600000 });
+      session.oauth = { state: stateToken, verifier, expires: Date.now() + 600000 };
       writeAuthCookie({ mailbox: session.mailbox, tokens: session.tokens, oauth: session.oauth });
-      const params = new URLSearchParams({ client_id, redirect_uri: activeRedirectUri, response_type: 'code', scope: gmailScopes.join(' '),
-        access_type: 'offline', prompt: 'consent', state: session.oauth.state,
-        code_challenge: createHash('sha256').update(session.oauth.verifier).digest('base64url'), code_challenge_method: 'S256' });
-      return json({ url: 'https://accounts.google.com/o/oauth2/v2/auth?' + params });
+      const params = new URLSearchParams({
+        client_id,
+        redirect_uri: activeRedirectUri,
+        response_type: 'code',
+        scope: gmailScopes.join(' '),
+        access_type: 'offline',
+        prompt: 'consent',
+        state: stateToken,
+        code_challenge: createHash('sha256').update(verifier).digest('base64url'),
+        code_challenge_method: 'S256'
+      });
+      return json({ url: 'https://accounts.google.com/o/oauth2/v2/auth?' + params, redirectUri: activeRedirectUri });
     }
     if (req.method === 'GET' && path === '/oauth/callback') {
-      const pending = session.oauth;
+      const stateParam = url.searchParams.get('state') || '';
+      const unsealed = unsealCookie(stateParam);
+      const pending = unsealed?.v
+        ? { state: stateParam, verifier: unsealed.v, redirectUri: unsealed.r || activeRedirectUri, expires: unsealed.e }
+        : session.oauth;
       delete session.oauth;
-      if (!pending || pending.expires < Date.now() || url.searchParams.get('state') !== pending.state ||
+      if (!pending || pending.expires < Date.now() || stateParam !== pending.state ||
           !url.searchParams.get('code')) return redirect('/?gmail=failed#inbox');
       try {
-        const tokens = await exchange({ grant_type: 'authorization_code', code: url.searchParams.get('code'),
-          redirect_uri: activeRedirectUri, code_verifier: pending.verifier });
+        const tokens = await exchange({
+          grant_type: 'authorization_code',
+          code: url.searchParams.get('code'),
+          redirect_uri: pending.redirectUri || activeRedirectUri,
+          code_verifier: pending.verifier
+        });
         if (!tokens.refresh_token || !gmailScopes.every(scope => (tokens.scope || '').split(' ').includes(scope))) {
           return redirect('/?gmail=permissions#inbox');
         }
