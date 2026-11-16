@@ -114,6 +114,7 @@ function persist() {
   renderDashboard();
   renderLeads();
   renderInbox();
+  renderSettings();
   if (activeBusinessId && location.hash === '#business') renderBusinessPage();
 }
 
@@ -728,9 +729,6 @@ function renderBusinessPage() {
   }
   const leadIndex = currentIndex !== -1 ? currentIndex : 0;
   activeBusinessId = lead.id;
-  if (location.hash === '#business') {
-    $('#breadcrumb').textContent = 'Saved leads / ' + lead.name;
-  }
 
   const status = leadStatus(lead);
   const topBar = create('div', '', 'heading section-title');
@@ -1212,11 +1210,102 @@ function interpolateTemplate(text = '', lead = {}) {
     .replace(/\{\{\s*your_service\s*\}\}/gi, settings.senderService || '[your service]');
 }
 
-function openTemplatesSettings() {
+function renderSettings() {
+  const container = $('#settings-content');
+  if (!container) return;
+
+  const topHeader = create('div', '', 'heading section-title');
+  const titleWrap = create('div');
+  titleWrap.append(
+    create('h1', 'Workspace Settings'),
+    create('p', 'Manage your Gmail connection, outreach sender profile, email templates, and workspace tools.')
+  );
+  const quickNav = create('div', '', 'actions');
+  quickNav.append(
+    button('Find businesses ↗', () => { location.hash = '#discover'; }),
+    button('Saved leads', () => { location.hash = '#leads'; }, true)
+  );
+  topHeader.append(titleWrap, quickNav);
+
+  const grid = create('div', '', 'dossier-grid');
+
+  // 1. Gmail Connection Card
+  const gmailCard = create('article', '', 'surface dossier-card');
+  const gmailHead = create('div', '', 'heading');
+  gmailHead.style.margin = '0';
+  gmailHead.append(
+    create('h2', 'Gmail Outreach Account'),
+    create('span', account.mailbox ? 'Connected' : 'Not connected', account.mailbox ? 'pill' : 'pill wait')
+  );
+  gmailCard.append(gmailHead);
+
+  const expectedUri = account.redirectUri || (location.origin + '/oauth/callback');
+  if (account.mailbox) {
+    gmailCard.append(
+      kvItem('Connected Mailbox', account.mailbox),
+      button('Disconnect Gmail', async () => {
+        try {
+          await api('/api/disconnect', {});
+          account.mailbox = null;
+          messages.clear();
+          renderAccount();
+          report('Disconnected Gmail mailbox.');
+        } catch (error) { report(error.message, true); }
+      }, 'danger')
+    );
+  } else {
+    const connectBtn = button('Connect Gmail →', async event => {
+      const btn = event.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Redirecting to Google…';
+      try {
+        location.assign((await api('/api/connect', {})).url);
+      } catch (error) {
+        btn.disabled = false;
+        btn.textContent = 'Connect Gmail →';
+        report(error.message, true);
+      }
+    });
+    const copyUriBtn = button('Copy Redirect URI', async event => {
+      const btn = event.currentTarget;
+      try {
+        await navigator.clipboard.writeText(expectedUri);
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy Redirect URI'; }, 2000);
+      } catch {
+        btn.textContent = 'Copy from box above';
+      }
+    }, true);
+    const gmailActions = create('div', '', 'actions');
+    gmailActions.append(connectBtn, copyUriBtn, website('https://console.cloud.google.com/apis/credentials', 'Google Cloud Credentials'));
+    gmailCard.append(
+      kvItem('OAuth Client ID', account.clientId || 'Configure GOOGLE_CLIENT_ID in .env / Vercel'),
+      kvItem('Authorized Redirect URI (add to Google Cloud)', expectedUri),
+      gmailActions
+    );
+  }
+
+  // 2. Quick Workspace & Discovery Shortcuts Card
+  const toolsCard = create('article', '', 'surface dossier-card');
+  toolsCard.append(
+    create('h2', 'Discovery & Data Tools'),
+    create('p', 'Jump to business discovery, import/export your lead database, or batch-scan websites for missing emails.', 'small'),
+    create('div', '', 'actions')
+  );
+  toolsCard.lastChild.append(
+    button('Find businesses ↗', () => { location.hash = '#discover'; }),
+    button('Import CSV', importLeads, true),
+    button('Export CSV', exportLeads, true),
+    button('Find missing emails', () => { location.hash = '#leads'; enrichMissingEmails(); }, true)
+  );
+
+  // 3. Sender Profile & Email Templates Card
+  const formCard = create('article', '', 'surface dossier-card full');
+  formCard.append(create('h2', 'Outreach Profile & Email Pitch Templates'));
   const form = create('form', '', 'stack');
   const profileGrid = create('div', '', 'grid-2');
-  const senderNameInput = field('Your name', 'senderName', settings.senderName, { placeholder: 'e.g. Alex Rivera' });
-  const senderServiceInput = field('Your service / offer', 'senderService', settings.senderService, { placeholder: 'e.g. local SEO & web design' });
+  const senderNameInput = field('Your name', 'senderName', settings.senderName, { placeholder: 'e.g. Ayoola Adebisi' });
+  const senderServiceInput = field('Your service / offer (used by AI Pitch Generator)', 'senderService', settings.senderService, { placeholder: 'e.g. Shopify CRO, local SEO & web design' });
   profileGrid.append(senderNameInput, senderServiceInput);
 
   const followUpInput = field('Auto follow-up reminder (days after sending, 0 to disable)', 'defaultFollowUpDays', String(settings.defaultFollowUpDays ?? 4), { type: 'number' });
@@ -1274,11 +1363,12 @@ function openTemplatesSettings() {
       body: tpl.body.trim()
     }));
     persist();
-    dialog.close();
     report('Saved sender profile and email templates.');
   };
 
-  show('Templates & outreach profile', form);
+  formCard.append(form);
+  grid.append(gmailCard, toolsCard, formCard);
+  container.replaceChildren(topHeader, grid);
 }
 
 function futureDateString(days) {
@@ -1478,77 +1568,18 @@ async function refresh(manual = false) {
 }
 
 function renderAccount() {
-  $('#connect').textContent = account.mailbox ? 'Gmail connected' : account.configured ? 'Connect Gmail' : 'Set up Gmail';
+  const pill = $('#gmail-pill');
+  if (pill) {
+    pill.hidden = !account.mailbox;
+    pill.textContent = account.mailbox ? 'Gmail connected' : '';
+  }
   renderDashboard();
   renderInbox();
+  renderSettings();
 }
 
-$('#connect').onclick = async () => {
-  if (account.mailbox) {
-    show('Gmail account', create('p', account.mailbox), button('Disconnect', async () => {
-      try {
-        await api('/api/disconnect', {});
-        account.mailbox = null;
-        messages.clear();
-        renderAccount();
-        dialog.close();
-      } catch (error) { dialog.close(); report(error.message, true); }
-    }, true));
-    return;
-  }
-  const expectedUri = account.redirectUri || (location.origin + '/oauth/callback');
-  const uriCode = create('code', expectedUri);
-  uriCode.style.display = 'block';
-  uriCode.style.padding = '10px 12px';
-  uriCode.style.background = '#f5f9f6';
-  uriCode.style.border = '1px solid #cbd8d0';
-  uriCode.style.borderRadius = '8px';
-  uriCode.style.userSelect = 'all';
-
-  const copyBtn = button('Copy Redirect URI', async event => {
-    const btn = event.currentTarget;
-    try {
-      await navigator.clipboard.writeText(expectedUri);
-      btn.textContent = 'Copied!';
-      setTimeout(() => { btn.textContent = 'Copy Redirect URI'; }, 2000);
-    } catch {
-      btn.textContent = 'Select & copy above';
-    }
-  }, true);
-
-  if (!account.configured) {
-    show('Set up Gmail on this server',
-      create('p', account.credentialError || 'Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your environment variables (Vercel Settings → Environment Variables or local .env).'),
-      create('p', 'In Google Cloud Console → Credentials, add this exact Authorized Redirect URI to your Web application OAuth client:'),
-      uriCode,
-      copyBtn,
-      website('https://console.cloud.google.com/apis/credentials', 'Open Google Cloud Credentials'));
-    return;
-  }
-
-  const proceedBtn = button('Continue to Google Sign-In →', async event => {
-    const btn = event.currentTarget;
-    btn.disabled = true;
-    btn.textContent = 'Redirecting to Google…';
-    try {
-      location.assign((await api('/api/connect', {})).url);
-    } catch (error) {
-      dialog.close();
-      report(error.message, true);
-    }
-  });
-
-  const actionsRow = create('div', '', 'actions');
-  actionsRow.append(proceedBtn, copyBtn, website('https://console.cloud.google.com/apis/credentials', 'Google Cloud Credentials'));
-
-  show('Connect Gmail',
-    create('p', '1. In Google Cloud Console → Credentials, open OAuth Client ID:'),
-    create('code', account.clientId || 'Not configured'),
-    create('p', '2. Under "Authorized redirect URIs", add this exact URL (no trailing slash) and click Save:'),
-    uriCode,
-    create('p', '3. Ensure ayoolaadebisi5@gmail.com is added under "Test users" in OAuth Consent Screen / Audience.', 'small'),
-    actionsRow
-  );
+$('#settings-btn').onclick = () => {
+  location.hash = '#settings';
 };
 
 $('#stop-search').onclick = () => {
@@ -1729,7 +1760,8 @@ function navigate() {
     discover: 'Find businesses',
     leads: 'Saved leads',
     business: 'Business dossier',
-    inbox: 'Inbox'
+    inbox: 'Inbox',
+    settings: 'Settings'
   };
   const requested = location.hash.slice(1);
   const page = Object.hasOwn(pageTitles, requested) ? requested : 'dashboard';
@@ -1739,10 +1771,10 @@ function navigate() {
     if (link.hash === '#' + activeNav) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
-  $('#breadcrumb').textContent = pageTitles[page];
   if (page === 'dashboard') renderDashboard();
   if (page === 'business') renderBusinessPage();
   if (page === 'inbox') refresh();
+  if (page === 'settings') renderSettings();
 }
 
 $('#menu-toggle').onclick = () => setMobileNav(!document.body.classList.contains('nav-open'));
@@ -1757,7 +1789,6 @@ window.addEventListener('keydown', event => {
   }
 });
 
-$('#templates').onclick = openTemplatesSettings;
 $('#add').onclick = () => editLead();
 $('#import').onclick = importLeads;
 $('#export').onclick = exportLeads;
@@ -1773,6 +1804,7 @@ $('#results').replaceChildren(empty('⌕', 'Start a search', 'Choose or enter an
 renderDashboard();
 renderLeads();
 renderInbox();
+renderSettings();
 navigate();
 
 const oauthResult = new URLSearchParams(location.search).get('gmail');

@@ -23,6 +23,7 @@
       <a href="#discover"><span aria-hidden="true">⌕</span> Find businesses</a>
       <a href="#leads"><span aria-hidden="true">▤</span> Saved leads <small id="nav-leads-count" class="badge" hidden></small></a>
       <a href="#inbox"><span aria-hidden="true">✉</span> Inbox</a>
+      <a href="#settings"><span aria-hidden="true">⚙</span> Settings</a>
     </nav>
     <div class="sidebar-footer"><i></i> Personal workspace</div>
   </aside>
@@ -32,11 +33,11 @@
         <button id="menu-toggle" class="hamburger" type="button" aria-label="Toggle navigation" aria-expanded="false" aria-controls="sidebar">
           <span></span><span></span><span></span>
         </button>
-        <span class="breadcrumb-wrap"><span class="hide-xs">Workspace <b>/</b> </span><strong id="breadcrumb">Dashboard</strong></span>
+        <a href="#dashboard" class="mobile-brand"><img src="/logo.png" alt="Jobhunta logo" width="28" height="28"> Jobhunta</a>
       </div>
       <div class="actions header-actions">
-        <button id="templates" class="secondary" type="button">Templates &amp; profile</button>
-        <button id="connect" class="secondary" type="button">Connect Gmail</button>
+        <span id="gmail-pill" class="pill" hidden></span>
+        <button id="settings-btn" class="secondary" type="button">⚙ Settings</button>
       </div>
     </header>
     <div class="content">
@@ -159,6 +160,9 @@
           <button id="refresh" class="secondary" type="button">Refresh inbox</button>
         </div>
         <div id="conversations"></div>
+      </section>
+      <section id="settings" class="page" hidden>
+        <div id="settings-content"></div>
       </section>
     </div>
   </main>
