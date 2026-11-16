@@ -5,6 +5,10 @@ create table if not exists public.jobhunta_users (
   email text unique not null,
   name text not null default '',
   password_hash text not null,
+  tier text not null default 'basic',
+  searches_today integer not null default 0,
+  emails_today integer not null default 0,
+  usage_date text not null default '',
   created_at timestamptz not null default now()
 );
 

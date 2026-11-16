@@ -12,6 +12,8 @@ import {
   resolveSearchLocations,
   hashPassword,
   verifyPassword,
+  USER_TIERS,
+  getUserQuotaStatus,
   industries
 } from '../server.mjs';
 
@@ -213,4 +215,22 @@ test('hashPassword and verifyPassword securely hash and verify user passwords', 
   assert.ok(hash.includes(':'));
   assert.equal(verifyPassword('MySecretPass123!', hash), true);
   assert.equal(verifyPassword('WrongPassword', hash), false);
+});
+
+test('USER_TIERS and getUserQuotaStatus enforce Basic through Diamond limits', () => {
+  assert.equal(USER_TIERS.basic.dailySearchLimit, 50);
+  assert.equal(USER_TIERS.basic.dailyEmailLimit, 10);
+  assert.equal(USER_TIERS.silver.dailySearchLimit, 120);
+  assert.equal(USER_TIERS.silver.dailyEmailLimit, 30);
+  assert.equal(USER_TIERS.gold.dailySearchLimit, 300);
+  assert.equal(USER_TIERS.gold.dailyEmailLimit, 50);
+  assert.equal(USER_TIERS.premium.dailySearchLimit, 500);
+  assert.equal(USER_TIERS.premium.dailyEmailLimit, 100);
+  assert.equal(USER_TIERS.diamond.dailySearchLimit, null);
+  assert.equal(USER_TIERS.diamond.dailyEmailLimit, null);
+
+  const diamondStatus = getUserQuotaStatus({ tier: 'diamond', searches_today: 999, emails_today: 500 });
+  assert.equal(diamondStatus.tier, 'diamond');
+  assert.equal(diamondStatus.dailySearchLimit, null);
+  assert.equal(diamondStatus.dailyEmailLimit, null);
 });

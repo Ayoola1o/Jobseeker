@@ -249,6 +249,102 @@ function supabaseRowToLead(row, userId = 'default') {
   };
 }
 
+export const USER_TIERS = {
+  basic: { key: 'basic', label: 'Basic', dailySearchLimit: 50, dailyEmailLimit: 10 },
+  silver: { key: 'silver', label: 'Silver', dailySearchLimit: 120, dailyEmailLimit: 30 },
+  gold: { key: 'gold', label: 'Gold', dailySearchLimit: 300, dailyEmailLimit: 50 },
+  premium: { key: 'premium', label: 'Premium', dailySearchLimit: 500, dailyEmailLimit: 100 },
+  diamond: { key: 'diamond', label: 'Diamond', dailySearchLimit: null, dailyEmailLimit: null }
+};
+
+function todayUsageDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function getUserQuotaStatus(userRecord = {}) {
+  const tierKey = String(userRecord?.tier || 'basic').toLowerCase();
+  const tier = USER_TIERS[tierKey] || USER_TIERS.basic;
+  const today = todayUsageDate();
+  const sameDay = userRecord?.usage_date === today;
+  const searchesToday = sameDay ? Math.max(0, Number(userRecord?.searches_today) || 0) : 0;
+  const emailsToday = sameDay ? Math.max(0, Number(userRecord?.emails_today) || 0) : 0;
+  return {
+    tier: tier.key,
+    label: tier.label,
+    dailySearchLimit: tier.dailySearchLimit,
+    dailyEmailLimit: tier.dailyEmailLimit,
+    searchesToday,
+    emailsToday,
+    usageDate: today
+  };
+}
+
+async function findUserById(userId) {
+  if (!userId) return null;
+  if (supabaseConfigured) {
+    try {
+      const res = await fetch(`${supabaseUrl}/rest/v1/jobhunta_users?id=eq.${encodeURIComponent(userId)}&select=*&limit=1`, {
+        headers: supabaseHeaders(),
+        signal: AbortSignal.timeout(6000)
+      });
+      if (res.ok) {
+        const rows = await res.json();
+        if (Array.isArray(rows) && rows[0]) return rows[0];
+      }
+    } catch {
+      // Fallback to local store
+    }
+  }
+  return store.users.find(u => u.id === userId) || null;
+}
+
+async function persistUserUsage(userRecord) {
+  if (!userRecord?.id) return;
+  const localIdx = store.users.findIndex(u => u.id === userRecord.id);
+  if (localIdx !== -1) store.users[localIdx] = userRecord;
+  if (supabaseConfigured) {
+    try {
+      await fetch(`${supabaseUrl}/rest/v1/jobhunta_users?id=eq.${encodeURIComponent(userRecord.id)}`, {
+        method: 'PATCH',
+        headers: supabaseHeaders({ Prefer: 'return=minimal' }),
+        body: JSON.stringify({
+          searches_today: userRecord.searches_today,
+          emails_today: userRecord.emails_today,
+          usage_date: userRecord.usage_date
+        }),
+        signal: AbortSignal.timeout(6000)
+      });
+    } catch {
+      // Ignore network hiccup
+    }
+  }
+  saveStore(userRecord.id);
+}
+
+async function consumeQuota(userId, kind) {
+  if (!userId) return null;
+  const record = await findUserById(userId);
+  if (!record) return null;
+  const quota = getUserQuotaStatus(record);
+  if (kind === 'search') {
+    if (quota.dailySearchLimit !== null && quota.searchesToday >= quota.dailySearchLimit) {
+      fail(429, `Daily search limit reached (${quota.dailySearchLimit}/day on ${quota.label} tier). Upgrade your tier to continue searching.`);
+    }
+    record.usage_date = quota.usageDate;
+    record.searches_today = quota.searchesToday + 1;
+    record.emails_today = quota.emailsToday;
+  } else if (kind === 'email') {
+    if (quota.dailyEmailLimit !== null && quota.emailsToday >= quota.dailyEmailLimit) {
+      fail(429, `Daily email limit reached (${quota.dailyEmailLimit}/day on ${quota.label} tier). Upgrade your tier to send more emails today.`);
+    }
+    record.usage_date = quota.usageDate;
+    record.searches_today = quota.searchesToday;
+    record.emails_today = quota.emailsToday + 1;
+  }
+  await persistUserUsage(record);
+  return getUserQuotaStatus(record);
+}
+
 async function findUserByEmail(email) {
   const normalized = String(email || '').trim().toLowerCase();
   if (!normalized) return null;
@@ -269,14 +365,19 @@ async function findUserByEmail(email) {
   return store.users.find(u => u.email.toLowerCase() === normalized) || null;
 }
 
-async function createUserAccount({ name, email, password, senderService = '' }) {
+async function createUserAccount({ name, email, password, senderService = '', tier = 'basic' }) {
   const normalizedEmail = String(email || '').trim().toLowerCase();
   const cleanName = String(name || '').trim();
+  const tierKey = Object.hasOwn(USER_TIERS, String(tier).toLowerCase()) ? String(tier).toLowerCase() : 'basic';
   const userRecord = {
     id: randomUUID(),
     email: normalizedEmail,
     name: cleanName,
     password_hash: hashPassword(password),
+    tier: tierKey,
+    searches_today: 0,
+    emails_today: 0,
+    usage_date: todayUsageDate(),
     created_at: new Date().toISOString()
   };
   if (supabaseConfigured) {
@@ -297,7 +398,13 @@ async function createUserAccount({ name, email, password, senderService = '' }) 
   store.users.push(userRecord);
   store.workspaces[userRecord.id] = createEmptyWorkspace(cleanName, String(senderService || '').trim());
   await saveStore(userRecord.id);
-  return { id: userRecord.id, email: userRecord.email, name: userRecord.name };
+  return {
+    id: userRecord.id,
+    email: userRecord.email,
+    name: userRecord.name,
+    tier: userRecord.tier,
+    usage: getUserQuotaStatus(userRecord)
+  };
 }
 
 async function loadFromSupabase(userId = 'default') {
@@ -1695,7 +1802,8 @@ export async function handleRequest(req, res) {
       if (!record || !verifyPassword(password, record.password_hash)) {
         fail(401, 'Invalid email or password.');
       }
-      const user = { id: record.id, email: record.email, name: record.name || '' };
+      const usage = getUserQuotaStatus(record);
+      const user = { id: record.id, email: record.email, name: record.name || '', tier: usage.tier, usage };
       session.user = user;
       session.userId = user.id;
       await loadFromSupabase(user.id);
@@ -1782,13 +1890,23 @@ export async function handleRequest(req, res) {
       } catch { return redirect('/?gmail=failed#inbox'); }
     }
     if (req.method === 'GET' && path === '/api/status') {
-      if (session.userId && supabaseConfigured) {
-        await loadFromSupabase(session.userId);
-        hydrateSession(session, rawAuthCookie, rawUserCookie);
+      let activeUser = session.user ?? null;
+      if (session.userId) {
+        if (supabaseConfigured) {
+          await loadFromSupabase(session.userId);
+          hydrateSession(session, rawAuthCookie, rawUserCookie);
+        }
+        const record = await findUserById(session.userId);
+        if (record) {
+          const usage = getUserQuotaStatus(record);
+          activeUser = { id: record.id, email: record.email, name: record.name || '', tier: usage.tier, usage };
+          session.user = activeUser;
+        }
       }
       const ws = session.userId ? getWorkspace(session.userId) : createEmptyWorkspace();
       return json({
-        user: session.user ?? null,
+        user: activeUser,
+        tiers: Object.values(USER_TIERS),
         industries: Object.keys(industries),
         configured: gmailConfigured,
         clientId: client_id || null,
@@ -1847,6 +1965,7 @@ export async function handleRequest(req, res) {
       return json({ ok: true });
     }
     if (req.method === 'GET' && path === '/api/search') {
+      if (session.userId) await consumeQuota(session.userId, 'search');
       const rankMode = url.searchParams.get('rankMode') || 'all';
       if (url.searchParams.get('stream') === '1') {
         return await streamSearch(req, res, url.searchParams.get('industry'), (url.searchParams.get('city') || '').trim(), rankMode);
@@ -1864,7 +1983,10 @@ export async function handleRequest(req, res) {
       const ws = getWorkspace(session.userId || 'default');
       return json(await analyzeLeadWithAi(lead, ws.settings));
     }
-    if (req.method === 'POST' && path === '/api/send') return json(await send(session, await readJson(req)));
+    if (req.method === 'POST' && path === '/api/send') {
+      if (session.userId) await consumeQuota(session.userId, 'email');
+      return json(await send(session, await readJson(req)));
+    }
     if (req.method === 'POST' && path === '/api/thread') {
       const { id, mailbox } = await readJson(req);
       if (!session.mailbox) fail(401, 'Connect your Gmail account first.');

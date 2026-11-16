@@ -127,6 +127,7 @@ function persist() {
   renderDashboard();
   renderLeads();
   renderInbox();
+  renderProfile();
   renderSettings();
   if (activeBusinessId && location.hash === '#business') renderBusinessPage();
 }
@@ -1224,6 +1225,108 @@ function interpolateTemplate(text = '', lead = {}) {
     .replace(/\{\{\s*your_service\s*\}\}/gi, settings.senderService || '[your service]');
 }
 
+function renderProfile() {
+  const container = $('#profile-content');
+  if (!container) return;
+
+  const tierList = [
+    { key: 'basic', label: 'Basic', dailySearchLimit: 50, dailyEmailLimit: 10 },
+    { key: 'silver', label: 'Silver', dailySearchLimit: 120, dailyEmailLimit: 30 },
+    { key: 'gold', label: 'Gold', dailySearchLimit: 300, dailyEmailLimit: 50 },
+    { key: 'premium', label: 'Premium', dailySearchLimit: 500, dailyEmailLimit: 100 },
+    { key: 'diamond', label: 'Diamond', dailySearchLimit: null, dailyEmailLimit: null }
+  ];
+
+  const usage = currentUser?.usage || {
+    tier: currentUser?.tier || 'basic',
+    label: 'Basic',
+    dailySearchLimit: 50,
+    dailyEmailLimit: 10,
+    searchesToday: 0,
+    emailsToday: 0,
+    usageDate: new Date().toISOString().slice(0, 10)
+  };
+  const activeTier = tierList.find(t => t.key === usage.tier) || tierList[0];
+
+  const topHeader = create('div', '', 'heading section-title');
+  const titleWrap = create('div');
+  titleWrap.append(
+    create('h1', 'User Profile & Usage'),
+    create('p', 'Track your daily search and email outreach limits across membership tiers.')
+  );
+  const tierBadge = create('span', activeTier.label + ' Tier', 'pill');
+  topHeader.append(titleWrap, tierBadge);
+
+  const grid = create('div', '', 'dossier-grid');
+
+  // 1. User Account Card
+  const userCard = create('article', '', 'surface dossier-card');
+  userCard.append(create('h2', 'Account Identity'));
+  const kv = create('div', '', 'kv-grid');
+  kv.append(
+    kvItem('Full Name', currentUser?.name || settings.senderName || 'Not set'),
+    kvItem('Account Email', currentUser?.email || 'Not signed in'),
+    kvItem('Unique User ID', currentUser?.id || '—'),
+    kvItem('Membership Tier', activeTier.label),
+    kvItem('Saved Leads in Workspace', String(leads.length)),
+    kvItem('Connected Gmail', account.mailbox || 'Not connected')
+  );
+  userCard.append(kv);
+
+  // 2. Daily Usage Card
+  const usageCard = create('article', '', 'surface dossier-card');
+  usageCard.append(create('h2', `Daily Usage (${usage.usageDate || 'Today'})`));
+
+  const addMeter = (title, used, limit) => {
+    const wrap = create('div', '', 'stack');
+    wrap.style.gap = '4px';
+    const isUnlimited = limit === null || limit === undefined;
+    const labelText = isUnlimited ? `${used} used · Unlimited` : `${used} / ${limit} used today`;
+    const rowTop = create('div', '', 'stat-row');
+    rowTop.style.border = '0';
+    rowTop.style.padding = '0';
+    rowTop.append(create('span', title), create('strong', labelText));
+
+    const meter = create('div', '', 'meter');
+    const fill = create('div', '', 'meter-fill');
+    const pct = isUnlimited ? 100 : Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
+    fill.style.width = pct + '%';
+    if (!isUnlimited && used >= limit) fill.style.background = '#9e2a2b';
+    meter.append(fill);
+    wrap.append(rowTop, meter);
+    return wrap;
+  };
+
+  usageCard.append(
+    addMeter('Business Searches Today', usage.searchesToday || 0, activeTier.dailySearchLimit),
+    addMeter('Outreach Emails Sent Today', usage.emailsToday || 0, activeTier.dailyEmailLimit),
+    create('p', 'Daily counters reset automatically every UTC day at 00:00.', 'small')
+  );
+
+  // 3. Membership Tiers Card
+  const tiersCard = create('article', '', 'surface dossier-card full');
+  tiersCard.append(create('h2', 'Membership Tiers & Daily Quotas'));
+  const tierGrid = create('div', '', 'tier-grid');
+  for (const tier of tierList) {
+    const isCurrent = tier.key === activeTier.key;
+    const card = create('div', '', 'tier-card' + (isCurrent ? ' active' : ''));
+    const head = create('h3', tier.label);
+    if (isCurrent) head.append(create('span', 'Active', 'pill'));
+    const list = create('ul');
+    list.append(
+      create('li', tier.dailySearchLimit === null ? 'Unlimited searches / day' : `${tier.dailySearchLimit} searches / day`),
+      create('li', tier.dailyEmailLimit === null ? 'Unlimited emails / day' : `${tier.dailyEmailLimit} emails / day`),
+      create('li', 'Isolated Supabase workspace & AI pitches')
+    );
+    card.append(head, list);
+    tierGrid.append(card);
+  }
+  tiersCard.append(tierGrid);
+
+  grid.append(userCard, usageCard, tiersCard);
+  container.replaceChildren(topHeader, grid);
+}
+
 function renderSettings() {
   const container = $('#settings-content');
   if (!container) return;
@@ -1366,9 +1469,16 @@ create table if not exists public.jobhunta_leads (
   );
   toolsCard.append(toolsActions);
 
-  // 3. Sender Profile & Email Templates Card
+  // 3. Sender Profile & Email Templates Card (auto-saves on edit, no Save button)
   const formCard = create('article', '', 'surface dossier-card full');
-  formCard.append(create('h2', 'Outreach Profile & Email Pitch Templates'));
+  const formHeader = create('div', '', 'heading');
+  formHeader.style.margin = '0';
+  formHeader.append(
+    create('h2', 'Outreach Profile & Email Pitch Templates'),
+    create('span', 'Changes save automatically', 'small')
+  );
+  formCard.append(formHeader);
+
   const form = create('form', '', 'stack');
   const profileGrid = create('div', '', 'grid-2');
   const senderNameInput = field('Your name', 'senderName', settings.senderName, { placeholder: 'e.g. Ayoola Adebisi' });
@@ -1379,23 +1489,47 @@ create table if not exists public.jobhunta_leads (
   followUpInput.lastChild.min = '0';
   followUpInput.lastChild.max = '90';
 
+  const autoSaveSettings = () => {
+    settings.senderName = senderNameInput.lastChild.value.trim();
+    settings.senderService = senderServiceInput.lastChild.value.trim();
+    settings.defaultFollowUpDays = Math.max(0, Math.min(90, Number(followUpInput.lastChild.value) || 0));
+    if (currentUser?.id) {
+      localStorage.setItem(userSettingsKey(currentUser.id), JSON.stringify(settings));
+      syncWorkspaceToServer();
+    }
+    renderDashboard();
+  };
+
+  senderNameInput.lastChild.onchange = autoSaveSettings;
+  senderServiceInput.lastChild.onchange = autoSaveSettings;
+  followUpInput.lastChild.onchange = autoSaveSettings;
+
   const templatesContainer = create('div', '', 'stack');
-  const workingTemplates = settings.templates.map(tpl => ({ ...tpl }));
 
   function renderTemplateCards() {
     templatesContainer.replaceChildren();
-    workingTemplates.forEach((tpl, index) => {
+    settings.templates.forEach((tpl, index) => {
       const card = create('div', '', 'template-card');
       const nameField = field('Template name', `tpl_name_${index}`, tpl.name, { required: true, maxLength: 80 });
-      nameField.lastChild.oninput = e => { tpl.name = e.target.value; };
+      nameField.lastChild.onchange = e => {
+        tpl.name = e.target.value.trim() || 'Untitled template';
+        autoSaveSettings();
+      };
       const subjField = field('Default subject', `tpl_subj_${index}`, tpl.subject, { required: true, maxLength: 160 });
-      subjField.lastChild.oninput = e => { tpl.subject = e.target.value; };
+      subjField.lastChild.onchange = e => {
+        tpl.subject = e.target.value.trim();
+        autoSaveSettings();
+      };
       const bodyField = field('Message body (supports {{business_name}}, {{city}}, {{industry}}, {{your_name}}, {{your_service}}, {{specific_opportunity}})', `tpl_body_${index}`, tpl.body, { type: 'textarea', required: true, maxLength: 16000 });
-      bodyField.lastChild.oninput = e => { tpl.body = e.target.value; };
+      bodyField.lastChild.onchange = e => {
+        tpl.body = e.target.value.trim();
+        autoSaveSettings();
+      };
       const cardActions = create('div', '', 'actions');
-      if (workingTemplates.length > 1) {
+      if (settings.templates.length > 1) {
         cardActions.append(button('Remove template', () => {
-          workingTemplates.splice(index, 1);
+          settings.templates.splice(index, 1);
+          autoSaveSettings();
           renderTemplateCards();
         }, 'danger'));
       }
@@ -1406,32 +1540,17 @@ create table if not exists public.jobhunta_leads (
   renderTemplateCards();
 
   const addTemplateBtn = button('+ Add template', () => {
-    workingTemplates.push({
+    settings.templates.push({
       id: crypto.randomUUID(),
       name: 'New outreach template',
       subject: 'Quick question for {{business_name}}',
       body: 'Hi {{business_name}} team,\n\nI’m {{your_name}} and I help {{industry}} businesses in {{city}} with {{your_service}}.\n\nThanks,\n{{your_name}}'
     });
+    autoSaveSettings();
     renderTemplateCards();
   }, true);
 
-  const submit = create('button', 'Save profile & templates');
-  form.append(profileGrid, followUpInput, create('h3', 'Email templates'), templatesContainer, addTemplateBtn, submit);
-
-  form.onsubmit = event => {
-    event.preventDefault();
-    settings.senderName = senderNameInput.lastChild.value.trim();
-    settings.senderService = senderServiceInput.lastChild.value.trim();
-    settings.defaultFollowUpDays = Math.max(0, Math.min(90, Number(followUpInput.lastChild.value) || 0));
-    settings.templates = workingTemplates.map(tpl => ({
-      id: tpl.id || crypto.randomUUID(),
-      name: tpl.name.trim() || 'Untitled template',
-      subject: tpl.subject.trim(),
-      body: tpl.body.trim()
-    }));
-    persist();
-    report('Saved sender profile and email templates.');
-  };
+  form.append(profileGrid, followUpInput, create('h3', 'Email templates'), templatesContainer, addTemplateBtn);
 
   formCard.append(form);
   grid.append(gmailCard, toolsCard, formCard);
@@ -1521,6 +1640,9 @@ function compose(lead, conversation, parent, customPitch = null) {
       if (!lead.email) lead.email = values.to;
       if (!lead.due && settings.defaultFollowUpDays > 0) {
         lead.due = futureDateString(settings.defaultFollowUpDays);
+      }
+      if (currentUser?.usage) {
+        currentUser.usage.emailsToday = (currentUser.usage.emailsToday || 0) + 1;
       }
       persist();
       dialog.close();
@@ -1696,6 +1818,10 @@ $('#search').onsubmit = async event => {
       const errData = await response.json().catch(() => ({}));
       throw new Error(errData.error || 'Search failed.');
     }
+    if (currentUser?.usage) {
+      currentUser.usage.searchesToday = (currentUser.usage.searchesToday || 0) + 1;
+      renderProfile();
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -1828,6 +1954,7 @@ function navigate() {
     leads: 'Saved leads',
     business: 'Business dossier',
     inbox: 'Inbox',
+    profile: 'Profile & Usage',
     settings: 'Settings'
   };
   const requested = location.hash.slice(1);
@@ -1841,6 +1968,7 @@ function navigate() {
   if (page === 'dashboard') renderDashboard();
   if (page === 'business') renderBusinessPage();
   if (page === 'inbox') refresh();
+  if (page === 'profile') renderProfile();
   if (page === 'settings') renderSettings();
 }
 
