@@ -41,6 +41,9 @@ if (!Array.isArray(settings.templates) || !settings.templates.length) {
 let account = {};
 let results = [];
 let searchGeneration = 0;
+let searchController = null;
+let streamActive = false;
+let currentScrapeStep = '';
 let refreshing = false;
 let enrichingAll = false;
 const messages = new Map();
@@ -164,6 +167,40 @@ function applyEnrichmentToItem(item, found) {
   }
 }
 
+function updateScrapeBanner() {
+  const banner = $('#scrape-banner');
+  const statusEl = $('#scrape-status');
+  const metricsEl = $('#scrape-metrics');
+  const stopBtn = $('#stop-search');
+  if (!banner || !statusEl || !metricsEl) return;
+
+  const scanningWebsites = results.filter(item => item.scanning).length;
+  const pendingWebsites = results.filter(item => item.website && !item.email && !item.scanned && !item.scanning).length;
+  const activeEnrichment = scanningWebsites > 0 || pendingWebsites > 0;
+  const isWorking = streamActive || activeEnrichment;
+
+  if (stopBtn) stopBtn.hidden = !isWorking;
+  if (!results.length && !streamActive) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  banner.classList.toggle('done', !isWorking);
+
+  const emailsFound = results.filter(item => item.email).length;
+  const socialsFound = results.filter(item => item.facebook || item.instagram || item.twitter).length;
+
+  if (streamActive) {
+    statusEl.textContent = currentScrapeStep || 'Scraping businesses in real time…';
+  } else if (activeEnrichment) {
+    statusEl.textContent = `Scanning business websites for emails & socials (${scanningWebsites + pendingWebsites} remaining)…`;
+  } else {
+    statusEl.textContent = `Scrape complete — ${results.length} businesses discovered.`;
+  }
+
+  metricsEl.textContent = `${results.length} scraped · ${emailsFound} email${emailsFound === 1 ? '' : 's'} · ${socialsFound} social profile${socialsFound === 1 ? '' : 's'}`;
+}
+
 async function enrichItemEmail(item, triggerButton) {
   if (!item.website) return;
   if (triggerButton) {
@@ -192,29 +229,36 @@ async function enrichItemEmail(item, triggerButton) {
   }
 }
 
-async function autoEnrichSearchResults(generation) {
-  let cursor = 0;
-  const worker = async () => {
-    while (generation === searchGeneration && cursor < results.length) {
-      const item = results[cursor++];
-      if (!item || !item.website || item.email || item.scanned) continue;
-      item.scanning = true;
-      renderResults();
+let activeWorkers = 0;
+function triggerEnrichmentWorkers(generation) {
+  const maxWorkers = 3;
+  while (activeWorkers < maxWorkers && generation === searchGeneration) {
+    const nextItem = results.find(item => item.website && !item.email && !item.scanned && !item.scanning);
+    if (!nextItem) break;
+    activeWorkers++;
+    nextItem.scanning = true;
+    renderResults();
+    updateScrapeBanner();
+    (async () => {
       try {
-        const found = await api('/api/enrich', { website: item.website });
+        const found = await api('/api/enrich', { website: nextItem.website });
         if (generation !== searchGeneration) return;
-        applyEnrichmentToItem(item, found);
-        if (duplicate(item)) persist();
+        applyEnrichmentToItem(nextItem, found);
+        if (duplicate(nextItem)) persist();
       } catch {
         // Ignore individual site timeouts during background crawl
       } finally {
-        item.scanning = false;
-        item.scanned = true;
-        if (generation === searchGeneration) renderResults();
+        nextItem.scanning = false;
+        nextItem.scanned = true;
+        activeWorkers--;
+        if (generation === searchGeneration) {
+          renderResults();
+          updateScrapeBanner();
+          triggerEnrichmentWorkers(generation);
+        }
       }
-    }
-  };
-  await Promise.all([worker(), worker(), worker()]);
+    })();
+  }
 }
 
 function renderResults() {
@@ -232,6 +276,8 @@ function renderResults() {
       ? `(${results.length} found · ${withEmailCount} with email)`
       : '';
   }
+
+  if (!results.length) return;
 
   $('#results').replaceChildren(...results.map(item => {
     const saved = duplicate(item);
@@ -833,28 +879,102 @@ $('#connect').onclick = async () => {
   catch (error) { report(error.message, true); $('#connect').disabled = false; }
 };
 
+$('#stop-search').onclick = () => {
+  searchGeneration++;
+  if (searchController) {
+    searchController.abort();
+    searchController = null;
+  }
+  streamActive = false;
+  for (const item of results) {
+    if (item.scanning) {
+      item.scanning = false;
+      item.scanned = true;
+    } else if (!item.scanned) {
+      item.scanned = true;
+    }
+  }
+  renderResults();
+  updateScrapeBanner();
+};
+
 $('#search').onsubmit = async event => {
   event.preventDefault();
   const form = event.currentTarget;
   const submit = form.querySelector('button');
-  submit.disabled = true;
+  if (searchController) searchController.abort();
+  searchController = new AbortController();
   const generation = ++searchGeneration;
+  activeWorkers = 0;
+  results = [];
+  streamActive = true;
+  currentScrapeStep = 'Connecting to Bing Maps…';
+  submit.disabled = true;
   report();
-  $('#results').replaceChildren(empty('⌕', 'Searching Bing Maps…', 'Scraping local business listings and contact details.'));
+  updateScrapeBanner();
+  $('#save-all').hidden = true;
+  $('#results-count').textContent = '';
+  $('#results').replaceChildren(empty('⌕', 'Scraping live from Bing Maps…', 'Businesses will appear here in real time as each page is scraped.'));
+
   try {
-    results = await api('/api/search?' + new URLSearchParams(new FormData(form)));
-    if (results.length) {
-      renderResults();
-      autoEnrichSearchResults(generation);
-    } else {
-      renderResults();
+    const params = new URLSearchParams(new FormData(form));
+    params.set('stream', '1');
+    const response = await fetch('/api/search?' + params, { signal: searchController.signal });
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || 'Search failed.');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (generation === searchGeneration) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.type === 'status') {
+          currentScrapeStep = msg.message;
+          updateScrapeBanner();
+        } else if (msg.type === 'business' && msg.item) {
+          if (!results.some(existing => existing.id === msg.item.id)) {
+            results.push(msg.item);
+            renderResults();
+            updateScrapeBanner();
+            triggerEnrichmentWorkers(generation);
+          }
+        } else if (msg.type === 'error') {
+          throw new Error(msg.error);
+        }
+      }
+    }
+
+    if (generation === searchGeneration && !results.length) {
       $('#results').replaceChildren(empty('⌕', 'No matching businesses', 'Try a nearby city or another industry.'));
     }
   } catch (error) {
-    results = [];
-    renderResults();
-    $('#results').replaceChildren(empty('⌕', 'Search unavailable', error.message));
-  } finally { submit.disabled = false; }
+    if (error.name !== 'AbortError') {
+      if (!results.length) {
+        $('#results').replaceChildren(empty('⌕', 'Search unavailable', error.message));
+      } else {
+        report(error.message, true);
+      }
+    }
+  } finally {
+    if (generation === searchGeneration) {
+      streamActive = false;
+      searchController = null;
+      updateScrapeBanner();
+    }
+    submit.disabled = false;
+  }
 };
 
 $('#save-all').onclick = () => {

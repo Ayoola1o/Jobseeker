@@ -49,9 +49,14 @@
         <div class="heading">
           <h2>Search results <small id="results-count" class="small"></small></h2>
           <div class="actions">
+            <button id="stop-search" class="danger" type="button" hidden>Stop scraping</button>
             <button id="save-all" class="secondary" type="button" hidden>Save all results</button>
             <a href="https://www.bing.com/maps" target="_blank" rel="noreferrer">Bing Maps &amp; OpenStreetMap</a>
           </div>
+        </div>
+        <div id="scrape-banner" class="surface scrape-banner" role="status" aria-live="polite" hidden>
+          <span><i class="pulse" aria-hidden="true"></i> <strong id="scrape-status">Scraping businesses…</strong></span>
+          <span id="scrape-metrics" class="small"></span>
         </div>
         <div id="results" aria-live="polite"></div>
       </section>

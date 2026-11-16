@@ -511,6 +511,98 @@ async function searchOverpassFallback(cleanIndustry, city) {
   }));
 }
 
+async function streamSearch(req, res, industry, city) {
+  const cleanIndustry = (industry || '').trim();
+  if (!/^[\p{L}\p{M}\p{N} .,'’&/()-]{2,50}$/u.test(cleanIndustry) ||
+      !/^[\p{L}\p{M}\p{N} .,'’()-]{2,75}$/u.test(city)) {
+    fail(400, 'Choose or enter an industry and enter a city.');
+  }
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-store, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+
+  let closed = false;
+  req.on('close', () => { closed = true; });
+  const sendEvent = payload => {
+    if (!closed && !res.writableEnded) {
+      res.write(JSON.stringify(payload) + '\n');
+    }
+  };
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  const query = `${cleanIndustry} in ${city}`;
+  const seen = new Set();
+  const offsets = [1, 11, 21, 31, 41, 51, 61, 71];
+  let emptyStreak = 0;
+
+  for (let pageIndex = 0; pageIndex < offsets.length; pageIndex++) {
+    if (closed) break;
+    const first = offsets[pageIndex];
+    sendEvent({
+      type: 'status',
+      page: pageIndex + 1,
+      totalPages: offsets.length,
+      totalFound: seen.size,
+      message: `Scraping Bing Maps page ${pageIndex + 1} of ${offsets.length}…`
+    });
+    try {
+      const url = `https://www.bing.com/maps/overlaybfpr?q=${encodeURIComponent(query)}&count=20&first=${first}`;
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9'
+        },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!response.ok) break;
+      const html = await response.text();
+      const items = parseBingMapsHtml(html, cleanIndustry, city);
+      let addedOnPage = 0;
+      for (const item of items) {
+        if (closed) break;
+        if (!seen.has(item.id)) {
+          seen.add(item.id);
+          addedOnPage++;
+          sendEvent({ type: 'business', item, totalFound: seen.size });
+          await pause(75);
+        }
+      }
+      if (addedOnPage === 0) {
+        emptyStreak++;
+        if (emptyStreak >= 2) break;
+      } else {
+        emptyStreak = 0;
+      }
+    } catch {
+      break;
+    }
+  }
+
+  if (seen.size === 0 && !closed) {
+    sendEvent({ type: 'status', message: 'Checking OpenStreetMap fallback…', totalFound: 0 });
+    try {
+      const fallbackItems = await searchOverpassFallback(cleanIndustry, city);
+      for (const item of fallbackItems) {
+        if (closed) break;
+        if (!seen.has(item.id)) {
+          seen.add(item.id);
+          sendEvent({ type: 'business', item, totalFound: seen.size });
+          await pause(40);
+        }
+      }
+    } catch (error) {
+      sendEvent({ type: 'error', error: error.message || 'Search unavailable.' });
+    }
+  }
+
+  sendEvent({ type: 'done', totalFound: seen.size });
+  if (!res.writableEnded) res.end();
+}
+
 async function search(industry, city) {
   const cleanIndustry = (industry || '').trim();
   if (!/^[\p{L}\p{M}\p{N} .,'’&/()-]{2,50}$/u.test(cleanIndustry) ||
@@ -828,6 +920,9 @@ export async function handleRequest(req, res) {
       return json({ ok: true });
     }
     if (req.method === 'GET' && path === '/api/search') {
+      if (url.searchParams.get('stream') === '1') {
+        return await streamSearch(req, res, url.searchParams.get('industry'), (url.searchParams.get('city') || '').trim());
+      }
       return json(await search(url.searchParams.get('industry'), (url.searchParams.get('city') || '').trim()));
     }
     if (req.method === 'POST' && path === '/api/enrich') {
