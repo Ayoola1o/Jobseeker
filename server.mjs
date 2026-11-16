@@ -110,9 +110,14 @@ function saveStore() {
 const sessions = new Map();
 const searches = new Map();
 const files = {
-  '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'],
-  '/style.css': ['style.css', 'text/css'], '/csv.mjs': ['csv.mjs', 'text/javascript'],
-  '/business-import.csv': ['business-import.csv', 'text/csv']
+  '/': ['index.html', 'text/html; charset=utf-8'],
+  '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+  '/style.css': ['style.css', 'text/css; charset=utf-8'],
+  '/csv.mjs': ['csv.mjs', 'text/javascript; charset=utf-8'],
+  '/business-import.csv': ['business-import.csv', 'text/csv; charset=utf-8'],
+  '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
+  '/favicon.ico': ['logo.png', 'image/png'],
+  '/logo.png': ['logo.png', 'image/png']
 };
 const nonce = () => randomBytes(32).toString('base64url');
 const emailPattern = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
@@ -656,7 +661,7 @@ export const server = createServer(async (req, res) => {
     if (req.method === 'GET' && Object.hasOwn(files, path)) {
       const [file, contentType] = files[path];
       const content = await readFile(new URL('./public/' + file, import.meta.url));
-      res.writeHead(200, { 'Content-Type': contentType + '; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': contentType });
       return res.end(content);
     }
     if (req.method === 'POST' && req.headers.origin !== origin) fail(403, 'Open Jobhunta directly to submit this request.');
