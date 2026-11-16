@@ -226,7 +226,8 @@ async function loadFromSupabase() {
     const leadRows = await leadsRes.json();
     if (Array.isArray(wsRows) && wsRows[0]) {
       const ws = wsRows[0];
-      if (ws.auth?.mailbox && ws.auth?.tokens) store.auth = ws.auth;
+      const rawAuth = typeof ws.auth?.sealed === 'string' ? unsealCookie(ws.auth.sealed) : ws.auth;
+      if (rawAuth?.mailbox && rawAuth?.tokens) store.auth = rawAuth;
       if (ws.settings && typeof ws.settings === 'object' && Object.keys(ws.settings).length) {
         store.settings = {
           senderName: String(ws.settings.senderName || ''),
@@ -256,7 +257,7 @@ async function syncToSupabase(removedIds = []) {
     const wsPayload = {
       id: 'default',
       settings: store.settings,
-      auth: store.auth,
+      auth: store.auth ? { sealed: sealCookie(store.auth) } : null,
       thread_owners: store.threadOwners,
       updated_at: new Date().toISOString()
     };
