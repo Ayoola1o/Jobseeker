@@ -80,15 +80,15 @@
         <div class="hero">
           <div class="radar" aria-hidden="true"><i></i><i></i><i></i><i></i><b>⌖</b></div>
           <p class="eyebrow">BUSINESS DISCOVERY</p>
-          <h1>Find local businesses</h1>
-          <p>Search by industry and city to build your outreach list.</p>
+          <h1>Find businesses</h1>
+          <p>Find local businesses, online stores, and publications.</p>
         </div>
         <form id="search" class="surface search search-4">
           <label>Industry / E-commerce Niche
             <input name="industry" id="industry-input" list="industries" placeholder="e.g. Clothing &amp; Fashion, Cosmetics, Dentists" minlength="2" maxlength="50" required>
             <datalist id="industries"></datalist>
           </label>
-          <label>City or State (scrapes states bit-by-bit)<input name="city" placeholder="e.g. Ikeja, Lagos State, Texas, California" minlength="2" maxlength="75" required></label>
+          <label>Primary city or state<input name="city" placeholder="e.g. Ikeja, Lagos State, Texas, California" minlength="2" maxlength="75"></label>
           <label>Ranking &amp; Store Target
             <select name="rankMode" id="rank-mode">
               <option value="all">All Ranks (Pages 1–8)</option>
@@ -96,7 +96,22 @@
               <option value="shopify">Low-Ranked Shopify &amp; Retail Stores</option>
             </select>
           </label>
-          <button>Search businesses <span aria-hidden="true">↗</span></button>
+          <label>Mode<select name="mode"><option value="local">Local businesses</option><option value="online">Online websites</option></select></label>
+          <label>Related terms<input name="terms" maxlength="350" placeholder="e.g. orthodontist, cosmetic dentistry"></label>
+          <label>More locations<input name="locations" maxlength="500" placeholder="e.g. Yaba, Lekki, Ajah"></label>
+          <label>Platform<select name="platform" id="discovery-platform"><option value="">Any platform</option></select></label>
+          <label>Sources<select name="sources"><option value="combined">Combined sources</option><option value="maps">Bing Maps and OpenStreetMap</option><option value="google">Google web</option><option value="places">Google Places references</option></select></label>
+          <details class="discovery-options">
+            <summary>Google queries and website imports</summary>
+            <div class="stack">
+              <label>Google queries (one per line)<textarea name="queries" maxlength="3000"></textarea></label>
+              <div class="actions"><button id="preview-discovery" class="secondary" type="button">Generate queries</button>
+                <a href="#leads">Import directory CSV from Saved leads</a></div>
+              <div id="google-query-links" class="actions"></div>
+              <label>Website URLs (one per line)<textarea name="urls" maxlength="3000" placeholder="https://example.com"></textarea></label>
+            </div>
+          </details>
+          <button type="submit">Search businesses <span aria-hidden="true">↗</span></button>
         </form>
         <div class="actions saved-searches">
           <select id="saved-search" aria-label="Saved searches"><option value="">Saved searches</option></select>
@@ -122,6 +137,7 @@
               <option value="no-website">No website listed</option>
               <option value="has-email">Public email found</option>
               <option value="qualified">Confirmed opportunity</option>
+              <option value="target-platform">Matches selected platform</option>
             </select>
             <button id="stop-search" class="danger" type="button" hidden>Stop scraping</button>
             <button id="save-all" class="secondary" type="button" hidden>Save all results</button>
@@ -132,6 +148,11 @@
           <span><i class="pulse" aria-hidden="true"></i> <strong id="scrape-status">Scraping businesses…</strong></span>
           <span id="scrape-metrics" class="small"></span>
         </div>
+        <details id="discovery-activity" class="surface discovery-activity" hidden>
+          <summary>Source activity</summary>
+          <ul id="discovery-log"></ul>
+          <div id="place-references" class="actions"></div>
+        </details>
         <div id="results" aria-live="polite"></div>
         <div id="results-pagination" class="surface pagination" hidden></div>
       </section>

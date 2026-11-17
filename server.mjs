@@ -1,3 +1,4 @@
+import { platformDomains, searchList, googleQueries, publicWebsite, businessKeys } from './public/discovery.mjs';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, createHash, createCipheriv, createDecipheriv, scryptSync, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -518,6 +519,7 @@ const files = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
+  '/discovery.mjs': ['discovery.mjs', 'text/javascript; charset=utf-8'],
   '/csv.mjs': ['csv.mjs', 'text/javascript; charset=utf-8'],
   '/business-import.csv': ['business-import.csv', 'text/csv; charset=utf-8'],
   '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
@@ -1160,14 +1162,203 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
   if (!res.writableEnded) res.end();
 }
 
+function discoveryOptions(values) {
+  return {
+    mode: values.mode === 'online' ? 'online' : 'local',
+    locations: String(values.locations || '').slice(0, 500),
+    terms: String(values.terms || '').slice(0, 350),
+    platform: Object.hasOwn(platformDomains, values.platform) ? values.platform : '',
+    sources: ['combined', 'google', 'maps', 'places'].includes(values.sources) ? values.sources : 'combined',
+    queries: String(values.queries || '').slice(0, 3000),
+    urls: String(values.urls || '').slice(0, 3000)
+  };
+}
+
+async function googleDiscovery(query, term, city) {
+  const response = await fetch('https://google.serper.dev/search', {
+    method: 'POST',
+    headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: query }),
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!response.ok) throw new Error('Google web search returned HTTP ' + response.status + '.');
+  const data = await response.json();
+  return (data.organic || []).flatMap(result => {
+    const url = publicWebsite(result.link);
+    if (!url) return [];
+    return [{
+      id: 'web:' + url.hostname.replace(/^www[.]/, ''),
+      name: result.title || url.hostname, website: url.origin, source: url.href,
+      industry: term, city, discoveryQuery: query, discoveryProvider: 'Google web'
+    }];
+  });
+}
+
+async function googlePlacesReferences(term, city) {
+  const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    headers: {
+      'X-Goog-Api-Key': process.env.GOOGLE_PLACES_API_KEY,
+      'X-Goog-FieldMask': 'places.id', 'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ textQuery: term + ' in ' + city, pageSize: 10 }),
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!response.ok) throw new Error('Google Places returned HTTP ' + response.status + '.');
+  const data = await response.json();
+  return (data.places || []).filter(place => typeof place.id === 'string').map(place => ({
+    id: place.id,
+    url: 'https://www.google.com/maps/search/?' + new URLSearchParams({
+      api: '1', query: term + ' in ' + city, query_place_id: place.id
+    })
+  }));
+}
+
+async function streamDiscovery(res, params, userId) {
+  const options = discoveryOptions(Object.fromEntries(params));
+  const online = options.mode === 'online';
+  const industry = (params.get('industry') || '').trim();
+  const city = (params.get('city') || '').trim();
+  const terms = [...new Set([industry, ...searchList(options.terms, 3)])];
+  const cities = [...new Set([city, ...searchList(options.locations, 4)].filter(Boolean))];
+  if (!cities.length && online) cities.push('');
+  if (!cities.length) fail(400, 'Enter a city or state for local discovery.');
+  for (const term of terms) for (const location of cities) validateSearch(term, location || 'Online');
+  const urls = searchList(options.urls, 20).map(publicWebsite);
+  if (urls.some(url => !url)) fail(400, 'Enter full HTTP or HTTPS website URLs.');
+  const web = options.sources === 'google' || options.sources === 'combined';
+  const maps = !online && ['maps', 'combined'].includes(options.sources);
+  const places = !online && ['places', 'combined'].includes(options.sources);
+  if (options.sources === 'places' && (!places || !process.env.GOOGLE_PLACES_API_KEY)) {
+    fail(503, 'Google Places requires a local search and GOOGLE_PLACES_API_KEY.');
+  }
+  if (!(maps || urls.length || (web && process.env.SERPER_API_KEY) || (places && process.env.GOOGLE_PLACES_API_KEY))) {
+    fail(503, 'Choose a configured source, open the query links in Google, or paste website URLs.');
+  }
+  const chargedOn = await consumeQuota(userId, 'search');
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store, no-transform' });
+  let stopped = false;
+  let delivered = 0;
+  let successful = false;
+  const seen = new Set();
+  const placeIds = new Set();
+  const mapDomains = new Set();
+  res.on('close', () => { stopped = true; });
+  const send = event => {
+    if (!res.destroyed && !res.writableEnded) res.write(JSON.stringify(event) + '\n');
+  };
+  const emit = async (items, query) => {
+    const fresh = [];
+    const batch = new Set();
+    for (const item of items) {
+      const domain = publicWebsite(item.website)?.hostname.replace(/^www[.]/, '');
+      if (item.discoveryProvider === 'Google web' && domain && mapDomains.has(domain)) continue;
+      const keys = businessKeys(item, online || item.discoveryProvider === 'Google web' || item.discoveryProvider === 'Imported URL');
+      if (keys.some(key => seen.has(key) || batch.has(key))) continue;
+      for (const key of keys) batch.add(key);
+      fresh.push({ item, keys });
+    }
+    if (stopped) return;
+    const granted = fresh.length ? await consumeQuota(userId, 'result', null, fresh.length) : 0;
+    for (const { item, keys } of fresh.slice(0, granted)) {
+      keys.forEach(key => seen.add(key));
+      const domain = publicWebsite(item.website)?.hostname.replace(/^www[.]/, '');
+      if (domain && ['Bing Maps', 'OpenStreetMap'].includes(item.discoveryProvider)) mapDomains.add(domain);
+      delivered++;
+      send({ type: 'business', item: { ...item, targetPlatform: options.platform, discoveryQuery: query }, totalFound: delivered });
+    }
+    send({ type: 'query', message: query + ' · ' + granted + ' new businesses' });
+    if (granted < fresh.length) {
+      stopped = true;
+      send({ type: 'limit', message: 'Daily search result limit reached.' });
+    }
+  };
+  const run = async (label, fetchItems) => {
+    if (stopped) return;
+    send({ type: 'status', message: 'Searching ' + label });
+    let items;
+    try {
+      items = await fetchItems();
+      successful = true;
+    } catch (error) {
+      send({ type: 'query', message: label + ' · ' + error.message });
+      return;
+    }
+    await emit(items, label);
+  };
+  try {
+    if (web && !process.env.SERPER_API_KEY) {
+      send({ type: 'query', message: 'Google web automation is unconfigured. Use the Google query links or paste website URLs.' });
+    }
+    if (urls.length) await run('Imported websites', async () => urls.map(url => ({
+      id: 'web:' + url.hostname.replace(/^www[.]/, ''), name: url.hostname, website: url.href,
+      source: url.href, industry, city, discoveryProvider: 'Imported URL'
+    })));
+    const pairs = terms.flatMap(term => cities.map(location => ({ term, location }))).slice(0, 12);
+    if (terms.length * cities.length > pairs.length) {
+      send({ type: 'query', message: 'This batch uses the first 12 term and location combinations.' });
+    }
+    const mapCities = new Map();
+    if (maps) {
+      for (const area of cities) {
+        if (stopped) break;
+        try { mapCities.set(area, await resolveSearchLocations(area)); }
+        catch { mapCities.set(area, [area]); }
+      }
+    }
+    const mapPairs = maps ? pairs.flatMap(({ term, location }) =>
+      (mapCities.get(location) || [location]).map(area => ({ term, location: area }))).slice(0, 12) : pairs;
+    for (const { term, location } of mapPairs) {
+      if (stopped) break;
+      if (maps) {
+        await run('Bing Maps · ' + term + ' · ' + location, async () =>
+          (await searchBingMaps(term, location, params.get('rankMode') || 'all')).map(item => ({ ...item, discoveryProvider: 'Bing Maps' })));
+        await run('OpenStreetMap · ' + term + ' · ' + location, async () =>
+          (await searchOverpassFallback(term, location)).map(item => ({ ...item, discoveryProvider: 'OpenStreetMap' })));
+      }
+      if (!stopped && places && process.env.GOOGLE_PLACES_API_KEY) {
+        try {
+          const references = await googlePlacesReferences(term, location);
+          successful = true;
+          for (const reference of references) {
+            if (placeIds.has(reference.id)) continue;
+            placeIds.add(reference.id);
+            send({ type: 'place', url: reference.url, label: term + ' · ' + location });
+          }
+        } catch (error) { send({ type: 'query', message: error.message }); }
+      }
+    }
+    if (web && process.env.SERPER_API_KEY) {
+      const custom = options.queries.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(0, 12);
+      const queries = custom.length ? custom.map(query => ({ query, term: industry, location: city })) :
+        pairs.flatMap(({ term, location }) => googleQueries(term, location, options.platform, online)
+          .map(query => ({ query, term, location }))).slice(0, 12);
+      for (const { query, term, location } of queries) {
+        if (stopped) break;
+        await run('Google · ' + query, () => googleDiscovery(query, term, location));
+      }
+    }
+    if (!successful) {
+      await consumeQuota(userId, 'search', chargedOn).catch(console.error);
+      send({ type: 'error', error: 'No discovery source completed. Check the source activity for details.' });
+    }
+  } catch (error) {
+    send({ type: 'error', error: error.message || 'Discovery could not finish.' });
+  } finally {
+    send({ type: 'done', totalFound: delivered });
+    if (!res.destroyed && !res.writableEnded) res.end();
+  }
+}
+
 function normalizeSavedSearches(value) {
   if (!Array.isArray(value)) return [];
   return value.filter(item => item && typeof item.id === 'string' &&
     typeof item.industry === 'string' && typeof item.city === 'string' &&
-    item.industry.trim() && item.city.trim()).slice(0, 25).map(item => ({
+    item.industry.trim() && (item.mode === 'online' || item.city.trim() || String(item.locations || '').trim())).slice(0, 25).map(item => ({
     id: item.id.slice(0, 64),
     industry: item.industry.trim().slice(0, 50),
     city: item.city.trim().slice(0, 75),
+    ...discoveryOptions(item),
     rankMode: ['low', 'shopify'].includes(item.rankMode) ? item.rankMode : 'all'
   }));
 }
@@ -1282,24 +1473,47 @@ export function extractSocialsFromHtml(html = '') {
   return socials;
 }
 
-export function detectPlatformAndTech(html = '') {
+export function detectPlatformAndTech(html = '', siteUrl = '') {
+  const hostname = publicWebsite(siteUrl)?.hostname || '';
+  const fingerprints = [
+    ['Shopify', /cdn[.]shopify[.]com|Shopify[.](shop|theme)/i, /myshopify[.]com/i],
+    ['WooCommerce', /wp-content[/]plugins[/]woocommerce|wc-blocks|wc-ajax/i, /woocommerce/i],
+    ['Wix', /static[.]wixstatic[.]com|wix-thunderbolt/i, /wixstatic[.]com|wix[.]com/i],
+    ['Beehiiv', /beehiiv[.]com[/](?:assets|static)[/]|beehiiv[.]cdn/i, /beehiiv[.]com/i],
+    ['BigCommerce', /cdn[0-9]*[.]bigcommerce[.]com|stencil-utils/i, /bigcommerce[.]com/i],
+    ['Squarespace', /static[0-9]*[.]squarespace[.]com|squarespace-cdn[.]com/i, /squarespace[.]com|sqsp[.]net/i],
+    ['Webflow', /data-wf-site|website-files[.]com/i, /webflow[.]com/i],
+    ['Ghost', /name=["']generator["'][^>]+content=["']Ghost|ghost[.]io[/]assets/i, /ghost[.]io/i],
+    ['HubSpot CMS', /hs_cos_wrapper|hs-content-id-/i, /hubspotpagebuilder[.]com/i],
+    ['WordPress', /wp-content|wp-includes/i, /wordpress[.]com/i]
+  ];
   let platform = 'Custom / Website';
-  if (/(cdn\.shopify\.com|Shopify\.shop|Shopify\.theme|myshopify\.com)/i.test(html)) {
-    platform = 'Shopify';
-  } else if (/(woocommerce|wc-blocks|wp-content\/plugins\/woocommerce)/i.test(html)) {
-    platform = 'WooCommerce';
-  } else if (/(wp-content|wp-includes)/i.test(html)) {
-    platform = 'WordPress';
-  } else if (/(wixstatic\.com|wix\.com)/i.test(html)) {
-    platform = 'Wix';
-  } else if (/(squarespace\.com|sqsp\.net)/i.test(html)) {
-    platform = 'Squarespace';
-  } else if (/(webflow\.com|data-wf-site)/i.test(html)) {
-    platform = 'Webflow';
+  let platformEvidence = '';
+  let platformConfidence = 'Unknown';
+  for (const [label, strong, weak] of fingerprints) {
+    const domain = platformDomains[label];
+    const hosted = domain && (hostname === domain || hostname.endsWith('.' + domain));
+    const signal = html.match(strong)?.[0];
+    if (!hosted && !signal) continue;
+    platform = label;
+    platformEvidence = hosted ? 'Hosted domain: ' + hostname : 'Page fingerprint: ' + signal;
+    platformConfidence = 'Confirmed';
+    break;
+  }
+  if (platformConfidence === 'Unknown') {
+    for (const [label, , weak] of fingerprints) {
+      const signal = html.match(weak)?.[0];
+      if (!signal) continue;
+      platform = label;
+      platformEvidence = 'Page reference: ' + signal;
+      platformConfidence = 'Likely';
+      break;
+    }
   }
 
   const techStack = [];
   const checks = [
+    ['HubSpot Marketing', /js[.]hs-scripts[.]com|hsforms[.]net/i],
     ['Klaviyo', /klaviyo/i],
     ['Mailchimp', /mailchimp/i],
     ['Omnisend', /omnisend/i],
@@ -1327,6 +1541,8 @@ export function detectPlatformAndTech(html = '') {
 
   return {
     platform,
+    platformEvidence,
+    platformConfidence,
     techStack,
     shopifyMeta: platform === 'Shopify' ? {
       myshopifyDomain: myshopifyMatch?.[1] || '',
@@ -1380,7 +1596,7 @@ export function extractWebsiteInsights(html = '', urlStr = '') {
     .join('\n\n')
     .slice(0, 1500);
 
-  const { platform, techStack, shopifyMeta } = detectPlatformAndTech(html);
+  const { platform, techStack, shopifyMeta, platformEvidence, platformConfidence } = detectPlatformAndTech(html, urlStr);
 
   const signals = {
     https: urlStr.startsWith('https://'),
@@ -1398,6 +1614,8 @@ export function extractWebsiteInsights(html = '', urlStr = '') {
     headings,
     aboutSummary,
     platform,
+    platformEvidence,
+    platformConfidence,
     techStack,
     shopifyMeta,
     signals
@@ -1408,7 +1626,8 @@ async function fetchShopifyProducts(originUrl) {
   try {
     const res = await fetch(new URL('/products.json?limit=6', originUrl).href, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Jobhunta/1.1)', Accept: 'application/json' },
-      signal: AbortSignal.timeout(5000)
+      signal: AbortSignal.timeout(5000),
+      redirect: 'manual'
     });
     if (!res.ok) return [];
     const data = await res.json();
@@ -1427,14 +1646,22 @@ async function fetchShopifyProducts(originUrl) {
 async function fetchWebsiteEmails(websiteUrl) {
   const base = await assertSafePublicUrl(websiteUrl);
   const fetchHtml = async targetUrl => {
-    const response = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml'
-      },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(8000)
-    });
+    let target = await assertSafePublicUrl(String(targetUrl));
+    let response;
+    for (let redirects = 0; redirects <= 3; redirects++) {
+      response = await fetch(target, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml'
+        },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(8000)
+      });
+      if (![301, 302, 303, 307, 308].includes(response.status)) break;
+      const next = response.headers.get('location');
+      if (!next || redirects === 3) return '';
+      target = await assertSafePublicUrl(new URL(next, target).href);
+    }
     if (!response.ok) return '';
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) return '';
@@ -1449,6 +1676,24 @@ async function fetchWebsiteEmails(websiteUrl) {
     fail(502, 'Could not reach the business website.');
   }
   const emails = new Set(extractEmailsFromHtml(homepageHtml));
+  const emailSources = Object.fromEntries([...emails].map(email => [email, base.href]));
+  let contactPage = '';
+  let contactFormSource = '';
+  let phone = '';
+  let phoneSource = '';
+  function collectContactDetails(html, source) {
+    if (!phone) {
+      const phoneLink = html.match(/href\s*=\s*["']tel:([+\d().\s-]{7,35})["']/i)?.[1]?.trim();
+      if (phoneLink && phoneLink.replace(/\D/g, '').length >= 7) {
+        phone = phoneLink;
+        phoneSource = source;
+      }
+    }
+    if (!contactFormSource && /<form\b/i.test(html) && /contact|message|enquiry|inquiry/i.test(html)) {
+      contactFormSource = source;
+    }
+  }
+  collectContactDetails(homepageHtml, base.href);
   const socials = extractSocialsFromHtml(homepageHtml);
   const insights = extractWebsiteInsights(homepageHtml, base.href);
 
@@ -1478,7 +1723,12 @@ async function fetchWebsiteEmails(websiteUrl) {
     for (const subHref of uniqueSubUrls) {
       try {
         const subHtml = await fetchHtml(subHref);
-        for (const email of extractEmailsFromHtml(subHtml)) emails.add(email);
+        collectContactDetails(subHtml, subHref);
+        if (subHtml && /contact|get-in-touch|reach-us|impressum/i.test(subHref)) contactPage ||= subHref;
+        for (const email of extractEmailsFromHtml(subHtml)) {
+          emails.add(email);
+          emailSources[email] ||= subHref;
+        }
         const subSocials = extractSocialsFromHtml(subHtml);
         for (const key of Object.keys(socials)) {
           if (!socials[key] && subSocials[key]) socials[key] = subSocials[key];
@@ -1507,6 +1757,11 @@ async function fetchWebsiteEmails(websiteUrl) {
     website: base.href,
     brandName: insights.brandName || insights.siteTitle?.split(/[|\-–—]/)[0]?.trim() || base.hostname.replace(/^www\./, ''),
     emails: [...emails],
+    emailSources,
+    contactPage,
+    contactFormSource,
+    phone,
+    phoneSource,
     email: [...emails][0] || '',
     socials,
     facebook: socials.facebook,
@@ -1520,6 +1775,8 @@ async function fetchWebsiteEmails(websiteUrl) {
     headings: insights.headings,
     aboutSummary: insights.aboutSummary,
     platform: insights.platform,
+    platformEvidence: insights.platformEvidence,
+    platformConfidence: insights.platformConfidence,
     techStack: insights.techStack,
     shopifyMeta: insights.shopifyMeta,
     shopifyProducts,
@@ -2015,6 +2272,7 @@ export async function handleRequest(req, res) {
     }
     if (req.method === 'GET' && path === '/api/search') {
       if (!session.userId) fail(401, 'Sign in to search for businesses.');
+      if (url.searchParams.get('expanded') === '1') return await streamDiscovery(res, url.searchParams, session.userId);
       const city = (url.searchParams.get('city') || '').trim();
       const industry = validateSearch(url.searchParams.get('industry'), city);
       const chargedOn = await consumeQuota(session.userId, 'search');
