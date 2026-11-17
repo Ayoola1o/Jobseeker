@@ -38,3 +38,11 @@ npm test
 * **Import & Export CSV:** Open **Saved leads → Import CSV** to import either the standard Jobhunta CSV template or CSV exports from the Bing Maps Scraper extension (`mapleedsscapper`). Use **Export CSV** to back up all saved leads, notes, statuses, and follow-up dates.
 * **Website Email Discovery:** Click **Find email** on an individual lead or **Find missing emails** in **Saved leads** to scan business websites and contact pages for public email addresses.
 * **Custom Industry Search:** Choose from 22 built-in industry categories or type any custom business keyword in **Find businesses**.
+
+## Production upgrade
+
+Before deploying, run the updated SQL in supabase/schema.sql and set an independent
+SESSION_SECRET of at least 32 characters in the deployment environment. Use the same
+secret across instances. Changing it invalidates old sessions and encrypted Gmail
+connections. Users may need to sign in and reconnect Gmail. Legacy single-user
+records retain the private default workspace owner until explicitly assigned.

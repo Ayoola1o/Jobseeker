@@ -34,20 +34,12 @@ let settings = {
   templates: defaultTemplates
 };
 
+const stages = { prospect: 'Prospect', qualified: 'Qualified', contacted: 'Contacted',
+  replied: 'Replied', booked: 'Booked', won: 'Won', lost: 'Lost' };
+const stageOf = lead => lead.stage || (lead.replied ? 'replied' : lead.threads?.length ? 'contacted' : 'prospect');
+
 const userLeadsKey = userId => `jobhunta.leads.v2.${userId}`;
 const userSettingsKey = userId => `jobhunta.settings.v2.${userId}`;
-
-function loadLocalUserCache(userId) {
-  if (!userId) return { cachedLeads: [], cachedSettings: {} };
-  try {
-    return {
-      cachedLeads: JSON.parse(localStorage.getItem(userLeadsKey(userId)) || '[]'),
-      cachedSettings: JSON.parse(localStorage.getItem(userSettingsKey(userId)) || '{}')
-    };
-  } catch {
-    return { cachedLeads: [], cachedSettings: {} };
-  }
-}
 
 let account = {};
 let results = [];
@@ -113,16 +105,25 @@ function empty(icon, title, description) {
   return box;
 }
 
+let workspaceSync = Promise.resolve();
+
 function syncWorkspaceToServer() {
   if (!currentUser?.id) return;
-  api('/api/workspace', { leads, settings }).catch(() => {});
+  const userId = currentUser.id;
+  const snapshot = JSON.parse(JSON.stringify({ userId, leads, settings }));
+  workspaceSync = workspaceSync.then(async () => {
+    if (currentUser?.id !== userId) return;
+    await api('/api/workspace', snapshot);
+  }).catch(error => {
+    if (currentUser?.id === userId) report('Workspace could not be saved: ' + error.message, true);
+  });
 }
 
-function persist() {
+function persist({ sync = true } = {}) {
   if (currentUser?.id) {
     localStorage.setItem(userLeadsKey(currentUser.id), JSON.stringify(leads));
     localStorage.setItem(userSettingsKey(currentUser.id), JSON.stringify(settings));
-    syncWorkspaceToServer();
+    if (sync) syncWorkspaceToServer();
   }
   renderDashboard();
   renderLeads();
@@ -196,6 +197,10 @@ function row(item, details, actions, onSelect) {
 
 function applyEnrichmentToItem(item, found) {
   if (found.email && !item.email) item.email = found.email;
+  if (found.website && Array.isArray(found.emails)) {
+    item.emailSources = { ...item.emailSources };
+    for (const email of found.emails) item.emailSources[norm(email)] = found.website;
+  }
   if (Array.isArray(found.emails) && found.emails.length) {
     item.emails = [...new Set([...(item.emails || []), ...found.emails])];
   }
@@ -390,7 +395,7 @@ function renderDashboard() {
   titleWrap.append(
     create('h1', 'Workspace Dashboard'),
     create('p', settings.senderName
-      ? `Welcome back, ${settings.senderName}. Offering: ${settings.senderService || 'Set your service in Templates & profile'}.`
+      ? `Welcome back, ${settings.senderName}. Offering: ${settings.senderService || 'Set your service in Broadcast'}.`
       : 'Overview of your scraped business pipeline, AI lead audits, and outreach conversations.')
   );
   const quickActions = create('div', '', 'actions');
@@ -491,6 +496,9 @@ function renderDashboard() {
 
 function getVisibleSearchResults() {
   const mode = $('#results-filter')?.value || '';
+  if (mode === 'no-website') return results.filter(item => !item.website);
+  if (mode === 'has-email') return results.filter(item => item.email);
+  if (mode === 'qualified') return results.filter(item => duplicate(item)?.finding?.confirmed);
   if (mode === 'shopify') return results.filter(item => item.platform === 'Shopify');
   if (mode === 'ecommerce') return results.filter(item => item.platform === 'Shopify' || item.platform === 'WooCommerce');
   if (mode === 'low') return results.filter(item => (item.searchRank || 0) >= 21);
@@ -607,7 +615,9 @@ function getFilteredLeads() {
   const platformFilter = $('#filter-platform')?.value || '';
   const sortOrder = $('#filter-sort')?.value || 'recent';
 
+  const stage = $('#filter-stage').value;
   const filtered = leads.filter(lead => {
+    if (stage && stageOf(lead) !== stage) return false;
     const status = leadStatus(lead);
     if (statusFilter && status !== statusFilter) return false;
     if (platformFilter && (lead.platform || '') !== platformFilter) return false;
@@ -709,6 +719,7 @@ function renderLeads() {
       ...socialLinks(lead),
       website(lead.source, 'Listing'),
       platformPill,
+      create('span', stages[stageOf(lead)], 'pill'),
       create('span', status, statusPillClass(status)),
       lead.aiBrief ? create('span', '✦ AI Pitch', 'pill') : '',
       enrichBtn,
@@ -729,6 +740,39 @@ function kvItem(label, valueNodeOrText) {
   else val.textContent = valueNodeOrText || 'Not listed';
   box.append(val);
   return box;
+}
+
+function renderQualification(lead) {
+  const form = create('form', '', 'stack qualification');
+  const stage = selectField('Pipeline stage', 'stage', stages, stageOf(lead));
+  const note = field('Outreach finding', 'finding', lead.finding?.note || '', {
+    type: 'textarea', maxLength: 600, placeholder: 'Example: the booking button returns an error'
+  });
+  const source = field('Evidence URL', 'source', lead.finding?.url || lead.website || lead.source || '', {
+    type: 'url', maxLength: 1024
+  });
+  const status = selectField('Finding status', 'status', { draft: 'Needs verification', confirmed: 'Confirmed by me' },
+    lead.finding?.confirmed ? 'confirmed' : 'draft');
+  const feedback = create('p', '', 'small');
+  feedback.setAttribute('role', 'status');
+  form.append(create('h3', 'Qualification'), stage, note, source, status,
+    website(lead.finding?.url, 'Open evidence') || '', feedback, create('button', 'Save qualification'));
+  form.onsubmit = event => {
+    event.preventDefault();
+    const fields = new FormData(form);
+    const finding = fields.get('finding').trim();
+    const url = fields.get('source').trim();
+    const confirmed = fields.get('status') === 'confirmed';
+    if ((url && !website(url, 'Evidence')) || (confirmed && (!finding || !url))) {
+      feedback.textContent = 'Use an HTTP or HTTPS evidence URL. A confirmed finding also needs a description.';
+      return;
+    }
+    lead.stage = confirmed && fields.get('stage') === 'prospect' ? 'qualified' : fields.get('stage');
+    if (['won', 'lost'].includes(lead.stage)) lead.due = '';
+    lead.finding = { note: finding, url, confirmed };
+    persist();
+  };
+  return form;
 }
 
 function renderBusinessPage() {
@@ -825,6 +869,8 @@ function renderBusinessPage() {
     kvItem('Street Address', lead.address || 'Not listed'),
     kvItem('Phone Number', lead.phone || 'Not listed'),
     kvItem('Primary Email', lead.email || 'Needs email'),
+    kvItem('Email source', website(lead.emailSources?.[norm(lead.email)], 'Open scanned website') ||
+      (lead.email ? 'Source not recorded' : 'No email found')),
     kvItem('All Discovered Emails', allEmails.length ? allEmails.join(', ') : 'None found yet'),
     kvItem('Website', website(lead.website, lead.website) || 'No website listed'),
     kvItem('Map / Listing Source', website(lead.source, 'Open on Bing Maps / Source') || 'Manual / CSV entry'),
@@ -833,7 +879,7 @@ function renderBusinessPage() {
     kvItem('Operating Hours', lead.openHours || 'Not listed'),
     kvItem('Coordinates', (lead.latitude && lead.longitude) ? `${lead.latitude}, ${lead.longitude}` : 'Not listed')
   );
-  detailsCard.append(kvGrid);
+  detailsCard.append(kvGrid, renderQualification(lead));
 
   // Inline CRM controls (Status, Follow-up Date, Primary Email, Quick Notes)
   const quickCrmGrid = create('div', '', 'filters');
@@ -1221,6 +1267,10 @@ function interpolateTemplate(text = '', lead = {}) {
     .replace(/\{\{\s*business_name\s*\}\}/gi, lead.name || 'there')
     .replace(/\{\{\s*city\s*\}\}/gi, lead.city || 'your area')
     .replace(/\{\{\s*industry\s*\}\}/gi, lead.industry || 'local')
+    .replace(/\{\{\s*specific_opportunity\s*\}\}/gi, () =>
+      lead.finding?.confirmed ? lead.finding.note : '[specific opportunity]')
+    .replace(/\{\{\s*finding_source\s*\}\}/gi, () =>
+      lead.finding?.confirmed ? lead.finding.url : '[specific opportunity source]')
     .replace(/\{\{\s*your_name\s*\}\}/gi, settings.senderName || '[your name]')
     .replace(/\{\{\s*your_service\s*\}\}/gi, settings.senderService || '[your service]');
 }
@@ -1469,12 +1519,18 @@ create table if not exists public.jobhunta_leads (
   );
   toolsCard.append(toolsActions);
 
-  // 3. Sender Profile & Email Templates Card (auto-saves on edit, no Save button)
+  grid.append(gmailCard, toolsCard);
+  container.replaceChildren(topHeader, grid);
+}
+
+function renderBroadcast() {
+  const title = create('div', '', 'heading section-title');
+  title.append(create('h1', 'Broadcast'));
   const formCard = create('article', '', 'surface dossier-card full');
   const formHeader = create('div', '', 'heading');
   formHeader.style.margin = '0';
   formHeader.append(
-    create('h2', 'Outreach Profile & Email Pitch Templates'),
+    create('h2', 'Outreach profile'),
     create('span', 'Changes save automatically', 'small')
   );
   formCard.append(formHeader);
@@ -1504,57 +1560,102 @@ create table if not exists public.jobhunta_leads (
   senderServiceInput.lastChild.onchange = autoSaveSettings;
   followUpInput.lastChild.onchange = autoSaveSettings;
 
-  const templatesContainer = create('div', '', 'stack');
-
-  function renderTemplateCards() {
-    templatesContainer.replaceChildren();
-    settings.templates.forEach((tpl, index) => {
-      const card = create('div', '', 'template-card');
-      const nameField = field('Template name', `tpl_name_${index}`, tpl.name, { required: true, maxLength: 80 });
-      nameField.lastChild.onchange = e => {
-        tpl.name = e.target.value.trim() || 'Untitled template';
-        autoSaveSettings();
-      };
-      const subjField = field('Default subject', `tpl_subj_${index}`, tpl.subject, { required: true, maxLength: 160 });
-      subjField.lastChild.onchange = e => {
-        tpl.subject = e.target.value.trim();
-        autoSaveSettings();
-      };
-      const bodyField = field('Message body (supports {{business_name}}, {{city}}, {{industry}}, {{your_name}}, {{your_service}}, {{specific_opportunity}})', `tpl_body_${index}`, tpl.body, { type: 'textarea', required: true, maxLength: 16000 });
-      bodyField.lastChild.onchange = e => {
-        tpl.body = e.target.value.trim();
-        autoSaveSettings();
-      };
-      const cardActions = create('div', '', 'actions');
-      if (settings.templates.length > 1) {
-        cardActions.append(button('Remove template', () => {
-          settings.templates.splice(index, 1);
-          autoSaveSettings();
-          renderTemplateCards();
-        }, 'danger'));
-      }
-      card.append(nameField, subjField, bodyField, cardActions);
-      templatesContainer.append(card);
-    });
-  }
-  renderTemplateCards();
-
-  const addTemplateBtn = button('+ Add template', () => {
-    settings.templates.push({
-      id: crypto.randomUUID(),
-      name: 'New outreach template',
-      subject: 'Quick question for {{business_name}}',
-      body: 'Hi {{business_name}} team,\n\nI’m {{your_name}} and I help {{industry}} businesses in {{city}} with {{your_service}}.\n\nThanks,\n{{your_name}}'
-    });
-    autoSaveSettings();
-    renderTemplateCards();
-  }, true);
-
-  form.append(profileGrid, followUpInput, create('h3', 'Email templates'), templatesContainer, addTemplateBtn);
-
+  form.onsubmit = event => event.preventDefault();
+  form.append(profileGrid, followUpInput);
   formCard.append(form);
-  grid.append(gmailCard, toolsCard, formCard);
-  container.replaceChildren(topHeader, grid);
+
+  const library = create('section', '', 'broadcast-library');
+  const libraryHeading = create('div', '', 'heading');
+  const templateGrid = create('div', '', 'broadcast-grid');
+  const addTemplate = button('New template', () => editBroadcastTemplate());
+  addTemplate.disabled = settings.templates.length >= 25;
+  libraryHeading.append(create('h2', 'Email templates'), addTemplate);
+  settings.templates.forEach(template => {
+    const card = create('article', '', 'surface broadcast-card');
+    const actions = create('div', '', 'actions');
+    actions.append(
+      button('Edit', () => editBroadcastTemplate(template), true),
+      button('Copy email', async () => {
+        try {
+          await navigator.clipboard.writeText(['Subject: ' + template.subject, template.body].join('\n\n'));
+          report('Email template copied.');
+        } catch {
+          report('Clipboard access is unavailable. Open Edit to select and copy the template.', true);
+        }
+      }, true)
+    );
+    card.append(create('h3', template.name), create('p', template.subject, 'broadcast-subject'),
+      create('p', template.body, 'broadcast-preview'), actions);
+    templateGrid.append(card);
+  });
+  library.append(libraryHeading, templateGrid);
+  const outcomes = create('section', '', 'surface dossier-card broadcast-library');
+  outcomes.append(create('h2', 'Outreach outcomes'),
+    create('p', 'Counts are per lead and use its first outreach template and discovery search.', 'small'));
+  for (const [heading, key] of [
+    ['By template', lead => lead.threads[0].templateName || 'Template not recorded'],
+    ['By search', lead => lead.discoverySearch || 'Search not recorded']
+  ]) {
+    const groups = new Map();
+    for (const lead of leads) {
+      if (!lead.threads?.length) continue;
+      const label = key(lead);
+      const counts = groups.get(label) || { contacted: 0, replied: 0, booked: 0 };
+      counts.contacted++;
+      if (lead.replied) counts.replied++;
+      if (['booked', 'won'].includes(stageOf(lead))) counts.booked++;
+      groups.set(label, counts);
+    }
+    outcomes.append(create('h3', heading));
+    if (!groups.size) outcomes.append(create('p', 'No outreach sent yet.', 'small'));
+    for (const [label, counts] of groups) {
+      outcomes.append(create('p', label + ' · ' + counts.contacted + ' contacted · ' +
+        counts.replied + ' replied · ' + counts.booked + ' booked or won', 'small'));
+    }
+  }
+  $('#broadcast-content').replaceChildren(title, formCard, library, outcomes);
+}
+
+function editBroadcastTemplate(template) {
+  const form = create('form', '', 'stack');
+  const name = field('Template name', 'name', template?.name || '', { required: true, maxLength: 80 });
+  const subject = field('Subject', 'subject', template?.subject || '', { required: true, maxLength: 160 });
+  const body = field('Message', 'body', template?.body || '', { type: 'textarea', required: true, maxLength: 16000 });
+  const placeholders = create('p', 'Placeholders: {{business_name}}, {{city}}, {{industry}}, {{your_name}}, {{your_service}}, {{specific_opportunity}}, {{finding_source}}', 'small');
+  const feedback = create('p', '', 'small');
+  feedback.setAttribute('role', 'status');
+  const actions = create('div', '', 'actions');
+  const save = create('button', 'Save template');
+  actions.append(save);
+  if (template && settings.templates.length > 1) {
+    actions.append(button('Delete template', () => {
+      if (!window.confirm('Delete this template?')) return;
+      settings.templates = settings.templates.filter(item => item.id !== template.id);
+      persist();
+      dialog.close();
+      renderBroadcast();
+    }, 'danger'));
+  }
+  form.append(name, subject, body, placeholders, feedback, actions);
+  form.onsubmit = event => {
+    event.preventDefault();
+    const values = Object.fromEntries([...new FormData(form)].map(([key, value]) => [key, value.trim()]));
+    if (!values.name || !values.subject || !values.body) {
+      feedback.textContent = 'Enter a name, subject, and message.';
+      return;
+    }
+    if (template) Object.assign(template, values);
+    else if (settings.templates.length < 25) {
+      settings.templates = [...settings.templates, { id: crypto.randomUUID(), ...values }];
+    } else {
+      feedback.textContent = 'You can save up to 25 templates.';
+      return;
+    }
+    persist();
+    dialog.close();
+    renderBroadcast();
+  };
+  show(template ? 'Edit template' : 'New template', form);
 }
 
 function futureDateString(days) {
@@ -1635,7 +1736,10 @@ function compose(lead, conversation, parent, customPitch = null) {
         ...values, requestId, threadId: conversation?.id, parentId: parent?.id
       });
       if (!conversation && !lead.threads.some(item => item.id === sent.threadId && item.mailbox === mailbox)) {
-        lead.threads.push({ id: sent.threadId, mailbox, subject: values.subject, time: Date.now(), to: values.to });
+        if (['prospect', 'qualified'].includes(stageOf(lead))) lead.stage = 'contacted';
+        const template = settings.templates.find(item => item.id === templateSelect.value);
+        lead.threads.push({ id: sent.threadId, mailbox, subject: values.subject, time: Date.now(), to: values.to,
+          templateName: template?.name || (customPitch ? 'AI pitch' : 'Custom email') });
       }
       if (!lead.email) lead.email = values.to;
       if (!lead.due && settings.defaultFollowUpDays > 0) {
@@ -1700,6 +1804,7 @@ async function syncThread(lead, conversation) {
   const incoming = thread.filter(message => !message.sent);
   const seen = new Set(conversation.seen || []);
   if (incoming.some(message => !seen.has(message.id))) {
+    if (['prospect', 'qualified', 'contacted'].includes(stageOf(lead))) lead.stage = 'replied';
     lead.replied = true;
     lead.due = '';
     conversation.seen = incoming.map(message => message.id);
@@ -1790,6 +1895,51 @@ $('#stop-search').onclick = () => {
   updateScrapeBanner();
 };
 
+function renderSavedSearches() {
+  const select = $('#saved-search');
+  const selected = select.value;
+  select.replaceChildren(new Option('Saved searches', ''));
+  for (const search of settings.savedSearches || []) {
+    select.add(new Option([search.industry, search.city, search.rankMode].join(' · '), search.id));
+  }
+  select.value = [...select.options].some(option => option.value === selected) ? selected : '';
+  $('#run-saved-search').disabled = $('#remove-search').disabled = !select.value;
+}
+
+$('#saved-search').onchange = renderSavedSearches;
+$('#save-search').onclick = () => {
+  const form = $('#search');
+  if (!form.reportValidity()) return;
+  const { industry, city, rankMode } = Object.fromEntries(new FormData(form));
+  const saved = settings.savedSearches || [];
+  if (industry.trim().length < 2 || city.trim().length < 2) {
+    report('Enter an industry and location.', true);
+    return;
+  }
+  if (saved.some(item => norm(item.industry) === norm(industry) && norm(item.city) === norm(city) && item.rankMode === rankMode)) {
+    report('This search is already saved.');
+    return;
+  }
+  if (saved.length >= 25) { report('Remove a saved search before adding another.', true); return; }
+  settings.savedSearches = [...saved, { id: crypto.randomUUID(), industry: industry.trim(), city: city.trim(), rankMode }];
+  persist();
+  renderSavedSearches();
+};
+$('#remove-search').onclick = () => {
+  settings.savedSearches = (settings.savedSearches || []).filter(item => item.id !== $('#saved-search').value);
+  persist();
+  renderSavedSearches();
+};
+$('#run-saved-search').onclick = () => {
+  const saved = settings.savedSearches?.find(item => item.id === $('#saved-search').value);
+  if (!saved) return;
+  const form = $('#search');
+  for (const key of ['industry', 'city', 'rankMode']) form.elements.namedItem(key).value = saved[key];
+  form.requestSubmit();
+};
+for (const [key, label] of Object.entries(stages)) $('#filter-stage').add(new Option(label, key));
+$('#filter-stage').onchange = renderLeads;
+
 $('#search').onsubmit = async event => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -1843,6 +1993,7 @@ $('#search').onsubmit = async event => {
           updateScrapeBanner();
         } else if (msg.type === 'business' && msg.item) {
           if (!results.some(existing => existing.id === msg.item.id)) {
+            msg.item.discoverySearch = [params.get('industry'), params.get('city'), params.get('rankMode')].join(' · ');
             results.push(msg.item);
             renderResults();
             updateScrapeBanner();
@@ -1954,6 +2105,7 @@ function navigate() {
     leads: 'Saved leads',
     business: 'Business dossier',
     inbox: 'Inbox',
+    broadcast: 'Broadcast',
     profile: 'Profile & Usage',
     settings: 'Settings'
   };
@@ -1966,10 +2118,12 @@ function navigate() {
     else link.removeAttribute('aria-current');
   }
   if (page === 'dashboard') renderDashboard();
+  if (page === 'discover') renderSavedSearches();
   if (page === 'business') renderBusinessPage();
   if (page === 'inbox') refresh();
   if (page === 'profile') renderProfile();
   if (page === 'settings') renderSettings();
+  if (page === 'broadcast') renderBroadcast();
 }
 
 $('#menu-toggle').onclick = () => setMobileNav(!document.body.classList.contains('nav-open'));
@@ -2029,28 +2183,20 @@ function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMai
     sidebarUser.replaceChildren(create('i'), document.createTextNode(' ' + (user.name || user.email)));
   }
 
-  const { cachedLeads, cachedSettings } = loadLocalUserCache(user.id);
-  leads = Array.isArray(serverLeads) && serverLeads.length
-    ? serverLeads
-    : (Array.isArray(cachedLeads) ? cachedLeads : []);
-
-  if (Array.isArray(cachedLeads) && cachedLeads.length && Array.isArray(serverLeads) && serverLeads.length) {
-    for (const localLead of cachedLeads) {
-      if (!duplicate(localLead)) leads.push(localLead);
-    }
-  }
+  leads = Array.isArray(serverLeads) ? serverLeads : [];
 
   settings = {
     senderName: user.name || '',
     senderService: '',
     defaultFollowUpDays: 4,
     templates: defaultTemplates,
-    ...cachedSettings,
     ...(serverSettings && typeof serverSettings === 'object' ? serverSettings : {})
   };
   if (!Array.isArray(settings.templates) || !settings.templates.length) {
-    settings.templates = defaultTemplates;
+    settings.templates = defaultTemplates.map(template => ({ ...template }));
   }
+
+  settings.templates = settings.templates.map(template => ({ ...template }));
 
   results = [];
   resultsPage = 1;
@@ -2061,7 +2207,7 @@ function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMai
   $('#results-pagination').hidden = true;
   $('#results-count').textContent = '';
 
-  persist();
+  persist({ sync: false });
   renderAccount();
   navigate();
   refresh();

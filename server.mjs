@@ -32,8 +32,13 @@ const client_secret = process.env.GOOGLE_CLIENT_SECRET?.trim() || googleClient?.
 const gmailConfigured = Boolean(client_id?.endsWith('.apps.googleusercontent.com') && client_secret);
 const gmailScopes = ['gmail.send', 'gmail.readonly'].map(scope => 'https://www.googleapis.com/auth/' + scope);
 
+const sessionSecret = process.env.SESSION_SECRET?.trim();
+if ((isServerless || process.env.NODE_ENV === 'production') &&
+    (!sessionSecret || sessionSecret.length < 32 || sessionSecret === client_secret)) {
+  throw new Error('Production requires an independent SESSION_SECRET of at least 32 characters.');
+}
 const cookieKey = createHash('sha256')
-  .update(process.env.SESSION_SECRET || client_secret || 'jobhunta-local-key')
+  .update(sessionSecret || randomBytes(32))
   .digest();
 
 function sealCookie(payload) {
@@ -158,6 +163,7 @@ try {
         settings: {
           senderName: String(saved.settings?.senderName || ''),
           senderService: String(saved.settings?.senderService || ''),
+          savedSearches: normalizeSavedSearches(saved.settings?.savedSearches),
           defaultFollowUpDays: Number(saved.settings?.defaultFollowUpDays) || 4,
           templates: Array.isArray(saved.settings?.templates) && saved.settings.templates.length
             ? saved.settings.templates
@@ -298,51 +304,38 @@ async function findUserById(userId) {
   return store.users.find(u => u.id === userId) || null;
 }
 
-async function persistUserUsage(userRecord) {
-  if (!userRecord?.id) return;
-  const localIdx = store.users.findIndex(u => u.id === userRecord.id);
-  if (localIdx !== -1) store.users[localIdx] = userRecord;
-  if (supabaseConfigured) {
-    try {
-      await fetch(`${supabaseUrl}/rest/v1/jobhunta_users?id=eq.${encodeURIComponent(userRecord.id)}`, {
-        method: 'PATCH',
-        headers: supabaseHeaders({ Prefer: 'return=minimal' }),
-        body: JSON.stringify({
-          searches_today: userRecord.searches_today,
-          emails_today: userRecord.emails_today,
-          usage_date: userRecord.usage_date
-        }),
-        signal: AbortSignal.timeout(6000)
-      });
-    } catch {
-      // Ignore network hiccup
+async function consumeQuota(userId, kind, refundDate = null) {
+  if (!userId) fail(401, 'Sign in to your Jobhunta account first.');
+  const field = kind === 'search' ? 'searches_today' : 'emails_today';
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const record = await findUserById(userId);
+    if (!record) fail(503, 'Usage is temporarily unavailable.');
+    const quota = getUserQuotaStatus(record);
+    if (refundDate && refundDate !== quota.usageDate) return;
+    const used = kind === 'search' ? quota.searchesToday : quota.emailsToday;
+    const limit = kind === 'search' ? quota.dailySearchLimit : quota.dailyEmailLimit;
+    if (!refundDate && limit !== null && used >= limit) fail(429, 'Daily ' + kind + ' limit reached.');
+    const changes = { usage_date: quota.usageDate, searches_today: quota.searchesToday, emails_today: quota.emailsToday };
+    changes[field] = Math.max(0, used + (refundDate ? -1 : 1));
+    if (!supabaseConfigured) {
+      Object.assign(record, changes);
+      await saveStore(userId);
+      return quota.usageDate;
     }
+    const match = new URLSearchParams({
+      id: 'eq.' + userId, usage_date: 'eq.' + record.usage_date,
+      searches_today: 'eq.' + record.searches_today, emails_today: 'eq.' + record.emails_today
+    });
+    const response = await fetch(supabaseUrl + '/rest/v1/jobhunta_users?' + match, {
+      method: 'PATCH',
+      headers: supabaseHeaders({ Prefer: 'return=representation' }),
+      body: JSON.stringify(changes),
+      signal: AbortSignal.timeout(6000)
+    }).catch(() => fail(503, 'Usage is temporarily unavailable.'));
+    if (!response.ok) fail(503, 'Usage is temporarily unavailable.');
+    if ((await response.json()).length) return quota.usageDate;
   }
-  saveStore(userRecord.id);
-}
-
-async function consumeQuota(userId, kind) {
-  if (!userId) return null;
-  const record = await findUserById(userId);
-  if (!record) return null;
-  const quota = getUserQuotaStatus(record);
-  if (kind === 'search') {
-    if (quota.dailySearchLimit !== null && quota.searchesToday >= quota.dailySearchLimit) {
-      fail(429, `Daily search limit reached (${quota.dailySearchLimit}/day on ${quota.label} tier). Upgrade your tier to continue searching.`);
-    }
-    record.usage_date = quota.usageDate;
-    record.searches_today = quota.searchesToday + 1;
-    record.emails_today = quota.emailsToday;
-  } else if (kind === 'email') {
-    if (quota.dailyEmailLimit !== null && quota.emailsToday >= quota.dailyEmailLimit) {
-      fail(429, `Daily email limit reached (${quota.dailyEmailLimit}/day on ${quota.label} tier). Upgrade your tier to send more emails today.`);
-    }
-    record.usage_date = quota.usageDate;
-    record.searches_today = quota.searchesToday;
-    record.emails_today = quota.emailsToday + 1;
-  }
-  await persistUserUsage(record);
-  return getUserQuotaStatus(record);
+  fail(503, 'Usage changed during the request. Try again.');
 }
 
 async function findUserByEmail(email) {
@@ -439,6 +432,7 @@ async function loadFromSupabase(userId = 'default') {
         ws.settings = {
           senderName: String(row.settings.senderName || ''),
           senderService: String(row.settings.senderService || ''),
+          savedSearches: normalizeSavedSearches(row.settings.savedSearches),
           defaultFollowUpDays: Number(row.settings.defaultFollowUpDays) || 4,
           templates: Array.isArray(row.settings.templates) && row.settings.templates.length
             ? row.settings.templates
@@ -458,53 +452,40 @@ async function loadFromSupabase(userId = 'default') {
   }
 }
 
-async function syncToSupabase(userId = 'default', removedIds = []) {
-  if (!supabaseConfigured || !userId) return;
+async function syncToSupabase(userId, leadChanges) {
   const ws = getWorkspace(userId);
   try {
-    const wsPayload = {
-      id: userId,
-      settings: ws.settings,
-      auth: ws.auth ? { sealed: sealCookie(ws.auth) } : null,
-      thread_owners: ws.threadOwners,
-      updated_at: new Date().toISOString()
-    };
-    const wsRes = await fetch(`${supabaseUrl}/rest/v1/jobhunta_workspace?on_conflict=id`, {
+    const response = await fetch(supabaseUrl + '/rest/v1/rpc/jobhunta_save_workspace', {
       method: 'POST',
-      headers: supabaseHeaders({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
-      body: JSON.stringify(wsPayload),
-      signal: AbortSignal.timeout(7000)
+      headers: supabaseHeaders(),
+      body: JSON.stringify({
+        workspace: { id: userId, settings: ws.settings, auth: ws.auth ? { sealed: sealCookie(ws.auth) } : null,
+          thread_owners: ws.threadOwners, updated_at: new Date().toISOString() },
+        lead_rows: leadChanges ? ws.leads.map(lead => leadToSupabaseRow(lead, userId)) : [],
+        removed_ids: (leadChanges || []).map(id => dbRowId(userId, id))
+      }),
+      signal: AbortSignal.timeout(10000)
     });
-    if (removedIds.length) {
-      const inList = removedIds.map(id => `"${dbRowId(userId, id).replace(/"/g, '')}"`).join(',');
-      await fetch(`${supabaseUrl}/rest/v1/jobhunta_leads?user_id=eq.${encodeURIComponent(userId)}&id=in.(${encodeURIComponent(inList)})`, {
-        method: 'DELETE',
-        headers: supabaseHeaders({ Prefer: 'return=minimal' }),
-        signal: AbortSignal.timeout(6000)
-      });
-    }
-    if (ws.leads.length) {
-      const rows = ws.leads.map(lead => leadToSupabaseRow(lead, userId));
-      await fetch(`${supabaseUrl}/rest/v1/jobhunta_leads?on_conflict=id`, {
-        method: 'POST',
-        headers: supabaseHeaders({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
-        body: JSON.stringify(rows),
-        signal: AbortSignal.timeout(9000)
-      });
-    }
-    if (wsRes.ok) {
-      supabaseStatus = { configured: true, connected: true, error: null };
-    }
+    if (!response.ok) throw new Error('Supabase returned HTTP ' + response.status + '.');
+    supabaseStatus = { configured: true, connected: true, error: null };
   } catch (error) {
     supabaseStatus = { configured: true, connected: false, error: error.message };
+    fail(503, 'Workspace could not be saved to Supabase. Try again.');
   }
 }
 
 let writeQueue = Promise.resolve();
-function saveStore(userId = 'default', removedIds = []) {
+function saveStore(userId = 'default', leadChanges = null) {
   writeQueue = writeQueue.catch(() => {}).then(async () => {
-    await writeFile(dataFilePath, JSON.stringify(store, null, 2), 'utf8').catch(() => {});
-    await syncToSupabase(userId, removedIds);
+    if (supabaseConfigured) await syncToSupabase(userId, leadChanges);
+    if (!isServerless) {
+      try {
+        await writeFile(dataFilePath, JSON.stringify(store, null, 2), 'utf8');
+      } catch (error) {
+        if (!supabaseConfigured) fail(503, 'Workspace could not be saved to disk. Try again.');
+        console.error('Local workspace backup failed:', error.code);
+      }
+    }
   });
   return writeQueue;
 }
@@ -559,7 +540,14 @@ async function provider(url, options, label) {
     fail(502, `${label} could not be reached. Check the connection and try again.`);
   }
   if (!response.ok) {
-    if (label === 'Gmail' && response.status === 401) fail(401, 'Gmail authorization expired. Reconnect your mailbox.');
+    if (label === 'Gmail') {
+      const expired = response.status === 401;
+      throw Object.assign(new Error(expired ? 'Gmail authorization expired. Reconnect your mailbox.' :
+        'Gmail returned HTTP ' + response.status + '.'), {
+        status: expired ? 401 : 502,
+        providerRejected: response.status >= 400 && response.status < 500
+      });
+    }
     fail(502, `${label} returned HTTP ${response.status}.`);
   }
   return response.json();
@@ -582,7 +570,7 @@ async function gmail(session, path, payload) {
         session.tokens = { ...session.tokens, ...tokens, expires: Date.now() + tokens.expires_in * 1000 };
         if (ws.auth && ws.auth.mailbox === session.mailbox) {
           ws.auth.tokens = session.tokens;
-          saveStore(userId);
+          saveStore(userId).catch(console.error);
         }
       }).finally(() => { session.refresh = null; });
     await session.refresh;
@@ -704,12 +692,20 @@ async function send(session, data) {
       'Content-Transfer-Encoding: base64');
     const encodedBody = Buffer.from(body).toString('base64').match(/.{1,76}/g).join('\r\n');
     const raw = Buffer.from(headers.join('\r\n') + '\r\n\r\n' + encodedBody).toString('base64url');
-    const result = await gmail(session, 'messages/send', { raw, ...(threadId ? { threadId } : {}) });
+    const chargedOn = await consumeQuota(session.userId, 'email');
+    let result;
+    try {
+      result = await gmail(session, 'messages/send', { raw, ...(threadId ? { threadId } : {}) });
+    } catch (error) {
+      // A transport failure has an unknown delivery outcome.
+      if (error.providerRejected) await consumeQuota(session.userId, 'email', chargedOn).catch(console.error);
+      throw error;
+    }
     const userId = session.userId || 'default';
     const ws = getWorkspace(userId);
     session.threadOwners.set(result.threadId, session.mailbox);
     ws.threadOwners[result.threadId] = session.mailbox;
-    saveStore(userId);
+    saveStore(userId).catch(console.error);
     return result;
   })();
   session.sends.set(key, operation);
@@ -1021,7 +1017,7 @@ async function searchOverpassFallback(cleanIndustry, city) {
   }));
 }
 
-async function streamSearch(req, res, industry, city, rankMode = 'all') {
+async function streamSearch(req, res, industry, city, rankMode = 'all', onFailure) {
   const cleanIndustry = (industry || '').trim();
   if (!/^[\p{L}\p{M}\p{N} .,'’&/()-]{2,50}$/u.test(cleanIndustry) ||
       !/^[\p{L}\p{M}\p{N} .,'’()-]{2,75}$/u.test(city)) {
@@ -1128,6 +1124,7 @@ async function streamSearch(req, res, industry, city, rankMode = 'all') {
         }
       }
     } catch (error) {
+      await onFailure?.();
       sendEvent({ type: 'error', error: error.message || 'Search unavailable.' });
     }
   }
@@ -1136,12 +1133,29 @@ async function streamSearch(req, res, industry, city, rankMode = 'all') {
   if (!res.writableEnded) res.end();
 }
 
-async function search(industry, city) {
+function normalizeSavedSearches(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter(item => item && typeof item.id === 'string' &&
+    typeof item.industry === 'string' && typeof item.city === 'string' &&
+    item.industry.trim() && item.city.trim()).slice(0, 25).map(item => ({
+    id: item.id.slice(0, 64),
+    industry: item.industry.trim().slice(0, 50),
+    city: item.city.trim().slice(0, 75),
+    rankMode: ['low', 'shopify'].includes(item.rankMode) ? item.rankMode : 'all'
+  }));
+}
+
+function validateSearch(industry, city) {
   const cleanIndustry = (industry || '').trim();
   if (!/^[\p{L}\p{M}\p{N} .,'’&/()-]{2,50}$/u.test(cleanIndustry) ||
       !/^[\p{L}\p{M}\p{N} .,'’()-]{2,75}$/u.test(city)) {
     fail(400, 'Choose or enter an industry and enter a city.');
   }
+  return cleanIndustry;
+}
+
+async function search(industry, city) {
+  const cleanIndustry = validateSearch(industry, city);
   const key = cleanIndustry.toLowerCase() + '/' + city.toLowerCase();
   if (searches.has(key)) return searches.get(key);
 
@@ -1693,7 +1707,7 @@ function hydrateSession(session, rawAuthCookie, rawUserCookie) {
   }
   const ws = getWorkspace(session.userId || 'default');
   const cookieAuth = unsealCookie(rawAuthCookie);
-  if (cookieAuth?.mailbox && cookieAuth?.tokens && (!cookieAuth.userId || cookieAuth.userId === session.userId)) {
+  if (session.userId && cookieAuth?.mailbox && cookieAuth?.tokens && cookieAuth.userId === session.userId) {
     session.mailbox = cookieAuth.mailbox;
     session.tokens = cookieAuth.tokens;
   } else if (session.userId && ws.auth?.mailbox && ws.auth?.tokens) {
@@ -1703,9 +1717,8 @@ function hydrateSession(session, rawAuthCookie, rawUserCookie) {
     delete session.mailbox;
     delete session.tokens;
   }
-  if (cookieAuth?.oauth) {
-    session.oauth = cookieAuth.oauth;
-  }
+  session.oauth = session.userId && cookieAuth?.userId === session.userId ? cookieAuth.oauth : null;
+  session.threadOwners.clear();
   for (const [threadId, owner] of Object.entries(ws.threadOwners)) {
     session.threadOwners.set(threadId, owner);
   }
@@ -1736,13 +1749,14 @@ export async function handleRequest(req, res) {
       fail(403, 'Open Jobhunta directly to submit this request.');
     }
     const cookiesToSet = [];
-    const sessionToken = req.headers.cookie?.match(/(?:^|;\s*)jobhunta=([\w-]+)/)?.[1];
+    let sessionToken = req.headers.cookie?.match(/(?:^|;\s*)jobhunta=([\w-]+)/)?.[1];
     const rawAuthCookie = req.headers.cookie?.match(/(?:^|;\s*)jobhunta_auth=([\w.-]+)/)?.[1] || '';
     const rawUserCookie = req.headers.cookie?.match(/(?:^|;\s*)jobhunta_user=([\w.-]+)/)?.[1] || '';
     for (const [key, session] of sessions) if (session.expires < Date.now()) sessions.delete(key);
     let session = sessions.get(sessionToken);
     if (!session) {
-      const token = nonce();
+      const token = sessionToken || nonce();
+      sessionToken = token;
       session = { expires: Date.now() + maxAge, sends: new Map(), threadOwners: new Map() };
       hydrateSession(session, rawAuthCookie, rawUserCookie);
       sessions.set(token, session);
@@ -1840,8 +1854,8 @@ export async function handleRequest(req, res) {
       if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
       if (!gmailConfigured) fail(503, credentialError || 'Add a Google web OAuth client to enable Gmail.');
       const verifier = nonce();
-      const stateToken = sealCookie({ u: session.userId, v: verifier, r: activeRedirectUri, e: Date.now() + 600000 });
-      session.oauth = { state: stateToken, verifier, expires: Date.now() + 600000 };
+      const stateToken = nonce();
+      session.oauth = { state: stateToken, verifier, sessionToken, redirectUri: activeRedirectUri, expires: Date.now() + 600000 };
       writeAuthCookie({ mailbox: session.mailbox, tokens: session.tokens, oauth: session.oauth });
       const params = new URLSearchParams({
         client_id,
@@ -1858,13 +1872,12 @@ export async function handleRequest(req, res) {
     }
     if (req.method === 'GET' && path === '/oauth/callback') {
       const stateParam = url.searchParams.get('state') || '';
-      const unsealed = unsealCookie(stateParam);
-      const pending = unsealed?.v
-        ? { state: stateParam, userId: unsealed.u || session.userId || 'default', verifier: unsealed.v, redirectUri: unsealed.r || activeRedirectUri, expires: unsealed.e }
-        : session.oauth;
+      const pending = session.oauth;
       delete session.oauth;
-      if (!pending || pending.expires < Date.now() || stateParam !== pending.state ||
-          !url.searchParams.get('code')) return redirect('/?gmail=failed#inbox');
+      if (!session.userId || !pending || pending.expires < Date.now() ||
+          pending.sessionToken !== sessionToken || stateParam !== pending.state) return redirect('/?gmail=failed#inbox');
+      writeAuthCookie(session.tokens ? { mailbox: session.mailbox, tokens: session.tokens } : null);
+      if (!url.searchParams.get('code')) return redirect('/?gmail=failed#inbox');
       try {
         const tokens = await exchange({
           grant_type: 'authorization_code',
@@ -1875,17 +1888,17 @@ export async function handleRequest(req, res) {
         if (!tokens.refresh_token || !gmailScopes.every(scope => (tokens.scope || '').split(' ').includes(scope))) {
           return redirect('/?gmail=permissions#inbox');
         }
-        const candidate = { userId: pending.userId, tokens: { ...tokens, expires: Date.now() + tokens.expires_in * 1000 } };
+        const candidate = { userId: session.userId, tokens: { ...tokens, expires: Date.now() + tokens.expires_in * 1000 } };
         const account = await gmail(candidate, 'profile');
         if (!validEmail(account.emailAddress)) return redirect('/?gmail=failed#inbox');
-        const targetUserId = pending.userId || session.userId || 'default';
+        const targetUserId = session.userId;
         const ws = getWorkspace(targetUserId);
         session.userId = targetUserId;
         session.tokens = candidate.tokens;
         session.mailbox = account.emailAddress;
         ws.auth = { mailbox: account.emailAddress, tokens: candidate.tokens };
-        writeAuthCookie({ mailbox: session.mailbox, tokens: session.tokens });
         await saveStore(targetUserId);
+        writeAuthCookie({ mailbox: session.mailbox, tokens: session.tokens });
         return redirect('/#inbox');
       } catch { return redirect('/?gmail=failed#inbox'); }
     }
@@ -1920,9 +1933,11 @@ export async function handleRequest(req, res) {
     }
     if (req.method === 'POST' && path === '/api/workspace') {
       if (!session.userId) fail(401, 'Sign in to save your workspace.');
-      const ws = getWorkspace(session.userId);
       const payload = await readJson(req, 2000000);
-      let removedIds = [];
+      if (payload.userId !== session.userId) fail(409, 'The active workspace changed. Sign in again.');
+      const ws = getWorkspace(session.userId);
+      const previous = { leads: ws.leads, settings: ws.settings, threadOwners: { ...ws.threadOwners } };
+      let removedIds = null;
       if (Array.isArray(payload.leads)) {
         const incomingIds = new Set(payload.leads.map(l => l.id));
         removedIds = ws.leads.filter(l => l.id && !incomingIds.has(l.id)).map(l => l.id);
@@ -1940,6 +1955,7 @@ export async function handleRequest(req, res) {
         ws.settings = {
           senderName: String(payload.settings.senderName || '').slice(0, 120),
           senderService: String(payload.settings.senderService || '').slice(0, 300),
+          savedSearches: normalizeSavedSearches(payload.settings.savedSearches),
           defaultFollowUpDays: Math.max(0, Math.min(90, Number(payload.settings.defaultFollowUpDays) || 0)),
           templates: Array.isArray(payload.settings.templates) && payload.settings.templates.length
             ? payload.settings.templates.slice(0, 25).map(tpl => ({
@@ -1951,10 +1967,16 @@ export async function handleRequest(req, res) {
             : defaultTemplates
         };
       }
-      await saveStore(session.userId, removedIds);
+      try {
+        await saveStore(session.userId, removedIds);
+      } catch (error) {
+        Object.assign(ws, previous);
+        throw error;
+      }
       return json({ ok: true, supabase: supabaseStatus });
     }
     if (req.method === 'POST' && path === '/api/disconnect') {
+      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
       const targetUserId = session.userId || 'default';
       const ws = getWorkspace(targetUserId);
       delete session.tokens;
@@ -1965,29 +1987,41 @@ export async function handleRequest(req, res) {
       return json({ ok: true });
     }
     if (req.method === 'GET' && path === '/api/search') {
-      if (session.userId) await consumeQuota(session.userId, 'search');
+      if (!session.userId) fail(401, 'Sign in to search for businesses.');
+      const city = (url.searchParams.get('city') || '').trim();
+      const industry = validateSearch(url.searchParams.get('industry'), city);
+      const chargedOn = await consumeQuota(session.userId, 'search');
       const rankMode = url.searchParams.get('rankMode') || 'all';
       if (url.searchParams.get('stream') === '1') {
-        return await streamSearch(req, res, url.searchParams.get('industry'), (url.searchParams.get('city') || '').trim(), rankMode);
+        return await streamSearch(req, res, industry, city, rankMode,
+          () => consumeQuota(session.userId, 'search', chargedOn).catch(console.error));
       }
-      return json(await search(url.searchParams.get('industry'), (url.searchParams.get('city') || '').trim()));
+      try {
+        return json(await search(industry, city));
+      } catch (error) {
+        await consumeQuota(session.userId, 'search', chargedOn).catch(console.error);
+        throw error;
+      }
     }
     if (req.method === 'POST' && path === '/api/enrich') {
+      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
       const { website } = await readJson(req);
       if (typeof website !== 'string' || !website.trim()) fail(400, 'Provide a website URL to scan.');
       return json(await fetchWebsiteEmails(website.trim()));
     }
     if (req.method === 'POST' && path === '/api/analyze') {
+      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
       const { lead } = await readJson(req);
       if (!lead || typeof lead !== 'object') fail(400, 'Provide business details to analyze.');
       const ws = getWorkspace(session.userId || 'default');
       return json(await analyzeLeadWithAi(lead, ws.settings));
     }
     if (req.method === 'POST' && path === '/api/send') {
-      if (session.userId) await consumeQuota(session.userId, 'email');
+      if (!session.userId) fail(401, 'Sign in to send email.');
       return json(await send(session, await readJson(req)));
     }
     if (req.method === 'POST' && path === '/api/thread') {
+      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
       const { id, mailbox } = await readJson(req);
       if (!session.mailbox) fail(401, 'Connect your Gmail account first.');
       if (session.mailbox !== mailbox) fail(403, 'Connect the Gmail account that sent this conversation.');
@@ -1996,7 +2030,7 @@ export async function handleRequest(req, res) {
       const ws = getWorkspace(targetUserId);
       session.threadOwners.set(id, mailbox);
       ws.threadOwners[id] = mailbox;
-      saveStore(targetUserId);
+      saveStore(targetUserId).catch(console.error);
       return json(await thread(session, id));
     }
     return json({ error: 'Page not found.' }, 404);

@@ -48,6 +48,7 @@
       <a href="#dashboard"><span aria-hidden="true">⊞</span> Dashboard</a>
       <a href="#discover"><span aria-hidden="true">⌕</span> Find businesses</a>
       <a href="#leads"><span aria-hidden="true">▤</span> Saved leads <small id="nav-leads-count" class="badge" hidden></small></a>
+      <a href="#broadcast"><span aria-hidden="true">◈</span> Broadcast</a>
       <a href="#inbox"><span aria-hidden="true">✉</span> Inbox</a>
       <a href="#profile"><span aria-hidden="true">◉</span> Profile &amp; Usage</a>
       <a href="#settings"><span aria-hidden="true">⚙</span> Settings</a>
@@ -97,6 +98,12 @@
           </label>
           <button>Search businesses <span aria-hidden="true">↗</span></button>
         </form>
+        <div class="actions saved-searches">
+          <select id="saved-search" aria-label="Saved searches"><option value="">Saved searches</option></select>
+          <button id="run-saved-search" class="secondary" type="button" disabled>Run search</button>
+          <button id="save-search" class="secondary" type="button">Save current search</button>
+          <button id="remove-search" class="secondary" type="button" disabled>Remove saved search</button>
+        </div>
         <form id="inspect-url" class="surface search url-inspector">
           <label>Direct Shopify Store or Business Website Inspector
             <input name="website" type="text" placeholder="Paste any Shopify store or business URL (e.g. allbirds.com or mystore.myshopify.com)…" required>
@@ -112,6 +119,9 @@
               <option value="shopify">Shopify stores only</option>
               <option value="ecommerce">Shopify &amp; WooCommerce only</option>
               <option value="low">Low-ranked only (Rank #21+)</option>
+              <option value="no-website">No website listed</option>
+              <option value="has-email">Public email found</option>
+              <option value="qualified">Confirmed opportunity</option>
             </select>
             <button id="stop-search" class="danger" type="button" hidden>Stop scraping</button>
             <button id="save-all" class="secondary" type="button" hidden>Save all results</button>
@@ -156,6 +166,9 @@
               <option value="Bounced">Bounced</option>
             </select>
           </label>
+          <label>Pipeline stage
+            <select id="filter-stage"><option value="">All stages</option></select>
+          </label>
           <label>Platform
             <select id="filter-platform">
               <option value="">All platforms</option>
@@ -193,6 +206,9 @@
       </section>
       <section id="profile" class="page" hidden>
         <div id="profile-content"></div>
+      </section>
+      <section id="broadcast" class="page" hidden>
+        <div id="broadcast-content"></div>
       </section>
       <section id="settings" class="page" hidden>
         <div id="settings-content"></div>
