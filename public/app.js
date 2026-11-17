@@ -700,7 +700,7 @@ function renderLeads() {
   const summary = $('#lead-summary');
   if (summary) {
     summary.textContent = leads.length
-      ? `Showing ${filtered.length} of ${leads.length} saved lead${leads.length === 1 ? '' : 's'} — click any business card to open its full dossier & AI lead analyzer.`
+      ? `Showing ${filtered.length} of ${leads.length} saved lead${leads.length === 1 ? '' : 's'} — select a business name to open its dossier.`
       : '';
   }
 
@@ -712,22 +712,37 @@ function renderLeads() {
     const platformPill = (lead.platform && lead.platform !== 'Custom / Website')
       ? create('span', lead.platform, 'pill')
       : '';
-    return row(lead, [
-      lead.industry, lead.city, lead.email, lead.phone, lead.address, lead.due && 'Follow up ' + lead.due
-    ], [
-      website(lead.website, 'Website'),
-      ...socialLinks(lead),
-      website(lead.source, 'Listing'),
-      platformPill,
-      create('span', stages[stageOf(lead)], 'pill'),
-      create('span', status, statusPillClass(status)),
-      lead.aiBrief ? create('span', '✦ AI Pitch', 'pill') : '',
-      enrichBtn,
-      button('View business', () => openBusinessPage(lead), true),
-      button('Edit', () => editLead(lead), true),
+    const card = create('article', '', 'surface saved-lead-card');
+    const heading = create('div', '', 'saved-lead-heading');
+    const name = button(lead.name, () => openBusinessPage(lead), 'saved-lead-name');
+    const title = create('h3');
+    title.append(name);
+    const badges = create('div', '', 'actions');
+    const stage = stages[stageOf(lead)];
+    if (platformPill) badges.append(platformPill);
+    if (stage && stage !== status) badges.append(create('span', stage, 'pill'));
+    badges.append(create('span', status, statusPillClass(status)));
+    if (lead.aiBrief) badges.append(create('span', 'AI Pitch', 'pill'));
+    heading.append(title, badges);
+    card.append(heading);
+
+    const details = [lead.industry, lead.city, lead.email, lead.phone, lead.address,
+      lead.due && 'Follow up ' + lead.due].filter(Boolean);
+    if (details.length) card.append(create('p', details.join(' · '), 'saved-lead-details'));
+    if (lead.about) card.append(create('p', lead.about, 'saved-lead-about'));
+
+    const footer = create('div', '', 'saved-lead-footer');
+    const links = create('div', '', 'actions saved-lead-links');
+    links.append(...[website(lead.website, 'Website'), ...socialLinks(lead),
+      website(lead.source, 'Listing')].filter(Boolean));
+    const controls = create('div', '', 'actions');
+    if (enrichBtn) controls.append(enrichBtn);
+    controls.append(button('Edit', () => editLead(lead), true),
       button('Delete', () => deleteLead(lead), 'danger'),
-      button('Draft email', () => compose(lead))
-    ], () => openBusinessPage(lead));
+      button('Draft email', () => compose(lead)));
+    footer.append(links, controls);
+    card.append(footer);
+    return card;
   }) : [empty('▤', leads.length ? 'No matching leads' : 'No leads yet',
     leads.length ? 'Try clearing or changing your search and status filters.' : 'Save a business from search or add a contact manually.')]));
 }

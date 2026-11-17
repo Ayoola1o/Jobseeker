@@ -74,3 +74,13 @@ dialog{border:1px solid var(--line);border-radius:16px;color:var(--ink);backgrou
 .saved-searches select { width: auto; max-width: 100%; }
 .qualification { margin-top: 18px; }
 .qualification textarea { min-height: 90px; }
+
+.saved-lead-card { display: grid; gap: 10px; min-width: 0; padding: 16px; margin-bottom: 10px; }
+.saved-lead-heading, .saved-lead-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
+.saved-lead-heading h3 { flex: 1 1 min(100%, 280px); min-width: 0; margin: 0; }
+.saved-lead-card .saved-lead-name { padding: 0; background: transparent; color: var(--ink); text-align: left; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.saved-lead-name:hover { text-decoration: underline; }
+.saved-lead-details, .saved-lead-about { margin: 0; overflow-wrap: anywhere; color: var(--muted); font-size: 13px; }
+.saved-lead-about { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.saved-lead-footer { border-top: 1px solid var(--line); padding-top: 10px; }
+.saved-lead-links a { font-size: 13px; }
