@@ -46,3 +46,19 @@ SESSION_SECRET of at least 32 characters in the deployment environment. Use the 
 secret across instances. Changing it invalidates old sessions and encrypted Gmail
 connections. Users may need to sign in and reconnect Gmail. Legacy single-user
 records retain the private default workspace owner until explicitly assigned.
+
+## Business discovery
+
+Choose Local businesses or Online websites and enter comma-separated related terms
+and locations. Use Generate queries to preview editable Google operators or open
+the searches in Google. Paste business URLs or import directory CSV files from
+Saved leads. Include the listing URL in the CSV source column to retain provenance.
+
+Set SERPER_API_KEY server-side to enable automated Google web search. Set
+GOOGLE_PLACES_API_KEY with Places API (New) enabled to include Google Maps
+references. Google Places lookups request place IDs only. The app opens those
+references in Google Maps and saves lead details from other sources.
+
+A submitted batch uses one search. Up to 12 term/location combinations and 12 web
+queries run per batch. Repeated businesses within the batch count once toward
+the daily business-result quota. Google Maps references do not consume that quota.

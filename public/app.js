@@ -1,3 +1,4 @@
+import { platformDomains, searchList, googleQueries } from './discovery.mjs';
 import { readBusinessCsv, writeBusinessCsv } from './csv.mjs';
 
 const $ = selector => document.querySelector(selector);
@@ -197,9 +198,13 @@ function row(item, details, actions, onSelect) {
 
 function applyEnrichmentToItem(item, found) {
   if (found.email && !item.email) item.email = found.email;
+  if (found.phone && !item.phone) {
+    item.phone = found.phone;
+    item.phoneSource = found.phoneSource;
+  }
   if (found.website && Array.isArray(found.emails)) {
     item.emailSources = { ...item.emailSources };
-    for (const email of found.emails) item.emailSources[norm(email)] = found.website;
+    for (const email of found.emails) item.emailSources[norm(email)] = found.emailSources?.[email] || found.website;
   }
   if (Array.isArray(found.emails) && found.emails.length) {
     item.emails = [...new Set([...(item.emails || []), ...found.emails])];
@@ -239,7 +244,7 @@ function updateScrapeBanner() {
   if (!banner || !statusEl || !metricsEl) return;
 
   const scanningWebsites = results.filter(item => item.scanning).length;
-  const pendingWebsites = results.filter(item => item.website && !item.email && !item.scanned && !item.scanning).length;
+  const pendingWebsites = results.filter(item => item.website && (!item.email || item.targetPlatform) && !item.scanned && !item.scanning).length;
   const activeEnrichment = scanningWebsites > 0 || pendingWebsites > 0;
   const isWorking = streamActive || activeEnrichment;
 
@@ -499,6 +504,7 @@ function getVisibleSearchResults() {
   if (mode === 'no-website') return results.filter(item => !item.website);
   if (mode === 'has-email') return results.filter(item => item.email);
   if (mode === 'qualified') return results.filter(item => duplicate(item)?.finding?.confirmed);
+  if (mode === 'target-platform') return results.filter(item => item.targetPlatform && item.platform === item.targetPlatform);
   if (mode === 'shopify') return results.filter(item => item.platform === 'Shopify');
   if (mode === 'ecommerce') return results.filter(item => item.platform === 'Shopify' || item.platform === 'WooCommerce');
   if (mode === 'low') return results.filter(item => (item.searchRank || 0) >= 21);
@@ -564,9 +570,9 @@ function renderResults() {
       ? button('Find email', event => enrichItemEmail(item, event.currentTarget), true)
       : '';
     const platformPill = (item.platform && item.platform !== 'Custom / Website')
-      ? create('span', item.platform, 'pill')
+      ? create('span', [item.platform, item.platformConfidence].filter(Boolean).join(' · '), 'pill')
       : '';
-    return row(item, [item.industry, item.city, item.address, item.email, item.phone], [
+    return row(item, [item.discoveryProvider, item.industry, item.city, item.address, item.email, item.phone], [
       rankPill,
       platformPill,
       statusPill,
@@ -883,7 +889,12 @@ function renderBusinessPage() {
     kvItem('City', lead.city || 'Not specified'),
     kvItem('Street Address', lead.address || 'Not listed'),
     kvItem('Phone Number', lead.phone || 'Not listed'),
+    kvItem('Phone source', website(lead.phoneSource, 'Open source page') || 'Source not recorded'),
+    kvItem('Contact form', website(lead.contactFormSource, 'Open page with form') || 'Not detected'),
     kvItem('Primary Email', lead.email || 'Needs email'),
+    kvItem('Contact page', website(lead.contactPage, 'Open contact page') || 'Not found'),
+    kvItem('Platform evidence', [lead.platformConfidence, lead.platformEvidence].filter(Boolean).join(' · ') || 'Not verified'),
+    kvItem('Discovery query', lead.discoveryQuery || 'Not recorded'),
     kvItem('Email source', website(lead.emailSources?.[norm(lead.email)], 'Open scanned website') ||
       (lead.email ? 'Source not recorded' : 'No email found')),
     kvItem('All Discovered Emails', allEmails.length ? allEmails.join(', ') : 'None found yet'),
@@ -1924,22 +1935,45 @@ function renderSavedSearches() {
   $('#run-saved-search').disabled = $('#remove-search').disabled = !select.value;
 }
 
+const discoveryFields = ['industry', 'city', 'rankMode', 'mode', 'terms', 'locations', 'platform', 'sources', 'queries', 'urls'];
+const searchForm = $('#search');
+for (const platform of Object.keys(platformDomains)) $('#discovery-platform').add(new Option(platform, platform));
+
+function renderGoogleLinks() {
+  const queries = searchForm.elements.queries.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(0, 12);
+  $('#google-query-links').replaceChildren(...queries.map(query =>
+    website('https://www.google.com/search?' + new URLSearchParams({ q: query }), query)
+  ));
+}
+searchForm.elements.queries.oninput = renderGoogleLinks;
+$('#preview-discovery').onclick = () => {
+  if (!searchForm.reportValidity()) return;
+  const { industry, city, terms, locations, platform, mode } = Object.fromEntries(new FormData(searchForm));
+  const keywords = searchList([industry, terms].join(','), 4);
+  const areas = [city.trim(), ...searchList(locations, 4)].filter(Boolean);
+  if (mode === 'local' && !areas.length) { report('Enter a location for local discovery.', true); return; }
+  searchForm.elements.queries.value = keywords.flatMap(term => (areas.length ? areas : ['']).flatMap(area =>
+    googleQueries(term, area, platform, mode === 'online'))).slice(0, 12).join('\n');
+  renderGoogleLinks();
+};
+
 $('#saved-search').onchange = renderSavedSearches;
 $('#save-search').onclick = () => {
   const form = $('#search');
   if (!form.reportValidity()) return;
-  const { industry, city, rankMode } = Object.fromEntries(new FormData(form));
+  const data = new FormData(form);
+  const criteria = Object.fromEntries(discoveryFields.map(key => [key, String(data.get(key) || '').trim()]));
   const saved = settings.savedSearches || [];
-  if (industry.trim().length < 2 || city.trim().length < 2) {
-    report('Enter an industry and location.', true);
+  if (criteria.industry.length < 2 || (!criteria.city && !criteria.locations && criteria.mode !== 'online')) {
+    report('Enter an industry and a location for local discovery.', true);
     return;
   }
-  if (saved.some(item => norm(item.industry) === norm(industry) && norm(item.city) === norm(city) && item.rankMode === rankMode)) {
+  if (saved.some(item => discoveryFields.every(key => norm(item[key]) === norm(criteria[key])))) {
     report('This search is already saved.');
     return;
   }
   if (saved.length >= 25) { report('Remove a saved search before adding another.', true); return; }
-  settings.savedSearches = [...saved, { id: crypto.randomUUID(), industry: industry.trim(), city: city.trim(), rankMode }];
+  settings.savedSearches = [...saved, { id: crypto.randomUUID(), ...criteria }];
   persist();
   renderSavedSearches();
 };
@@ -1952,7 +1986,9 @@ $('#run-saved-search').onclick = () => {
   const saved = settings.savedSearches?.find(item => item.id === $('#saved-search').value);
   if (!saved) return;
   const form = $('#search');
-  for (const key of ['industry', 'city', 'rankMode']) form.elements.namedItem(key).value = saved[key];
+  const defaults = { mode: 'local', sources: 'combined', rankMode: 'all' };
+  for (const key of discoveryFields) form.elements.namedItem(key).value = saved[key] || defaults[key] || '';
+  renderGoogleLinks();
   form.requestSubmit();
 };
 for (const [key, label] of Object.entries(stages)) $('#filter-stage').add(new Option(label, key));
@@ -1961,7 +1997,7 @@ $('#filter-stage').onchange = renderLeads;
 $('#search').onsubmit = async event => {
   event.preventDefault();
   const form = event.currentTarget;
-  const submit = form.querySelector('button');
+  const submit = form.querySelector('button[type=submit]');
   if (searchController) searchController.abort();
   searchController = new AbortController();
   const generation = ++searchGeneration;
@@ -1969,18 +2005,21 @@ $('#search').onsubmit = async event => {
   results = [];
   resultsPage = 1;
   streamActive = true;
-  currentScrapeStep = 'Connecting to Bing Maps…';
+  currentScrapeStep = 'Preparing discovery…';
+  $('#discovery-log').replaceChildren();
+  $('#place-references').replaceChildren();
+  $('#discovery-activity').hidden = true;
   submit.disabled = true;
   report();
   updateScrapeBanner();
   $('#save-all').hidden = true;
   $('#results-pagination').hidden = true;
   $('#results-count').textContent = '';
-  $('#results').replaceChildren(empty('⌕', 'Scraping live from Bing Maps…', 'Businesses will appear here in real time as each page is scraped.'));
+  $('#results').replaceChildren(empty('⌕', 'Searching businesses…', 'Results appear as each source responds.'));
 
   try {
     const params = new URLSearchParams(new FormData(form));
-    params.set('stream', '1');
+    params.set('expanded', '1');
     const response = await fetch('/api/search?' + params, { signal: searchController.signal });
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
@@ -2009,6 +2048,13 @@ $('#search').onsubmit = async event => {
         if (msg.type === 'status') {
           currentScrapeStep = msg.message;
           updateScrapeBanner();
+        } else if (msg.type === 'query') {
+          $('#discovery-activity').hidden = false;
+          $('#discovery-log').append(create('li', msg.message));
+        } else if (msg.type === 'place') {
+          $('#discovery-activity').hidden = false;
+          const link = website(msg.url, 'Open in Google Maps · ' + msg.label);
+          if (link) $('#place-references').append(link);
         } else if (msg.type === 'business' && msg.item) {
           if (!results.some(existing => existing.id === msg.item.id)) {
             msg.item.discoverySearch = [params.get('industry'), params.get('city'), params.get('rankMode')].join(' · ');
@@ -2026,7 +2072,10 @@ $('#search').onsubmit = async event => {
     }
 
     if (generation === searchGeneration && !results.length) {
-      $('#results').replaceChildren(empty('⌕', 'No matching businesses', 'Try a nearby city or another industry.'));
+      const hasPlaces = $('#place-references').childElementCount > 0;
+      if (hasPlaces) $('#discovery-activity').open = true;
+      $('#results').replaceChildren(empty('⌕', hasPlaces ? 'Google Maps references found' : 'No matching businesses',
+        hasPlaces ? 'Open the references in Source activity.' : 'Try a nearby city or another industry.'));
     }
   } catch (error) {
     if (error.name !== 'AbortError') {

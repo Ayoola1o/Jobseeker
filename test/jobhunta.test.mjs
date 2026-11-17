@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { googleQueries, businessKeys } from '../public/discovery.mjs';
 import assert from 'node:assert/strict';
 import { readBusinessCsv, writeBusinessCsv } from '../public/csv.mjs';
 import {
@@ -16,6 +17,23 @@ import {
   getUserQuotaStatus,
   industries
 } from '../server.mjs';
+
+test('platform discovery generates hosted and custom-domain queries and preserves separate branches', () => {
+  const queries = googleQueries('skin care', '', 'Shopify', true);
+  assert.ok(queries[0].startsWith('site:myshopify.com'));
+  assert.match(queries[1], /"add to cart"/);
+  const first = { id: 'one', name: 'Clinic', city: 'Ikeja', address: '12 Allen Ave', website: 'https://clinic.example' };
+  const second = { ...first, id: 'two', address: '18 Allen Ave' };
+  assert.equal(businessKeys(first, false).some(key => businessKeys(second, false).includes(key)), false);
+  assert.ok(businessKeys(first, true).some(key => businessKeys(second, true).includes(key)));
+
+  const hosted = detectPlatformAndTech('', 'https://newsletter.beehiiv.com');
+  assert.equal(hosted.platform, 'Beehiiv');
+  assert.equal(hosted.platformConfidence, 'Confirmed');
+  const marketing = detectPlatformAndTech('<script src="https://js.hs-scripts.com/123.js"></script>');
+  assert.equal(marketing.platformConfidence, 'Unknown');
+  assert.ok(marketing.techStack.includes('HubSpot Marketing'));
+});
 
 test('CSV import supports standard Jobhunta columns and round-trips via writeBusinessCsv', () => {
   const sampleLeads = [

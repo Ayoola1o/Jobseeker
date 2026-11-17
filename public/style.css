@@ -84,3 +84,10 @@ dialog{border:1px solid var(--line);border-radius:16px;color:var(--ink);backgrou
 .saved-lead-about { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .saved-lead-footer { border-top: 1px solid var(--line); padding-top: 10px; }
 .saved-lead-links a { font-size: 13px; }
+
+.discovery-options { grid-column: 1 / -1; padding: 8px 0; }
+.discovery-options .stack { display: grid; gap: 12px; margin-top: 12px; }
+.discovery-options textarea { min-height: 85px; }
+.discovery-options summary, .discovery-activity summary { cursor: pointer; }
+.discovery-activity { padding: 12px 16px; margin-bottom: 12px; }
+#google-query-links a, #place-references a { overflow-wrap: anywhere; }
