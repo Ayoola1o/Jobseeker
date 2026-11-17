@@ -1279,12 +1279,12 @@ function renderProfile() {
   const container = $('#profile-content');
   if (!container) return;
 
-  const tierList = [
-    { key: 'basic', label: 'Basic', dailySearchLimit: 50, dailyEmailLimit: 10 },
-    { key: 'silver', label: 'Silver', dailySearchLimit: 120, dailyEmailLimit: 30 },
-    { key: 'gold', label: 'Gold', dailySearchLimit: 300, dailyEmailLimit: 50 },
-    { key: 'premium', label: 'Premium', dailySearchLimit: 500, dailyEmailLimit: 100 },
-    { key: 'diamond', label: 'Diamond', dailySearchLimit: null, dailyEmailLimit: null }
+  const tierList = account.tiers?.length ? account.tiers : [
+    { key: 'basic', label: 'Basic', dailySearchLimit: 50, dailyResultLimit: 250, dailyEmailLimit: 10 },
+    { key: 'silver', label: 'Silver', dailySearchLimit: 20, dailyResultLimit: 500, dailyEmailLimit: 30 },
+    { key: 'gold', label: 'Gold', dailySearchLimit: 50, dailyResultLimit: 1500, dailyEmailLimit: 50 },
+    { key: 'premium', label: 'Premium', dailySearchLimit: 100, dailyResultLimit: 3000, dailyEmailLimit: 100 },
+    { key: 'diamond', label: 'Diamond', dailySearchLimit: null, dailyResultLimit: null, dailyEmailLimit: null }
   ];
 
   const usage = currentUser?.usage || {
@@ -1293,6 +1293,7 @@ function renderProfile() {
     dailySearchLimit: 50,
     dailyEmailLimit: 10,
     searchesToday: 0,
+    resultsToday: 0,
     emailsToday: 0,
     usageDate: new Date().toISOString().slice(0, 10)
   };
@@ -1349,6 +1350,7 @@ function renderProfile() {
 
   usageCard.append(
     addMeter('Business Searches Today', usage.searchesToday || 0, activeTier.dailySearchLimit),
+    addMeter('Search Results Today', usage.resultsToday || 0, activeTier.dailyResultLimit),
     addMeter('Outreach Emails Sent Today', usage.emailsToday || 0, activeTier.dailyEmailLimit),
     create('p', 'Daily counters reset automatically every UTC day at 00:00.', 'small')
   );
@@ -1365,6 +1367,7 @@ function renderProfile() {
     const list = create('ul');
     list.append(
       create('li', tier.dailySearchLimit === null ? 'Unlimited searches / day' : `${tier.dailySearchLimit} searches / day`),
+      create('li', tier.dailyResultLimit === null ? 'Unlimited search results / day' : `${tier.dailyResultLimit.toLocaleString()} search results / day`),
       create('li', tier.dailyEmailLimit === null ? 'Unlimited emails / day' : `${tier.dailyEmailLimit} emails / day`),
       create('li', 'Isolated Supabase workspace & AI pitches')
     );
@@ -1999,6 +2002,8 @@ $('#search').onsubmit = async event => {
             updateScrapeBanner();
             triggerEnrichmentWorkers(generation);
           }
+        } else if (msg.type === 'limit') {
+          report(msg.message);
         } else if (msg.type === 'error') {
           throw new Error(msg.error);
         }
@@ -2021,6 +2026,13 @@ $('#search').onsubmit = async event => {
       streamActive = false;
       searchController = null;
       updateScrapeBanner();
+      const userId = currentUser?.id;
+      if (userId) api('/api/status').then(status => {
+        if (generation === searchGeneration && currentUser?.id === userId && status.user?.id === userId) {
+          currentUser.usage = status.user.usage;
+          renderProfile();
+        }
+      }).catch(() => {});
     }
     submit.disabled = false;
   }

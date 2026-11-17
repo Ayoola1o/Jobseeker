@@ -256,11 +256,11 @@ function supabaseRowToLead(row, userId = 'default') {
 }
 
 export const USER_TIERS = {
-  basic: { key: 'basic', label: 'Basic', dailySearchLimit: 50, dailyEmailLimit: 10 },
-  silver: { key: 'silver', label: 'Silver', dailySearchLimit: 120, dailyEmailLimit: 30 },
-  gold: { key: 'gold', label: 'Gold', dailySearchLimit: 300, dailyEmailLimit: 50 },
-  premium: { key: 'premium', label: 'Premium', dailySearchLimit: 500, dailyEmailLimit: 100 },
-  diamond: { key: 'diamond', label: 'Diamond', dailySearchLimit: null, dailyEmailLimit: null }
+  basic: { key: 'basic', label: 'Basic', dailySearchLimit: 50, dailyResultLimit: 250, dailyEmailLimit: 10 },
+  silver: { key: 'silver', label: 'Silver', dailySearchLimit: 20, dailyResultLimit: 500, dailyEmailLimit: 30 },
+  gold: { key: 'gold', label: 'Gold', dailySearchLimit: 50, dailyResultLimit: 1500, dailyEmailLimit: 50 },
+  premium: { key: 'premium', label: 'Premium', dailySearchLimit: 100, dailyResultLimit: 3000, dailyEmailLimit: 100 },
+  diamond: { key: 'diamond', label: 'Diamond', dailySearchLimit: null, dailyResultLimit: null, dailyEmailLimit: null }
 };
 
 function todayUsageDate() {
@@ -273,13 +273,16 @@ export function getUserQuotaStatus(userRecord = {}) {
   const today = todayUsageDate();
   const sameDay = userRecord?.usage_date === today;
   const searchesToday = sameDay ? Math.max(0, Number(userRecord?.searches_today) || 0) : 0;
+  const resultsToday = sameDay ? Math.max(0, Number(userRecord?.results_today) || 0) : 0;
   const emailsToday = sameDay ? Math.max(0, Number(userRecord?.emails_today) || 0) : 0;
   return {
     tier: tier.key,
     label: tier.label,
     dailySearchLimit: tier.dailySearchLimit,
     dailyEmailLimit: tier.dailyEmailLimit,
+    dailyResultLimit: tier.dailyResultLimit,
     searchesToday,
+    resultsToday,
     emailsToday,
     usageDate: today
   };
@@ -304,27 +307,43 @@ async function findUserById(userId) {
   return store.users.find(u => u.id === userId) || null;
 }
 
-async function consumeQuota(userId, kind, refundDate = null) {
+async function consumeQuota(userId, kind, refundDate = null, requested = 1) {
   if (!userId) fail(401, 'Sign in to your Jobhunta account first.');
-  const field = kind === 'search' ? 'searches_today' : 'emails_today';
+  const field = { search: 'searches_today', email: 'emails_today', result: 'results_today' }[kind];
   for (let attempt = 0; attempt < 8; attempt++) {
     const record = await findUserById(userId);
     if (!record) fail(503, 'Usage is temporarily unavailable.');
     const quota = getUserQuotaStatus(record);
     if (refundDate && refundDate !== quota.usageDate) return;
-    const used = kind === 'search' ? quota.searchesToday : quota.emailsToday;
-    const limit = kind === 'search' ? quota.dailySearchLimit : quota.dailyEmailLimit;
-    if (!refundDate && limit !== null && used >= limit) fail(429, 'Daily ' + kind + ' limit reached.');
-    const changes = { usage_date: quota.usageDate, searches_today: quota.searchesToday, emails_today: quota.emailsToday };
-    changes[field] = Math.max(0, used + (refundDate ? -1 : 1));
+    const counters = { search: quota.searchesToday, email: quota.emailsToday, result: quota.resultsToday };
+    const limits = { search: quota.dailySearchLimit, email: quota.dailyEmailLimit, result: quota.dailyResultLimit };
+    const used = counters[kind];
+    const limit = limits[kind];
+    if (kind === 'search' && !refundDate && quota.dailyResultLimit !== null && quota.resultsToday >= quota.dailyResultLimit) {
+      fail(429, 'Daily search result limit reached. Your allowance resets at midnight UTC.');
+    }
+    const granted = limit === null ? requested : Math.max(0, Math.min(requested, limit - used));
+    if (!refundDate && !granted) {
+      if (kind === 'result') return 0;
+      fail(429, 'Daily ' + kind + ' limit reached.');
+    }
+    const changes = {
+      usage_date: quota.usageDate,
+      searches_today: quota.searchesToday,
+      emails_today: quota.emailsToday,
+      results_today: quota.resultsToday
+    };
+    changes[field] = Math.max(0, used + (refundDate ? -1 : granted));
+    const result = kind === 'result' ? granted : quota.usageDate;
     if (!supabaseConfigured) {
       Object.assign(record, changes);
       await saveStore(userId);
-      return quota.usageDate;
+      return result;
     }
     const match = new URLSearchParams({
       id: 'eq.' + userId, usage_date: 'eq.' + record.usage_date,
-      searches_today: 'eq.' + record.searches_today, emails_today: 'eq.' + record.emails_today
+      searches_today: 'eq.' + record.searches_today, emails_today: 'eq.' + record.emails_today,
+      results_today: 'eq.' + (record.results_today ?? 0), tier: 'eq.' + record.tier
     });
     const response = await fetch(supabaseUrl + '/rest/v1/jobhunta_users?' + match, {
       method: 'PATCH',
@@ -333,7 +352,7 @@ async function consumeQuota(userId, kind, refundDate = null) {
       signal: AbortSignal.timeout(6000)
     }).catch(() => fail(503, 'Usage is temporarily unavailable.'));
     if (!response.ok) fail(503, 'Usage is temporarily unavailable.');
-    if ((await response.json()).length) return quota.usageDate;
+    if ((await response.json()).length) return result;
   }
   fail(503, 'Usage changed during the request. Try again.');
 }
@@ -369,6 +388,7 @@ async function createUserAccount({ name, email, password, senderService = '', ti
     password_hash: hashPassword(password),
     tier: tierKey,
     searches_today: 0,
+    results_today: 0,
     emails_today: 0,
     usage_date: todayUsageDate(),
     created_at: new Date().toISOString()
@@ -1017,7 +1037,7 @@ async function searchOverpassFallback(cleanIndustry, city) {
   }));
 }
 
-async function streamSearch(req, res, industry, city, rankMode = 'all', onFailure) {
+async function streamSearch(res, industry, city, rankMode = 'all', reserveResults, onFailure) {
   const cleanIndustry = (industry || '').trim();
   if (!/^[\p{L}\p{M}\p{N} .,'’&/()-]{2,50}$/u.test(cleanIndustry) ||
       !/^[\p{L}\p{M}\p{N} .,'’()-]{2,75}$/u.test(city)) {
@@ -1031,18 +1051,40 @@ async function streamSearch(req, res, industry, city, rankMode = 'all', onFailur
   });
 
   let closed = false;
-  req.on('close', () => { closed = true; });
+  res.on('close', () => { closed = true; });
   const sendEvent = payload => {
     if (!closed && !res.writableEnded) {
       res.write(JSON.stringify(payload) + '\n');
     }
   };
-  const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   const subLocations = await resolveSearchLocations(city);
   const isStateBreakdown = subLocations.length > 1;
   const offsetConfigs = getSearchOffsets(rankMode === 'shopify' ? 'low' : rankMode, isStateBreakdown);
   const seen = new Set();
+  let stopped = false;
+  const emitBusinesses = async items => {
+    const fresh = [...new Map(items.filter(item => !seen.has(item.id)).map(item => [item.id, item])).values()];
+    if (closed || !fresh.length) return 0;
+    let granted;
+    try {
+      granted = await reserveResults(fresh.length);
+    } catch (error) {
+      stopped = true;
+      sendEvent({ type: 'error', error: error.message || 'Usage is temporarily unavailable.' });
+      return 0;
+    }
+    for (const item of fresh.slice(0, granted)) {
+      seen.add(item.id);
+      sendEvent({ type: 'business', item, totalFound: seen.size });
+    }
+    if (granted < fresh.length) {
+      stopped = true;
+      sendEvent({ type: 'limit', message: 'Daily search result limit reached. Your allowance resets at midnight UTC.' });
+    }
+    return granted;
+  };
+
 
   if (isStateBreakdown) {
     sendEvent({
@@ -1053,7 +1095,7 @@ async function streamSearch(req, res, industry, city, rankMode = 'all', onFailur
   }
 
   for (let locIndex = 0; locIndex < subLocations.length; locIndex++) {
-    if (closed) break;
+    if (closed || stopped) break;
     const subCity = subLocations[locIndex];
     const queries = rankMode === 'shopify'
       ? [`${cleanIndustry} store in ${subCity}`, `${cleanIndustry} boutique shop in ${subCity}`]
@@ -1062,7 +1104,7 @@ async function streamSearch(req, res, industry, city, rankMode = 'all', onFailur
     let emptyStreak = 0;
     for (const query of queries) {
       for (let idx = 0; idx < offsetConfigs.length; idx++) {
-        if (closed) break;
+        if (closed || stopped) break;
         const { first, page } = offsetConfigs[idx];
         sendEvent({
           type: 'status',
@@ -1088,16 +1130,8 @@ async function streamSearch(req, res, industry, city, rankMode = 'all', onFailur
           if (!response.ok) break;
           const html = await response.text();
           const items = parseBingMapsHtml(html, cleanIndustry, subCity, first, page);
-          let addedOnPage = 0;
-          for (const item of items) {
-            if (closed) break;
-            if (!seen.has(item.id)) {
-              seen.add(item.id);
-              addedOnPage++;
-              sendEvent({ type: 'business', item, totalFound: seen.size });
-              await pause(60);
-            }
-          }
+          const addedOnPage = await emitBusinesses(items);
+          if (stopped) break;
           if (addedOnPage === 0) {
             emptyStreak++;
             if (emptyStreak >= 2) break;
@@ -1111,18 +1145,11 @@ async function streamSearch(req, res, industry, city, rankMode = 'all', onFailur
     }
   }
 
-  if (seen.size === 0 && !closed) {
+  if (seen.size === 0 && !closed && !stopped) {
     sendEvent({ type: 'status', message: 'Checking OpenStreetMap fallback…', totalFound: 0 });
     try {
       const fallbackItems = await searchOverpassFallback(cleanIndustry, city);
-      for (const item of fallbackItems) {
-        if (closed) break;
-        if (!seen.has(item.id)) {
-          seen.add(item.id);
-          sendEvent({ type: 'business', item, totalFound: seen.size });
-          await pause(40);
-        }
-      }
+      await emitBusinesses(fallbackItems);
     } catch (error) {
       await onFailure?.();
       sendEvent({ type: 'error', error: error.message || 'Search unavailable.' });
@@ -1993,11 +2020,17 @@ export async function handleRequest(req, res) {
       const chargedOn = await consumeQuota(session.userId, 'search');
       const rankMode = url.searchParams.get('rankMode') || 'all';
       if (url.searchParams.get('stream') === '1') {
-        return await streamSearch(req, res, industry, city, rankMode,
+        return await streamSearch(res, industry, city, rankMode,
+          count => consumeQuota(session.userId, 'result', null, count),
           () => consumeQuota(session.userId, 'search', chargedOn).catch(console.error));
       }
       try {
-        return json(await search(industry, city));
+        const businesses = await search(industry, city);
+        const unique = [...new Map(businesses.map(item => [item.id, item])).values()];
+        if (!unique.length) return json([]);
+        const granted = await consumeQuota(session.userId, 'result', null, unique.length);
+        if (!granted) fail(429, 'Daily search result limit reached. Your allowance resets at midnight UTC.');
+        return json(unique.slice(0, granted));
       } catch (error) {
         await consumeQuota(session.userId, 'search', chargedOn).catch(console.error);
         throw error;

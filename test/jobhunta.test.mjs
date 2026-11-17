@@ -219,18 +219,26 @@ test('hashPassword and verifyPassword securely hash and verify user passwords', 
 
 test('USER_TIERS and getUserQuotaStatus enforce Basic through Diamond limits', () => {
   assert.equal(USER_TIERS.basic.dailySearchLimit, 50);
+  assert.equal(USER_TIERS.basic.dailyResultLimit, 250);
   assert.equal(USER_TIERS.basic.dailyEmailLimit, 10);
-  assert.equal(USER_TIERS.silver.dailySearchLimit, 120);
+  assert.equal(USER_TIERS.silver.dailySearchLimit, 20);
+  assert.equal(USER_TIERS.silver.dailyResultLimit, 500);
   assert.equal(USER_TIERS.silver.dailyEmailLimit, 30);
-  assert.equal(USER_TIERS.gold.dailySearchLimit, 300);
+  assert.equal(USER_TIERS.gold.dailySearchLimit, 50);
+  assert.equal(USER_TIERS.gold.dailyResultLimit, 1500);
   assert.equal(USER_TIERS.gold.dailyEmailLimit, 50);
-  assert.equal(USER_TIERS.premium.dailySearchLimit, 500);
+  assert.equal(USER_TIERS.premium.dailySearchLimit, 100);
+  assert.equal(USER_TIERS.premium.dailyResultLimit, 3000);
   assert.equal(USER_TIERS.premium.dailyEmailLimit, 100);
   assert.equal(USER_TIERS.diamond.dailySearchLimit, null);
+  assert.equal(USER_TIERS.diamond.dailyResultLimit, null);
   assert.equal(USER_TIERS.diamond.dailyEmailLimit, null);
 
   const diamondStatus = getUserQuotaStatus({ tier: 'diamond', searches_today: 999, emails_today: 500 });
   assert.equal(diamondStatus.tier, 'diamond');
   assert.equal(diamondStatus.dailySearchLimit, null);
   assert.equal(diamondStatus.dailyEmailLimit, null);
+  const today = new Date().toISOString().slice(0, 10);
+  assert.equal(getUserQuotaStatus({ tier: 'basic', usage_date: today, results_today: 249 }).resultsToday, 249);
+  assert.equal(getUserQuotaStatus({ tier: 'basic', usage_date: '2020-01-01', results_today: 250 }).resultsToday, 0);
 });

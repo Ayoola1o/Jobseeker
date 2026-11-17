@@ -8,11 +8,14 @@ create table if not exists public.jobhunta_users (
   name text not null default '',
   password_hash text not null,
   tier text not null default 'basic',
+  results_today integer not null default 0,
   searches_today integer not null default 0,
   emails_today integer not null default 0,
   usage_date text not null default '',
   created_at timestamptz not null default now()
 );
+
+alter table public.jobhunta_users add column if not exists results_today integer not null default 0;
 
 create index if not exists idx_jobhunta_users_email on public.jobhunta_users (email);
 
