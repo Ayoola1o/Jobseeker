@@ -504,7 +504,8 @@ function getVisibleSearchResults() {
   if (mode === 'no-website') return results.filter(item => !item.website);
   if (mode === 'has-email') return results.filter(item => item.email);
   if (mode === 'qualified') return results.filter(item => duplicate(item)?.finding?.confirmed);
-  if (mode === 'target-platform') return results.filter(item => item.targetPlatform && item.platform === item.targetPlatform);
+  if (mode === 'target-platform') return results.filter(item => item.targetPlatform &&
+    (item.platform === item.targetPlatform || item.techStack?.includes(item.targetPlatform)));
   if (mode === 'shopify') return results.filter(item => item.platform === 'Shopify');
   if (mode === 'ecommerce') return results.filter(item => item.platform === 'Shopify' || item.platform === 'WooCommerce');
   if (mode === 'low') return results.filter(item => (item.searchRank || 0) >= 21);

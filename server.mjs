@@ -1,4 +1,4 @@
-import { platformDomains, searchList, googleQueries, publicWebsite, businessKeys } from './public/discovery.mjs';
+import { platformDomains, searchList, googleQueries, publicWebsite, businessKeys, websiteIdentity } from './public/discovery.mjs';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, createHash, createCipheriv, createDecipheriv, scryptSync, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -1186,9 +1186,10 @@ async function googleDiscovery(query, term, city) {
   return (data.organic || []).flatMap(result => {
     const url = publicWebsite(result.link);
     if (!url) return [];
+    const identity = websiteIdentity(url);
     return [{
-      id: 'web:' + url.hostname.replace(/^www[.]/, ''),
-      name: result.title || url.hostname, website: url.origin, source: url.href,
+      id: 'web:' + identity,
+      name: result.title || url.hostname, website: identity.includes('/') ? url.href : url.origin, source: url.href,
       industry: term, city, discoveryQuery: query, discoveryProvider: 'Google web'
     }];
   });
@@ -1291,7 +1292,7 @@ async function streamDiscovery(res, params, userId) {
       send({ type: 'query', message: 'Google web automation is unconfigured. Use the Google query links or paste website URLs.' });
     }
     if (urls.length) await run('Imported websites', async () => urls.map(url => ({
-      id: 'web:' + url.hostname.replace(/^www[.]/, ''), name: url.hostname, website: url.href,
+      id: 'web:' + websiteIdentity(url), name: url.hostname, website: url.href,
       source: url.href, industry, city, discoveryProvider: 'Imported URL'
     })));
     const pairs = terms.flatMap(term => cities.map(location => ({ term, location }))).slice(0, 12);
@@ -1480,6 +1481,11 @@ export function detectPlatformAndTech(html = '', siteUrl = '') {
     ['WooCommerce', /wp-content[/]plugins[/]woocommerce|wc-blocks|wc-ajax/i, /woocommerce/i],
     ['Wix', /static[.]wixstatic[.]com|wix-thunderbolt/i, /wixstatic[.]com|wix[.]com/i],
     ['Beehiiv', /beehiiv[.]com[/](?:assets|static)[/]|beehiiv[.]cdn/i, /beehiiv[.]com/i],
+    ['Substack', /<meta[^>]*content=["']Substack["'][^>]*>/i, /substackcdn[.]com/i],
+    ['Kit'],
+    ['Mailchimp'],
+    ['MailerLite'],
+    ['Buttondown'],
     ['BigCommerce', /cdn[0-9]*[.]bigcommerce[.]com|stencil-utils/i, /bigcommerce[.]com/i],
     ['Squarespace', /static[0-9]*[.]squarespace[.]com|squarespace-cdn[.]com/i, /squarespace[.]com|sqsp[.]net/i],
     ['Webflow', /data-wf-site|website-files[.]com/i, /webflow[.]com/i],
@@ -1492,8 +1498,9 @@ export function detectPlatformAndTech(html = '', siteUrl = '') {
   let platformConfidence = 'Unknown';
   for (const [label, strong, weak] of fingerprints) {
     const domain = platformDomains[label];
-    const hosted = domain && (hostname === domain || hostname.endsWith('.' + domain));
-    const signal = html.match(strong)?.[0];
+    const hosted = domain && (hostname === domain || hostname.endsWith('.' + domain)) ||
+      label === 'Kit' && (hostname === 'ck.page' || hostname.endsWith('.ck.page'));
+    const signal = strong && html.match(strong)?.[0];
     if (!hosted && !signal) continue;
     platform = label;
     platformEvidence = hosted ? 'Hosted domain: ' + hostname : 'Page fingerprint: ' + signal;
@@ -1502,7 +1509,7 @@ export function detectPlatformAndTech(html = '', siteUrl = '') {
   }
   if (platformConfidence === 'Unknown') {
     for (const [label, , weak] of fingerprints) {
-      const signal = html.match(weak)?.[0];
+      const signal = weak && html.match(weak)?.[0];
       if (!signal) continue;
       platform = label;
       platformEvidence = 'Page reference: ' + signal;
@@ -1514,9 +1521,14 @@ export function detectPlatformAndTech(html = '', siteUrl = '') {
   const techStack = [];
   const checks = [
     ['HubSpot Marketing', /js[.]hs-scripts[.]com|hsforms[.]net/i],
-    ['Klaviyo', /klaviyo/i],
-    ['Mailchimp', /mailchimp/i],
-    ['Omnisend', /omnisend/i],
+    ['Kit', /f[.]convertkit[.]com|app[.]kit[.]com[/]forms|convertkit[.]com[/]assets/i],
+    ['Mailchimp', /list-manage[.]com|chimpstatic[.]com|mailchimp[.]com[/]embedcode/i],
+    ['MailerLite', /assets[.]mailerlite[.]com|mlcdn[.]com|mlsend[.]com[/]forms/i],
+    ['Buttondown', /buttondown[.](?:com|email)[/]api[/]emails[/]embed-subscribe/i],
+    ['Klaviyo', /klaviyo[.]com|klaviyo[.]js/i],
+    ['Omnisend', /omnisend[.]com|omnisnippet/i],
+    ['Brevo', /sibforms[.]com|sibautomation[.]com/i],
+    ['ActiveCampaign', /activehosted[.]com|trackcmp[.]net/i],
     ['Judge.me Reviews', /judge\.me/i],
     ['Loox Reviews', /loox\.io/i],
     ['Yotpo Reviews', /yotpo/i],

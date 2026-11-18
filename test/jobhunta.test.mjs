@@ -33,6 +33,14 @@ test('platform discovery generates hosted and custom-domain queries and preserve
   const marketing = detectPlatformAndTech('<script src="https://js.hs-scripts.com/123.js"></script>');
   assert.equal(marketing.platformConfidence, 'Unknown');
   assert.ok(marketing.techStack.includes('HubSpot Marketing'));
+  assert.equal(detectPlatformAndTech('', 'https://writer.substack.com').platform, 'Substack');
+  assert.equal(detectPlatformAndTech('', 'https://creator.ck.page').platform, 'Kit');
+  assert.equal(detectPlatformAndTech('', 'https://mailchi.mp/example/newsletter').platform, 'Mailchimp');
+  assert.ok(googleQueries('fitness', '', 'Kit', true).some(query => query.startsWith('site:ck.page')));
+  const shop = detectPlatformAndTech('<script src="https://cdn.shopify.com/store.js"></script><form action="https://brand.list-manage.com/subscribe"></form>');
+  assert.equal(shop.platform, 'Shopify');
+  assert.ok(shop.techStack.includes('Mailchimp'));
+  assert.ok(detectPlatformAndTech('<script src="https://f.convertkit.com/example.js"></script>').techStack.includes('Kit'));
 });
 
 test('CSV import supports standard Jobhunta columns and round-trips via writeBusinessCsv', () => {

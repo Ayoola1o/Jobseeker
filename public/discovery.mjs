@@ -1,6 +1,9 @@
 export const platformDomains = {
   Shopify: 'myshopify.com', WooCommerce: '', Wix: 'wixsite.com',
-  Beehiiv: 'beehiiv.com', BigCommerce: 'mybigcommerce.com',
+  Beehiiv: 'beehiiv.com', Substack: 'substack.com', Kit: 'kit.com',
+  Mailchimp: 'mailchi.mp', MailerLite: 'mailerlite.io', 'Buttondown': 'buttondown.com',
+  Klaviyo: '', Omnisend: '', Brevo: '', ActiveCampaign: '',
+  BigCommerce: 'mybigcommerce.com',
   Squarespace: 'squarespace.com', Webflow: 'webflow.io',
   WordPress: 'wordpress.com', Ghost: 'ghost.io', 'HubSpot CMS': 'hubspotpagebuilder.com'
 };
@@ -20,9 +23,10 @@ export function googleQueries(term, location, platform, online) {
   const domain = Object.hasOwn(platformDomains, platform) ? platformDomains[platform] : '';
   const suffix = ' -jobs -vacancies';
   if (!online) return [base + suffix];
-  const clue = ['Beehiiv', 'Ghost'].includes(platform) ? 'newsletter' :
+  const clue = ['Beehiiv', 'Ghost', 'Substack', 'Kit', 'MailerLite', 'Buttondown', 'Mailchimp'].includes(platform) ? 'newsletter' :
     ['Shopify', 'WooCommerce', 'BigCommerce', ''].includes(platform) ? '"add to cart"' : quote(platform);
-  return [...(domain ? ['site:' + domain + ' ' + base + suffix] : []), base + ' ' + clue + suffix];
+  const domains = platform === 'Kit' ? ['kit.com', 'ck.page'] : domain ? [domain] : [];
+  return [...domains.map(host => 'site:' + host + ' ' + base + suffix), base + ' ' + clue + suffix];
 }
 
 export function publicWebsite(value) {
@@ -37,7 +41,7 @@ export function publicWebsite(value) {
 
 export function businessKeys(item, online) {
   const normal = value => String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-  const host = publicWebsite(item.website)?.hostname.replace(/^www\./, '');
+  const host = websiteIdentity(publicWebsite(item.website));
   const address = normal(item.address);
   const name = normal(item.name);
   const city = normal(item.city);
@@ -48,4 +52,13 @@ export function businessKeys(item, online) {
     address && city && name && 'address:' + city + ':' + address + ':' + name,
     address && city && phone.length >= 7 && 'phone:' + city + ':' + address + ':' + phone
   ].filter(Boolean);
+}
+
+export function websiteIdentity(url) {
+  if (!url) return '';
+  const host = url.hostname.replace(/^www\./, '');
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (host === 'mailchi.mp' && segments.length) return host + '/' + segments.slice(0, 2).join('/');
+  if (host === 'substack.com' && segments[0]?.startsWith('@')) return host + '/' + segments[0];
+  return host;
 }
