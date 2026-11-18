@@ -167,7 +167,7 @@ try {
           senderService: String(saved.settings?.senderService || ''),
           savedSearches: normalizeSavedSearches(saved.settings?.savedSearches),
           leadProfiles: normalizeLeadProfiles(saved.settings?.leadProfiles),
-          defaultFollowUpDays: Number(saved.settings?.defaultFollowUpDays) || 4,
+          defaultFollowUpDays: Number(saved.settings?.defaultFollowUpDays ?? 4),
           templates: Array.isArray(saved.settings?.templates) && saved.settings.templates.length
             ? saved.settings.templates
             : defaultTemplates
@@ -457,7 +457,7 @@ async function loadFromSupabase(userId = 'default') {
           senderService: String(row.settings.senderService || ''),
           savedSearches: normalizeSavedSearches(row.settings.savedSearches),
           leadProfiles: normalizeLeadProfiles(row.settings.leadProfiles),
-          defaultFollowUpDays: Number(row.settings.defaultFollowUpDays) || 4,
+          defaultFollowUpDays: Number(row.settings.defaultFollowUpDays ?? 4),
           templates: Array.isArray(row.settings.templates) && row.settings.templates.length
             ? row.settings.templates
             : defaultTemplates

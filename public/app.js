@@ -1695,17 +1695,11 @@ function renderSettings() {
   const topHeader = create('div', '', 'heading section-title');
   const titleWrap = create('div');
   titleWrap.append(
-    create('h1', 'Workspace Settings'),
-    create('p', 'Manage your Gmail connection, outreach sender profile, email templates, and workspace tools.')
+    create('h1', 'Settings'),
+    create('p', 'Configure your preferences and integrations.')
   );
-  const quickNav = create('div', '', 'actions');
-  quickNav.append(
-    button('Find businesses ↗', () => { location.hash = '#discover'; }),
-    button('Saved leads', () => { location.hash = '#leads'; }, true)
-  );
-  topHeader.append(titleWrap, quickNav);
-
-  const grid = create('div', '', 'dossier-grid');
+  topHeader.append(titleWrap);
+  const grid = create('div', '', 'settings-grid');
 
   // 1. Gmail Connection Card
   const gmailCard = create('article', '', 'surface dossier-card');
@@ -1830,14 +1824,65 @@ create table if not exists public.jobhunta_leads (
   );
   toolsCard.append(toolsActions);
 
-  const sender = create('article', '', 'surface dossier-card');
-  sender.append(create('h2', 'Sender profile'), create('p', settings.senderName || currentUser?.name || 'Set your sender name'),
-    dashboardLink('Edit outreach profile', 'broadcast', 'user-round'));
-  const defaults = create('article', '', 'surface dossier-card');
-  defaults.append(create('h2', 'Outreach defaults'), create('p', settings.defaultFollowUpDays ? 'Follow up after ' + settings.defaultFollowUpDays + ' days' : 'Follow-up reminders off'),
-    dashboardLink('Manage templates and reminders', 'broadcast', 'mail'));
-  grid.append(gmailCard, sender, defaults, toolsCard);
-  container.replaceChildren(topHeader, grid);
+  function tile(title, icon, description, action, handler) {
+    const card = create('article', '', 'surface setting-tile');
+    const symbol = create('span', '', 'setting-symbol');
+    symbol.append(lucide(icon));
+    const edit = button(action, handler, 'secondary');
+    edit.setAttribute('aria-label', action + ' ' + title);
+    card.append(symbol, create('h2', title), create('p', description), edit);
+    return card;
+  }
+  function editValue(title, label, key, numeric = false) {
+    const form = create('form', '', 'stack');
+    const entry = field(label, key, String(settings[key] ?? ''), numeric ? { type: 'number', required: true } : {});
+    if (numeric) {
+      entry.lastChild.min = '0';
+      entry.lastChild.max = '90';
+      entry.lastChild.step = '1';
+    }
+    form.append(entry, create('button', 'Save changes'));
+    form.onsubmit = event => {
+      event.preventDefault();
+      settings[key] = numeric ? Number(entry.lastChild.value) : entry.lastChild.value.trim();
+      dialog.close();
+      persist();
+    };
+    show(title, form);
+  }
+  const densityKey = 'jobhunta-density-' + (currentUser?.id || 'guest');
+  const compact = localStorage.getItem(densityKey) === 'compact';
+  document.body.classList.toggle('compact-workspace', compact);
+  grid.append(
+    tile('Gmail Integration', 'mail', account.mailbox || 'Gmail is disconnected', 'Manage', () => show('Gmail Integration', gmailCard)),
+    tile('Sender Profile', 'user-round', settings.senderName || currentUser?.name || 'Set your sender name', 'Edit',
+      () => editValue('Sender Profile', 'Your name', 'senderName')),
+    tile('Outreach Defaults', 'send', settings.senderService || 'Set your service or offer', 'Edit',
+      () => editValue('Outreach Defaults', 'Service or offer for outreach pitches', 'senderService')),
+    tile('Follow-up Schedule', 'clock', settings.defaultFollowUpDays ? 'Remind me after ' + settings.defaultFollowUpDays + ' days' : 'Reminders off', 'Edit',
+      () => editValue('Follow-up Schedule', 'Days after sending (0 turns reminders off)', 'defaultFollowUpDays', true)),
+    tile('Email Templates', 'bookmark', settings.templates.length + ' saved templates', 'Manage', () => { location.hash = '#broadcast'; }),
+    tile('Account Preferences', 'settings', compact ? 'Compact workspace layout' : 'Comfortable workspace layout', 'Edit', () => {
+      const form = create('form', '', 'stack');
+      const label = create('label', 'Workspace spacing on this device');
+      const select = create('select');
+      select.add(new Option('Comfortable', 'comfortable'));
+      select.add(new Option('Compact', 'compact'));
+      select.value = compact ? 'compact' : 'comfortable';
+      label.append(select);
+      form.append(label, create('button', 'Save preference'));
+      form.onsubmit = event => {
+        event.preventDefault();
+        localStorage.setItem(densityKey, select.value);
+        dialog.close();
+        renderSettings();
+      };
+      show('Account Preferences', form);
+    })
+  );
+  const advanced = create('details', '', 'settings-advanced');
+  advanced.append(create('summary', 'Database and CSV tools'), toolsCard);
+  container.replaceChildren(topHeader, grid, advanced);
 }
 
 function renderBroadcast() {
