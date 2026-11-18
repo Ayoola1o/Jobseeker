@@ -1,3 +1,4 @@
+import { normalizeLeadProfiles } from './public/qualification.mjs';
 import { platformDomains, searchList, googleQueries, publicWebsite, businessKeys, websiteIdentity } from './public/discovery.mjs';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, createHash, createCipheriv, createDecipheriv, scryptSync, timingSafeEqual } from 'node:crypto';
@@ -165,6 +166,7 @@ try {
           senderName: String(saved.settings?.senderName || ''),
           senderService: String(saved.settings?.senderService || ''),
           savedSearches: normalizeSavedSearches(saved.settings?.savedSearches),
+          leadProfiles: normalizeLeadProfiles(saved.settings?.leadProfiles),
           defaultFollowUpDays: Number(saved.settings?.defaultFollowUpDays) || 4,
           templates: Array.isArray(saved.settings?.templates) && saved.settings.templates.length
             ? saved.settings.templates
@@ -454,6 +456,7 @@ async function loadFromSupabase(userId = 'default') {
           senderName: String(row.settings.senderName || ''),
           senderService: String(row.settings.senderService || ''),
           savedSearches: normalizeSavedSearches(row.settings.savedSearches),
+          leadProfiles: normalizeLeadProfiles(row.settings.leadProfiles),
           defaultFollowUpDays: Number(row.settings.defaultFollowUpDays) || 4,
           templates: Array.isArray(row.settings.templates) && row.settings.templates.length
             ? row.settings.templates
@@ -481,7 +484,7 @@ async function syncToSupabase(userId, leadChanges) {
       headers: supabaseHeaders(),
       body: JSON.stringify({
         workspace: { id: userId, settings: ws.settings, auth: ws.auth ? { sealed: sealCookie(ws.auth) } : null,
-          thread_owners: ws.threadOwners, updated_at: new Date().toISOString() },
+          thread_owners: {}, updated_at: new Date().toISOString() },
         lead_rows: leadChanges ? ws.leads.map(lead => leadToSupabaseRow(lead, userId)) : [],
         removed_ids: (leadChanges || []).map(id => dbRowId(userId, id))
       }),
@@ -516,9 +519,14 @@ await loadFromSupabase('default');
 const sessions = new Map();
 const searches = new Map();
 const files = {
+  '/plane.png': ['plane.png', 'image/png'],
+  '/welcome-city.png': ['welcome-city.png', 'image/png'],
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
+  '/lucide.mjs': ['lucide.mjs', 'text/javascript; charset=utf-8'],
+  '/LUCIDE-LICENSE.txt': ['LUCIDE-LICENSE.txt', 'text/plain; charset=utf-8'],
+  '/qualification.mjs': ['qualification.mjs', 'text/javascript; charset=utf-8'],
   '/discovery.mjs': ['discovery.mjs', 'text/javascript; charset=utf-8'],
   '/csv.mjs': ['csv.mjs', 'text/javascript; charset=utf-8'],
   '/business-import.csv': ['business-import.csv', 'text/csv; charset=utf-8'],
@@ -651,21 +659,116 @@ function extractAddress(value = '') {
   return (value.match(/<([^>]+)>/)?.[1] || value).trim();
 }
 
-async function thread(session, id) {
-  if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id || '')) fail(400, 'Invalid Gmail thread.');
-  const ws = getWorkspace(session.userId || 'default');
-  const owner = session.threadOwners.get(id) || ws.threadOwners[id];
-  if (owner && owner !== session.mailbox) fail(404, 'This conversation is unavailable in the connected mailbox.');
+async function outreachRegistry(userId) {
+  const ws = getWorkspace(userId);
+  if (!supabaseConfigured) return ws.threadOwners;
+  const params = new URLSearchParams({ id: 'eq.' + userId, select: 'thread_owners' });
+  try {
+    const response = await fetch(supabaseUrl + '/rest/v1/jobhunta_workspace?' + params, {
+      headers: supabaseHeaders(), signal: AbortSignal.timeout(6000)
+    });
+    if (!response.ok) throw new Error();
+    return (await response.json())[0]?.thread_owners || {};
+  } catch {
+    fail(503, 'Outreach conversations could not be loaded.');
+  }
+}
+
+async function registerOutreach(userId, id, registration) {
+  if (supabaseConfigured) {
+    const response = await fetch(supabaseUrl + '/rest/v1/rpc/jobhunta_register_outreach', {
+      method: 'POST', headers: supabaseHeaders(),
+      body: JSON.stringify({ workspace_id: userId, thread_id: id, registration }),
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!response.ok) throw new Error('Outreach storage returned HTTP ' + response.status);
+  }
+  getWorkspace(userId).threadOwners[id] = registration;
+  if (!supabaseConfigured) await saveStore(userId);
+}
+
+function emailMatches(headerValue, address) {
+  const emails = (headerValue || '').match(/[A-Z0-9.!#$%&'*+/=?^_{}|~-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+  return Boolean(address) && emails.some(email => email.toLowerCase() === address.toLowerCase());
+}
+
+export function outreachMessageKind(message, registration) {
+  if (message.sent) return emailMatches(message.to, registration.recipient) ? 'sent' : 'unrelated';
+  if (/mailer-daemon|postmaster/i.test(message.from) ||
+      /report-type\s*=\s*"?delivery-status/i.test(message.contentType)) return 'bounce';
+  if (/^auto-(replied|generated)/i.test(message.autoSubmitted) ||
+      /^(?:automatic reply|auto reply|out of office)\b/i.test(message.subject)) return 'automatic';
+  return emailMatches(message.from, registration.recipient) ||
+    (registration.replyAddresses || []).some(address => emailMatches(message.from, address))
+    ? 'reply' : 'review';
+}
+
+async function fetchGmailThread(session, id) {
   const result = await gmail(session, 'threads/' + id + '?format=full');
   return (result.messages || []).map(message => ({
     id: message.id, from: header(message, 'from'), to: header(message, 'to'),
     replyTo: header(message, 'reply-to'),
     subject: header(message, 'subject'), messageId: header(message, 'message-id'),
-    references: header(message, 'references'),
+    references: header(message, 'references'), inReplyTo: header(message, 'in-reply-to'),
+    autoSubmitted: header(message, 'auto-submitted'), contentType: header(message, 'content-type'),
     sent: message.labelIds?.includes('SENT') ?? false,
     time: Number(message.internalDate),
     body: extractMessageBody(message.payload, message.snippet)
-  }));
+  })).sort((a, b) => a.time - b.time);
+}
+
+async function thread(session, id) {
+  if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id || '')) fail(400, 'Invalid Gmail thread.');
+  const registry = await outreachRegistry(session.userId);
+  let registration = Object.hasOwn(registry, id) ? registry[id] : null;
+  if (!registration || (typeof registration === 'string' ? registration : registration.mailbox) !== session.mailbox) {
+    fail(404, 'This conversation is not registered to the connected Gmail account.');
+  }
+  let legacy;
+  if (typeof registration === 'string') {
+    if (supabaseConfigured) await loadFromSupabase(session.userId);
+    const lead = getWorkspace(session.userId).leads.find(item => item.threads?.some(conv =>
+      conv.id === id && conv.mailbox === session.mailbox && Number.isFinite(Number(conv.time)) && validEmail(conv.to)));
+    const conversation = lead?.threads.find(item => item.id === id && item.mailbox === session.mailbox);
+    if (!conversation) fail(404, 'No saved outreach record is available for this conversation.');
+    legacy = { leadId: lead.id, mailbox: session.mailbox, recipient: conversation.to,
+      subject: conversation.subject, time: Number(conversation.time), templateName: conversation.templateName };
+  }
+  const messages = await fetchGmailThread(session, id);
+  if (legacy) {
+    const sent = messages.find(message => message.sent && emailMatches(message.to, legacy.recipient) &&
+      message.subject === legacy.subject && Math.abs(message.time - legacy.time) <= 15 * 60 * 1000);
+    if (!sent) fail(404, 'Gmail could not verify the original outreach message.');
+    registration = { ...legacy, time: sent.time, messageId: sent.id };
+    await registerOutreach(session.userId, id, registration);
+  }
+  const start = messages.findIndex(message => message.id === registration.messageId && message.sent &&
+    emailMatches(message.to, registration.recipient));
+  if (start < 0) fail(404, 'The original outreach message is unavailable in Gmail.');
+  const related = new Set();
+  const filtered = [];
+  for (const message of messages.slice(start)) {
+    const kind = outreachMessageKind(message, registration);
+    const references = (message.inReplyTo + ' ' + message.references).match(/<[^<>\s]+>/g) || [];
+    if (kind === 'unrelated' || (kind === 'review' && !references.some(reference => related.has(reference)))) continue;
+    if (message.messageId) related.add(message.messageId);
+    filtered.push({ ...message, kind });
+  }
+  return filtered;
+}
+
+async function savedOutreachLead(userId, id) {
+  if (!supabaseConfigured) return getWorkspace(userId).leads.some(lead => lead.id === id);
+  const params = new URLSearchParams({ id: 'eq.' + dbRowId(userId, id), user_id: 'eq.' + userId, select: 'id', limit: '1' });
+  try {
+    const response = await fetch(supabaseUrl + '/rest/v1/jobhunta_leads?' + params, {
+      headers: supabaseHeaders(), signal: AbortSignal.timeout(6000)
+    });
+    if (!response.ok) throw new Error();
+    return Boolean((await response.json())[0]);
+  } catch {
+    fail(503, 'Could not verify the saved lead.');
+  }
 }
 
 async function send(session, data) {
@@ -675,16 +778,22 @@ async function send(session, data) {
       typeof subject !== 'string' || !subject.trim() || /[\r\n]/.test(subject) || subject.length > 160 ||
       !/^[a-z0-9-]{16,64}$/i.test(requestId || '')) fail(400, 'Enter a valid recipient, subject and message.');
   if (!session.mailbox) fail(401, 'Connect Gmail first.');
+  if (!threadId && (typeof data.leadId !== 'string' || !data.leadId || data.leadId.length > 512)) {
+    fail(400, 'Select a saved lead before sending outreach.');
+  }
   const key = session.mailbox + ':' + requestId;
   if (session.sends.has(key)) return session.sends.get(key);
   const operation = (async () => {
+    if (!threadId && !await savedOutreachLead(session.userId, data.leadId)) {
+      fail(404, 'Save this lead before sending outreach.');
+    }
     const headers = ['From: ' + session.mailbox, 'To: ' + to];
     if (threadId) {
       const messages = await thread(session, threadId);
       const parent = data.parentId
         ? messages.find(message => message.id === data.parentId)
         : messages.at(-1);
-      if (!parent || !/^<[^<>\s]+>$/.test(parent.messageId)) {
+      if (!parent || !['sent', 'reply'].includes(parent.kind) || !/^<[^<>\s]+>$/.test(parent.messageId)) {
         fail(400, 'Refresh the thread and try replying again.');
       }
       const expectedAddress = parent.sent
@@ -723,11 +832,18 @@ async function send(session, data) {
       if (error.providerRejected) await consumeQuota(session.userId, 'email', chargedOn).catch(console.error);
       throw error;
     }
-    const userId = session.userId || 'default';
-    const ws = getWorkspace(userId);
-    session.threadOwners.set(result.threadId, session.mailbox);
-    ws.threadOwners[result.threadId] = session.mailbox;
-    saveStore(userId).catch(console.error);
+    if (!threadId || threadId !== result.threadId) {
+      const registration = {
+        leadId: data.leadId, recipient: to, mailbox: session.mailbox, subject, time: Date.now(),
+        messageId: result.id, templateName: String(data.templateName || '').slice(0, 80)
+      };
+      try {
+        await registerOutreach(session.userId, result.threadId, registration);
+      } catch (error) {
+        console.error('Gmail accepted outreach but registration failed:', error.message);
+        return { ...result, trackingError: true };
+      }
+    }
     return result;
   })();
   session.sends.set(key, operation);
@@ -2046,10 +2162,7 @@ function hydrateSession(session, rawAuthCookie, rawUserCookie) {
     delete session.tokens;
   }
   session.oauth = session.userId && cookieAuth?.userId === session.userId ? cookieAuth.oauth : null;
-  session.threadOwners.clear();
-  for (const [threadId, owner] of Object.entries(ws.threadOwners)) {
-    session.threadOwners.set(threadId, owner);
-  }
+
 }
 
 export async function handleRequest(req, res) {
@@ -2085,7 +2198,7 @@ export async function handleRequest(req, res) {
     if (!session) {
       const token = sessionToken || nonce();
       sessionToken = token;
-      session = { expires: Date.now() + maxAge, sends: new Map(), threadOwners: new Map() };
+      session = { expires: Date.now() + maxAge, sends: new Map() };
       hydrateSession(session, rawAuthCookie, rawUserCookie);
       sessions.set(token, session);
       cookiesToSet.push(`jobhunta=${token}; ${cookieFlags}`);
@@ -2270,20 +2383,13 @@ export async function handleRequest(req, res) {
         const incomingIds = new Set(payload.leads.map(l => l.id));
         removedIds = ws.leads.filter(l => l.id && !incomingIds.has(l.id)).map(l => l.id);
         ws.leads = payload.leads.slice(0, 5000);
-        for (const lead of ws.leads) {
-          for (const conv of lead.threads || []) {
-            if (conv.id && conv.mailbox) {
-              ws.threadOwners[conv.id] = conv.mailbox;
-              session.threadOwners.set(conv.id, conv.mailbox);
-            }
-          }
-        }
       }
       if (payload.settings && typeof payload.settings === 'object') {
         ws.settings = {
           senderName: String(payload.settings.senderName || '').slice(0, 120),
           senderService: String(payload.settings.senderService || '').slice(0, 300),
           savedSearches: normalizeSavedSearches(payload.settings.savedSearches),
+          leadProfiles: normalizeLeadProfiles(payload.settings.leadProfiles),
           defaultFollowUpDays: Math.max(0, Math.min(90, Number(payload.settings.defaultFollowUpDays) || 0)),
           templates: Array.isArray(payload.settings.templates) && payload.settings.templates.length
             ? payload.settings.templates.slice(0, 25).map(tpl => ({
@@ -2355,17 +2461,19 @@ export async function handleRequest(req, res) {
       if (!session.userId) fail(401, 'Sign in to send email.');
       return json(await send(session, await readJson(req)));
     }
+    if (req.method === 'GET' && path === '/api/outreach') {
+      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
+      if (!session.mailbox) fail(401, 'Connect Gmail first.');
+      const registry = await outreachRegistry(session.userId);
+      return json(Object.entries(registry).flatMap(([id, item]) =>
+        item?.mailbox === session.mailbox ? [{ id, mailbox: item.mailbox, leadId: item.leadId,
+          to: item.recipient, subject: item.subject, time: item.time, templateName: item.templateName }] : []));
+    }
     if (req.method === 'POST' && path === '/api/thread') {
       if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
       const { id, mailbox } = await readJson(req);
       if (!session.mailbox) fail(401, 'Connect your Gmail account first.');
       if (session.mailbox !== mailbox) fail(403, 'Connect the Gmail account that sent this conversation.');
-      if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id || '')) fail(400, 'Invalid Gmail thread.');
-      const targetUserId = session.userId || 'default';
-      const ws = getWorkspace(targetUserId);
-      session.threadOwners.set(id, mailbox);
-      ws.threadOwners[id] = mailbox;
-      saveStore(targetUserId).catch(console.error);
       return json(await thread(session, id));
     }
     return json({ error: 'Page not found.' }, 404);

@@ -64,3 +64,10 @@ references in Google Maps and saves lead details from other sources.
 A submitted batch uses one search. Up to 12 term/location combinations and 12 web
 queries run per batch. Repeated businesses within the batch count once toward
 the daily business-result quota. Google Maps references do not consume that quota.
+
+## Outreach inbox upgrade
+
+Apply the updated supabase/schema.sql before deploying. It adds the
+service-role-only outreach registration function and preserves existing thread
+records when the workspace is saved. Existing outreach records are checked
+against Gmail before they are upgraded.

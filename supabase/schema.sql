@@ -80,7 +80,8 @@ begin
   from jsonb_populate_record(null::public.jobhunta_workspace, workspace)
   on conflict (id) do update set
     settings = excluded.settings, auth = excluded.auth,
-    thread_owners = excluded.thread_owners, updated_at = excluded.updated_at;
+    thread_owners = excluded.thread_owners || jobhunta_workspace.thread_owners,
+    updated_at = excluded.updated_at;
 
   delete from public.jobhunta_leads where user_id = owner_id and id = any(removed_ids);
 
@@ -105,5 +106,22 @@ $$;
 
 revoke all on function public.jobhunta_save_workspace(jsonb, jsonb, text[]) from public, anon, authenticated;
 grant execute on function public.jobhunta_save_workspace(jsonb, jsonb, text[]) to service_role;
+
+create or replace function public.jobhunta_register_outreach(workspace_id text, thread_id text, registration jsonb)
+returns void
+language sql
+set search_path = ''
+as $$
+  insert into public.jobhunta_workspace (id, thread_owners)
+  values (workspace_id, jsonb_build_object(thread_id, registration))
+  on conflict (id) do update set
+    thread_owners = jsonb_set(public.jobhunta_workspace.thread_owners, array[thread_id],
+      case when jsonb_typeof(public.jobhunta_workspace.thread_owners -> thread_id) = 'object'
+        then public.jobhunta_workspace.thread_owners -> thread_id else '{}'::jsonb end
+        || registration, true);
+$$;
+
+revoke all on function public.jobhunta_register_outreach(text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.jobhunta_register_outreach(text, text, jsonb) to service_role;
 
 commit;

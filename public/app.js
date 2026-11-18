@@ -1,3 +1,5 @@
+import { lucide } from './lucide.mjs';
+import { normalizeLeadProfiles, assessLead, industryAngle } from './qualification.mjs';
 import { platformDomains, searchList, googleQueries } from './discovery.mjs';
 import { readBusinessCsv, writeBusinessCsv } from './csv.mjs';
 
@@ -337,6 +339,7 @@ function openBusinessPage(item) {
     const copy = { ...item, id: item.id || crypto.randomUUID(), threads: [] };
     delete copy.scanning;
     delete copy.scanned;
+    copy.savedAt = Date.now();
     leads.unshift(copy);
     persist();
     saved = copy;
@@ -367,136 +370,170 @@ function statusPillClass(status) {
   return 'pill';
 }
 
+function dashboardLink(title, hash, iconName, className = '') {
+  const link = create('a', '', 'dashboard-link ' + className);
+  link.href = '#' + hash;
+  const icon = create('span', '', 'dashboard-icon');
+  icon.append(lucide(iconName));
+  icon.setAttribute('aria-hidden', 'true');
+  link.append(icon, create('span', title));
+  return link;
+}
+
+function openDashboardOutcomes() {
+  if (location.hash === '#analytics') navigate();
+  else location.hash = '#analytics';
+}
+
+function dashboardActivity(leadDates, emailDates) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const labels = [];
+  const totals = [];
+  for (let offset = 6; offset >= 0; offset--) {
+    const day = new Date(today);
+    day.setDate(day.getDate() - offset);
+    const end = new Date(day);
+    end.setDate(end.getDate() + 1);
+    labels.push(day.toLocaleDateString(undefined, { weekday: 'short' }));
+    totals.push([leadDates, emailDates].map(dates => dates.filter(date => date >= +day && date < +end).length));
+  }
+  const panel = create('section', '', 'surface dashboard-panel');
+  panel.append(create('h2', 'Lead activity'), create('p', 'Last 7 days · Saved leads and tracked emails', 'dashboard-muted'));
+  if (!totals.some(day => day.some(Boolean))) {
+    panel.append(create('p', 'Recent activity will appear when you save a lead or send outreach.', 'dashboard-empty'));
+    return panel;
+  }
+  const chart = create('div', '', 'dashboard-chart');
+  const max = Math.max(1, ...totals.flat());
+  totals.forEach(([saved, sent], index) => {
+    const column = create('div', '', 'dashboard-chart-column');
+    const bars = create('div', '', 'dashboard-bars');
+    bars.setAttribute('role', 'img');
+    bars.setAttribute('aria-label', labels[index] + ': ' + saved + ' saved leads, ' + sent + ' emails');
+    [saved, sent].forEach((count, series) => {
+      const bar = create('span', '', series ? 'emails-bar' : 'leads-bar');
+      bar.style.height = count / max * 100 + '%';
+      bar.title = count + (series ? ' emails' : ' saved leads');
+      bars.append(bar);
+    });
+    column.append(bars, create('small', labels[index]));
+    chart.append(column);
+  });
+  panel.append(chart, create('p', '● Saved leads   ·   ○ Emails', 'dashboard-muted'));
+  return panel;
+}
+
 function renderDashboard() {
   const container = $('#dashboard-content');
-  if (!container) return;
+  const signedInName = currentUser?.name || settings.senderName || '';
+  const firstName = signedInName.trim().split(/\s+/)[0];
+  const initials = signedInName.trim().split(/\s+/).slice(0, 2).map(part => part[0] || '').join('').toUpperCase() || 'J';
+  $('#header-avatar').textContent = initials;
+  const usage = currentUser?.usage;
+  const count = value => Number(value || 0).toLocaleString();
+  const plan = usage?.label || account.tiers?.find(tier => tier.key === currentUser?.tier)?.label || 'Basic';
+  const mailbox = account.mailbox;
+  const conversations = leads.flatMap(lead => (lead.threads || []).filter(thread => thread.mailbox === mailbox));
+  const contacted = leads.filter(lead => lead.threads?.some(thread => thread.mailbox === mailbox)).length;
+  const responded = leads.filter(lead => lead.threads?.some(thread => thread.mailbox === mailbox &&
+    (thread.inboxStatus === 'reply' || thread.seenReplies?.length))).length;
+  const emailDates = conversations.flatMap(thread => {
+    const synced = messages.get(thread.mailbox + ':' + thread.id)?.filter(message => message.sent);
+    return synced?.length ? synced.map(message => Number(message.time)) :
+      (Array.isArray(thread.sentTimes) && thread.sentTimes.length ? thread.sentTimes : [Number(thread.time)]);
+  }).filter(value => Number.isFinite(value) && value > 0);
+  const leadsDue = leads.filter(lead => leadStatus(lead) === 'Follow-up due').length;
+  const remaining = usage?.dailySearchLimit == null ? 'Unlimited searches' :
+    count(Math.max(0, usage.dailySearchLimit - (usage.searchesToday || 0))) + ' searches left';
 
-  const counts = {
-    total: leads.length,
-    ready: 0,
-    needsEmail: 0,
-    contacted: 0,
-    due: 0,
-    positive: 0,
-    aiAudited: 0
-  };
-  const industryCounts = new Map();
-  const cityCounts = new Map();
+  const intro = create('section', '', 'dashboard-intro');
+  const avatar = create('span', initials, 'dashboard-avatar');
+  avatar.setAttribute('aria-hidden', 'true');
+  const greeting = create('div');
+  greeting.append(create('h1', firstName ? 'Welcome back, ' + firstName + '!' : 'Welcome to Jobhunta'),
+    create('p', 'Find businesses and keep track of your outreach.'));
+  const planCard = dashboardLink(plan + ' plan', 'profile', 'credit-card', 'dashboard-plan');
+  planCard.append(create('small', remaining));
+  intro.append(avatar, greeting, planCard);
 
+  const metrics = create('div', '', 'dashboard-metrics');
+  for (const [label, value, hash, glyph] of [
+    ['Total leads', count(leads.length), 'leads', 'bookmark'],
+    ['Search results today', count(usage?.resultsToday), 'discover', 'search'],
+    ['Tracked emails sent', count(emailDates.length), 'inbox', 'mail'],
+    ['Response rate', contacted ? Math.round(responded / contacted * 100) + '%' : '—', 'inbox', 'circle-check']
+  ]) {
+    const metric = dashboardLink(label, hash, glyph, 'surface dashboard-metric');
+    metric.append(create('strong', value));
+    metrics.append(metric);
+  }
+
+  const discover = dashboardLink('Find Businesses', 'discover', 'search', 'dashboard-discover');
+  discover.append(create('small', 'Search by industry, website, or location.'));
+  const quick = create('section', '', 'dashboard-quick');
+  quick.append(create('h2', 'Quick Actions'));
+  const quickGrid = create('div', '', 'dashboard-quick-grid');
+  const analytics = button('Analytics', openDashboardOutcomes, 'secondary');
+  analytics.prepend(lucide('chart-no-axes-column'));
+  quickGrid.append(dashboardLink('Saved Leads', 'leads', 'bookmark'), dashboardLink('Inbox', 'inbox', 'mail'),
+    dashboardLink('Broadcast', 'broadcast', 'send'), analytics);
+  quick.append(quickGrid);
+
+  const panels = create('div', '', 'dashboard-panels');
+  const activity = dashboardActivity(leads.map(lead => Number(lead.savedAt)).filter(Boolean), emailDates);
+  const priority = create('section', '', 'surface dashboard-panel');
+  priority.append(create('h2', 'Priority Actions'));
+  const followUps = button('Follow up with ' + count(leadsDue) + ' leads', () => jumpToLeadsFilter('Follow-up due'), 'secondary');
+  followUps.prepend(lucide('clock'));
+  priority.append(followUps, dashboardLink('Review outreach replies', 'inbox', 'mail'),
+    dashboardLink('Check quota usage', 'profile', 'clock'));
+
+  const sources = create('section', '', 'surface dashboard-panel');
+  sources.append(create('h2', 'Source Breakdown'));
+  const providers = new Map();
   for (const lead of leads) {
-    const st = leadStatus(lead);
-    if (st === 'New') counts.ready++;
-    if (st === 'Needs email') counts.needsEmail++;
-    if (st === 'Contacted' || (lead.threads || []).length) counts.contacted++;
-    if (st === 'Follow-up due') counts.due++;
-    if (st === 'Interested' || st === 'Replied') counts.positive++;
-    if (lead.aiBrief) counts.aiAudited++;
-    if (lead.industry) industryCounts.set(lead.industry, (industryCounts.get(lead.industry) || 0) + 1);
-    if (lead.city) cityCounts.set(lead.city, (cityCounts.get(lead.city) || 0) + 1);
+    const provider = lead.discoveryProvider || 'Unknown';
+    providers.set(provider, (providers.get(provider) || 0) + 1);
+  }
+  if (!providers.size) sources.append(create('p', 'Source data appears after you save leads.', 'dashboard-muted'));
+  else {
+    const breakdown = create('div', '', 'dashboard-source');
+    const donut = create('div', '', 'dashboard-donut');
+    donut.setAttribute('aria-hidden', 'true');
+    const legend = create('ul');
+    const colors = ['#006251', '#00a77a', '#4c80ae', '#83b7b4', '#b9cad3'];
+    const sorted = [...providers].sort((a, b) => b[1] - a[1]);
+    let position = 0;
+    const stops = sorted.map(([provider, total], index) => {
+      const start = position;
+      position += total / leads.length * 100;
+      const color = colors[index % colors.length];
+      const item = create('li', '', 'dashboard-source-row');
+      const dot = create('span', '', 'dashboard-source-dot');
+      dot.style.backgroundColor = color;
+      item.append(dot, create('span', provider), create('strong', Math.round(total / leads.length * 100) + '%'));
+      legend.append(item);
+      return color + ' ' + start + '% ' + position + '%';
+    });
+    donut.style.backgroundImage = 'conic-gradient(' + stops.join(', ') + ')';
+    breakdown.append(donut, legend);
+    sources.append(breakdown);
   }
 
-  const headerBar = create('div', '', 'heading section-title');
-  const titleWrap = create('div');
-  titleWrap.append(
-    create('h1', 'Workspace Dashboard'),
-    create('p', settings.senderName
-      ? `Welcome back, ${settings.senderName}. Offering: ${settings.senderService || 'Set your service in Broadcast'}.`
-      : 'Overview of your scraped business pipeline, AI lead audits, and outreach conversations.')
-  );
-  const quickActions = create('div', '', 'actions');
-  quickActions.append(
-    button('Find businesses ↗', () => { location.hash = '#discover'; }),
-    button('Import CSV', importLeads, true),
-    button('Add lead', () => editLead(), true)
-  );
-  headerBar.append(titleWrap, quickActions);
-
-  const kpiGrid = create('div', '', 'kpi-grid');
-  const makeKpi = (label, value, subtext, filterTarget) => {
-    const card = create('article', '', 'surface kpi-card');
-    card.append(create('small', label), create('strong', String(value)), create('span', subtext));
-    card.onclick = () => jumpToLeadsFilter(filterTarget);
-    return card;
-  };
-  kpiGrid.append(
-    makeKpi('Total Saved Leads', counts.total, 'View all saved businesses →', ''),
-    makeKpi('Ready to Email', counts.ready, 'Has email · Not contacted →', 'New'),
-    makeKpi('Needs Email', counts.needsEmail, 'Scan websites for email →', 'Needs email'),
-    makeKpi('Contacted', counts.contacted, 'Outreach sent via Gmail →', 'Contacted'),
-    makeKpi('Follow-ups Due', counts.due, 'Needs follow-up today →', 'Follow-up due'),
-    makeKpi('Interested / Replied', counts.positive, 'Warm leads & replies →', 'Interested')
-  );
-
-  const dashboardGrid = create('div', '', 'dossier-grid');
-
-  // Left card: Priority Action Queue (Follow-ups due + Warm replies + Ready to review)
-  const queueCard = create('article', '', 'surface dossier-card');
-  queueCard.append(create('h2', 'Priority Follow-ups & Warm Leads'));
-  const priorityLeads = leads.filter(lead => {
-    const st = leadStatus(lead);
-    return st === 'Follow-up due' || st === 'Replied' || st === 'Interested';
-  }).slice(0, 6);
-
-  if (priorityLeads.length) {
-    for (const lead of priorityLeads) {
-      const st = leadStatus(lead);
-      queueCard.append(row(lead, [lead.industry, lead.city, lead.email, lead.due && 'Due ' + lead.due], [
-        create('span', st, statusPillClass(st)),
-        button('Open dossier', () => openBusinessPage(lead), true),
-        button('Email', () => compose(lead))
-      ], () => openBusinessPage(lead)));
-    }
-  } else {
-    queueCard.append(empty('✉', 'No urgent follow-ups due', 'When a lead replies or reaches its follow-up date, it will appear here.'));
+  const recent = create('section', '', 'surface dashboard-panel');
+  const recentHeader = create('div', '', 'dashboard-panel-heading');
+  recentHeader.append(create('h2', 'Recent Leads'), dashboardLink('View all', 'leads', 'arrow-right'));
+  recent.append(recentHeader);
+  if (!leads.length) recent.append(create('p', 'Your saved businesses will appear here.', 'dashboard-muted'));
+  for (const lead of leads.slice(0, 4)) {
+    const entry = button(lead.name, () => openBusinessPage(lead), 'dashboard-recent');
+    if (lead.savedAt) entry.append(create('small', new Date(lead.savedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })));
+    recent.append(entry);
   }
-
-  // Right card: Pipeline & Market Breakdown
-  const statsCard = create('article', '', 'surface dossier-card');
-  statsCard.append(create('h2', 'Pipeline & AI Audit Overview'));
-  const statsList = create('div');
-  const addStatRow = (label, val) => {
-    const r = create('div', '', 'stat-row');
-    r.append(create('span', label), create('strong', String(val)));
-    statsList.append(r);
-  };
-  addStatRow('Gmail Connection', account.mailbox ? `Connected (${account.mailbox})` : 'Not connected');
-  addStatRow('Database Storage', account.supabase?.connected ? 'Supabase Cloud Connected' : (account.supabase?.configured ? 'Supabase (Pending SQL setup)' : 'Local Storage'));
-  addStatRow('Leads with Verified Email', leads.filter(l => l.email).length);
-  addStatRow('Shopify / E-commerce Stores', leads.filter(l => l.platform === 'Shopify' || l.platform === 'WooCommerce').length);
-  addStatRow('Leads with Social Media Links', leads.filter(l => l.facebook || l.instagram || l.twitter || l.linkedin).length);
-  addStatRow('Leads Audited with AI Pitch', counts.aiAudited);
-  const topIndustries = [...industryCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} (${v})`).join(', ') || 'None yet';
-  const topCities = [...cityCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} (${v})`).join(', ') || 'None yet';
-  addStatRow('Top Categories', topIndustries);
-  addStatRow('Top Cities', topCities);
-  statsCard.append(statsList);
-
-  // Full width card: Recent Businesses Ready for Review & AI Analysis
-  const recentCard = create('article', '', 'surface dossier-card full');
-  const recentHeader = create('div', '', 'heading');
-  recentHeader.style.margin = '0';
-  recentHeader.append(
-    create('h2', 'Recent Businesses Ready for Review'),
-    leads.length ? button('View all leads →', () => { location.hash = '#leads'; }, true) : ''
-  );
-  recentCard.append(recentHeader);
-
-  if (leads.length) {
-    for (const lead of leads.slice(0, 6)) {
-      const st = leadStatus(lead);
-      recentCard.append(row(lead, [lead.industry, lead.city, lead.email, lead.phone, lead.address], [
-        create('span', st, statusPillClass(st)),
-        lead.aiBrief ? create('span', '✦ AI Pitch Ready', 'pill') : '',
-        button('Review dossier & AI pitch →', () => openBusinessPage(lead), true),
-        button('Draft email', () => compose(lead))
-      ], () => openBusinessPage(lead)));
-    }
-  } else {
-    recentCard.append(empty('⌕', 'Your pipeline is empty', 'Click "Find businesses" to scrape local leads from Bing Maps or import a CSV.'));
-  }
-
-  dashboardGrid.append(queueCard, statsCard, recentCard);
-  container.replaceChildren(headerBar, kpiGrid, dashboardGrid);
+  panels.append(priority, sources, recent);
+  activity.classList.add('dashboard-activity');
+  container.replaceChildren(intro, metrics, activity, quick, discover, panels);
 }
 
 function getVisibleSearchResults() {
@@ -541,9 +578,12 @@ function renderResults() {
   const startIndex = (resultsPage - 1) * pageSize;
   const pageItems = visibleResults.slice(startIndex, startIndex + pageSize);
 
-  $('#results').replaceChildren(...pageItems.map(item => {
+  const header = create('div', '', 'discover-result discover-result-header');
+  header.setAttribute('aria-hidden', 'true');
+  header.append(...['Business', 'Industry', 'Location', 'Website', 'Actions'].map(label => create('span', label)));
+  $('#results').replaceChildren(header, ...pageItems.map(item => {
     const saved = duplicate(item);
-    const save = button(saved ? 'Open lead' : 'Save lead', () => {
+    const save = button(saved ? 'Open lead' : 'Add', () => {
       if (saved) {
         openBusinessPage(saved);
         return;
@@ -551,6 +591,7 @@ function renderResults() {
       const copy = { ...item, threads: [] };
       delete copy.scanning;
       delete copy.scanned;
+      copy.savedAt = Date.now();
       leads.unshift(copy);
       persist();
       renderResults();
@@ -569,16 +610,29 @@ function renderResults() {
     const platformPill = (item.platform && item.platform !== 'Custom / Website')
       ? create('span', [item.platform, item.platformConfidence].filter(Boolean).join(' · '), 'pill')
       : '';
-    return row(item, [item.discoveryProvider, item.industry, item.city, item.address, item.email, item.phone], [
-      rankPill,
-      platformPill,
-      statusPill,
-      enrichBtn,
-      website(item.website, 'Website'),
-      ...socialLinks(item),
-      website(item.source, 'Bing Maps'),
-      save
-    ], () => openBusinessPage(item));
+    const card = create('article', '', 'discover-result');
+    const identity = create('div', '', 'discover-identity');
+    const initials = (item.name || '').trim().split(/\s+/).slice(0, 2).map(word => Array.from(word)[0]).join('');
+    identity.append(create('span', initials.toUpperCase() || 'B', 'discover-initials'), create('h3', item.name));
+    const site = website(item.website, 'Website');
+    if (site) site.textContent = new URL(site.href).hostname.replace(/^www\./, '');
+    const actions = create('div', '', 'actions discover-result-actions');
+    actions.append(button('View', () => openBusinessPage(item), true), save);
+    const details = create('details', '', 'discover-result-details');
+    const metadata = create('div', '', 'actions');
+    metadata.append(...[rankPill, platformPill, statusPill, enrichBtn, ...socialLinks(item), website(item.source, 'Source')].filter(Boolean));
+    details.append(create('summary', 'Contact and source details'),
+      create('p', [item.discoveryProvider, item.address, item.email, item.phone, item.about].filter(Boolean).join(' · ')),
+      metadata);
+    card.append(identity, create('span', item.industry || '—', 'discover-industry'),
+      create('span', item.city || item.address || '—', 'discover-location'),
+      site || create('span', '—', 'discover-website'), actions, details);
+    if (item.rating) {
+      const rating = create('span', ['★ ' + item.rating, item.ratingInfo].filter(Boolean).join(' · '), 'discover-rating');
+      details.before(rating);
+    }
+    if (site) site.className = 'discover-website';
+    return card;
   }));
 
   if (paginationEl) {
@@ -619,9 +673,17 @@ function getFilteredLeads() {
   const sortOrder = $('#filter-sort')?.value || 'recent';
 
   const stage = $('#filter-stage').value;
+  const industry = $('#filter-industry').value;
+  const review = leadReviewFilter;
   const folder = $('#filter-folder').value;
   const filtered = leads.filter(lead => {
     if (stage && stageOf(lead) !== stage) return false;
+    if (industry && norm(lead.industry) !== industry) return false;
+    if (review === 'outreach') {
+      const contact = assessLead(lead).contact;
+      if (stageOf(lead) !== 'qualified' || lead.reviewStatus === 'skip' ||
+          !['Public email', 'Contact page or form', 'Phone available'].includes(contact)) return false;
+    } else if (review && (lead.reviewStatus || 'unreviewed') !== review) return false;
     if (folder && !leadFolders(lead).some(name => norm(name) === folder)) return false;
     const status = leadStatus(lead);
     if (statusFilter && status !== statusFilter) return false;
@@ -687,8 +749,103 @@ function renderFolderFilter() {
   select.value = folders.has(selected) ? selected : '';
 }
 
+let leadReviewFilter = '';
+const reviewSelection = new Set();
+const reviewLabels = { unreviewed: 'Unreviewed', qualified: 'Qualified', research: 'Needs research', skip: 'Skipped' };
+
+function renderIndustryFilter() {
+  const select = $('#filter-industry');
+  const selected = select.value;
+  const industries = new Map();
+  for (const lead of leads) {
+    const key = norm(lead.industry);
+    if (key && !industries.has(key)) industries.set(key, lead.industry.trim());
+  }
+  select.replaceChildren(new Option('All industries', ''));
+  for (const [key, label] of [...industries].sort((a, b) => a[1].localeCompare(b[1]))) {
+    select.add(new Option(label, key));
+  }
+  select.value = industries.has(selected) ? selected : '';
+}
+
+function targetProfileFor(lead) {
+  const profiles = settings.leadProfiles || [];
+  const selected = $('#filter-folder').value;
+  const folders = leadFolders(lead).map(norm);
+  return profiles.find(profile => profile.folder === selected && folders.includes(selected)) ||
+    profiles.find(profile => folders.includes(profile.folder));
+}
+
+function editTargetProfile(key, name) {
+  const existing = (settings.leadProfiles || []).find(profile => profile.folder === key);
+  const form = create('form', '', 'stack');
+  form.append(
+    field('Target industry', 'industry', existing?.industry || '', { maxLength: 120, placeholder: 'For example, skincare' }),
+    field('Required platform or marketing tool', 'platform', existing?.platform || '', { maxLength: 80, placeholder: 'For example, Shopify' }),
+    field('Your offer for this folder', 'offer', existing?.offer || '', { maxLength: 300 }),
+    field('Industry angle', 'angle', existing?.angle || '', { type: 'textarea', maxLength: 300 }),
+    field('Exclusions, separated by commas', 'exclude', existing?.exclude || '', { maxLength: 240 })
+  );
+  const contactLabel = create('label', 'Require a public contact route');
+  const contact = create('input');
+  contact.type = 'checkbox';
+  contact.checked = existing?.requireContact || false;
+  contactLabel.prepend(contact);
+  const suggested = selectField('Suggested email template', 'templateId',
+    Object.fromEntries([['', 'Workspace default'], ...settings.templates.map(template => [template.id, template.name])]),
+    existing?.templateId || '');
+  form.append(contactLabel, suggested, create('button', 'Save target profile'));
+  form.onsubmit = event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    settings.leadProfiles = normalizeLeadProfiles([{ ...data, folder: key, requireContact: contact.checked },
+      ...(settings.leadProfiles || []).filter(profile => profile.folder !== key)]);
+    persist();
+    dialog.close();
+  };
+  show('Target profile · ' + name, form);
+}
+
+function renderLeadReview(filtered) {
+  const panel = $('#lead-review-panel');
+  const folder = $('#filter-folder').value;
+  const options = { '': 'All review statuses', ...reviewLabels, outreach: 'Outreach ready' };
+  const filter = selectField('Review queue', 'review', options, leadReviewFilter);
+  filter.lastChild.onchange = event => {
+    leadReviewFilter = event.target.value;
+    reviewSelection.clear();
+    renderLeads();
+  };
+  const profile = button('Target client profile', () => editTargetProfile(folder, searchFolders().get(folder).name), true);
+  profile.disabled = !folder;
+  const selected = filtered.filter(lead => reviewSelection.has(lead.id));
+  const select = button(selected.length === filtered.length && filtered.length ? 'Clear selection' : 'Select visible leads', () => {
+    if (selected.length === filtered.length) filtered.forEach(lead => reviewSelection.delete(lead.id));
+    else filtered.forEach(lead => reviewSelection.add(lead.id));
+    renderLeads();
+  }, true);
+  select.disabled = !filtered.length;
+  const actions = create('div', '', 'actions');
+  actions.append(profile, select);
+  for (const [status, label] of [['qualified', 'Qualify'], ['research', 'Needs research'], ['skip', 'Skip']]) {
+    const action = button(label, () => {
+      for (const lead of selected) {
+        lead.reviewStatus = status;
+        if (stageOf(lead) === 'prospect' && status === 'qualified') lead.stage = 'qualified';
+        else if (stageOf(lead) === 'qualified' && status !== 'qualified') lead.stage = 'prospect';
+        reviewSelection.delete(lead.id);
+      }
+      persist();
+    }, true);
+    action.disabled = !selected.length;
+    actions.append(action);
+  }
+  panel.replaceChildren(filter, actions, create('span', selected.length + ' selected', 'small'));
+}
+
 function renderLeads() {
   renderFolderFilter();
+  renderIndustryFilter();
   const navCount = $('#nav-leads-count');
   if (navCount) {
     navCount.textContent = String(leads.length);
@@ -731,6 +888,7 @@ function renderLeads() {
   }
 
   const filtered = getFilteredLeads();
+  renderLeadReview(filtered);
   const summary = $('#lead-summary');
   if (summary) {
     summary.textContent = leads.length
@@ -757,13 +915,38 @@ function renderLeads() {
     if (stage && stage !== status) badges.append(create('span', stage, 'pill'));
     badges.append(create('span', status, statusPillClass(status)));
     if (lead.aiBrief) badges.append(create('span', 'AI Pitch', 'pill'));
-    heading.append(title, badges);
+    const select = create('input');
+    select.type = 'checkbox';
+    select.checked = reviewSelection.has(lead.id);
+    select.setAttribute('aria-label', 'Select ' + lead.name + ' for review');
+    select.onchange = () => {
+      if (select.checked) reviewSelection.add(lead.id);
+      else reviewSelection.delete(lead.id);
+      renderLeadReview(filtered);
+    };
+    heading.append(select, title, badges);
     card.append(heading);
 
     const details = [lead.industry, lead.city, lead.email, lead.phone, lead.address,
       lead.due && 'Follow up ' + lead.due].filter(Boolean);
     if (details.length) card.append(create('p', details.join(' · '), 'saved-lead-details'));
     if (lead.about) card.append(create('p', lead.about, 'saved-lead-about'));
+    const profile = targetProfileFor(lead);
+    const assessment = assessLead(lead, profile);
+    card.append(create('p', [profile && assessment.fit, ...assessment.reasons, assessment.contact,
+      lead.reviewStatus && reviewLabels[lead.reviewStatus]].filter(Boolean).join(' · '), 'saved-lead-details'));
+    const angle = industryAngle(lead, profile);
+    if (angle) card.append(create('p', angle, 'saved-lead-details'));
+    if (!lead.finding?.confirmed && lead.platformEvidence && lead.website) {
+      const signal = create('p', lead.platformEvidence + ' ', 'saved-lead-details');
+      signal.append(website(lead.website, 'Review website') || '');
+      card.append(signal);
+    }
+    if (lead.finding?.confirmed) {
+      const finding = create('p', lead.finding.note + ' ', 'saved-lead-details');
+      finding.append(website(lead.finding.url, 'Evidence') || '');
+      card.append(finding);
+    }
 
     const footer = create('div', '', 'saved-lead-footer');
     const links = create('div', '', 'actions saved-lead-links');
@@ -804,7 +987,8 @@ function renderQualification(lead) {
     lead.finding?.confirmed ? 'confirmed' : 'draft');
   const feedback = create('p', '', 'small');
   feedback.setAttribute('role', 'status');
-  form.append(create('h3', 'Qualification'), stage, note, source, status,
+  const angle = industryAngle(lead, targetProfileFor(lead));
+  form.append(create('h3', 'Qualification'), create('p', angle, 'small'), stage, note, source, status,
     website(lead.finding?.url, 'Open evidence') || '', feedback, create('button', 'Save qualification'));
   form.onsubmit = event => {
     event.preventDefault();
@@ -819,6 +1003,7 @@ function renderQualification(lead) {
     lead.stage = confirmed && fields.get('stage') === 'prospect' ? 'qualified' : fields.get('stage');
     if (['won', 'lost'].includes(lead.stage)) lead.due = '';
     lead.finding = { note: finding, url, confirmed };
+    if (lead.stage === 'qualified') lead.reviewStatus = 'qualified';
     persist();
   };
   return form;
@@ -839,7 +1024,7 @@ function renderBusinessPage() {
   activeBusinessId = lead.id;
 
   const status = leadStatus(lead);
-  const topBar = create('div', '', 'heading section-title');
+  const topBar = create('div', '', 'surface dossier-hero');
   const titleWrap = create('div');
 
   const navQueueBar = create('div', '', 'actions');
@@ -866,9 +1051,29 @@ function renderBusinessPage() {
   const titleRow = create('div', '', 'actions');
   titleRow.append(create('h1', lead.name), create('span', status, statusPillClass(status)));
   const subTitle = create('p', [lead.industry, lead.city, lead.address].filter(Boolean).join(' · '));
-  titleWrap.append(navQueueBar, titleRow, subTitle);
+  const identity = create('div', '', 'record-identity');
+  const title = create('div');
+  title.append(titleRow, subTitle);
+  if (lead.rating) title.append(create('span', '★ ' + lead.rating + (lead.ratingInfo ? ' · ' + lead.ratingInfo : ''), 'record-rating'));
+  identity.append(recordAvatar(lead.name), title);
+  titleWrap.append(navQueueBar, identity);
+  const contactCard = create('aside', '', 'dossier-contact');
+  contactCard.append(create('h2', 'Contact information'));
+  const contacts = [
+    ['globe', website(lead.website, lead.website)],
+    ['mail', lead.email && create('span', lead.email)],
+    ['phone', lead.phone && create('span', lead.phone)],
+    ['map-pin', (lead.address || lead.city) && create('span', lead.address || lead.city)]
+  ];
+  for (const [icon, value] of contacts) {
+    if (!value) continue;
+    const line = create('div', '', 'dossier-contact-line');
+    line.append(lucide(icon), value);
+    contactCard.append(line);
+  }
+  if (contactCard.childElementCount === 1) contactCard.append(create('p', 'No contact details listed.', 'small'));
 
-  const actionGroup = create('div', '', 'actions');
+  const actionGroup = create('div', '', 'actions dossier-actions');
   if (lead.website) {
     const combBtn = button('Have a look (Comb website)', event => enrichItemEmail(lead, event.currentTarget), true);
     actionGroup.append(combBtn);
@@ -898,11 +1103,11 @@ function renderBusinessPage() {
   });
   actionGroup.append(
     analyzeBtn,
-    button('Draft email', () => compose(lead)),
+    button('Contact now', () => compose(lead)),
     button('Edit all fields', () => editLead(lead), true),
     button('Delete', () => deleteLead(lead), 'danger')
   );
-  topBar.append(titleWrap, actionGroup);
+  topBar.append(titleWrap);
 
   const grid = create('div', '', 'dossier-grid');
 
@@ -1144,8 +1349,25 @@ function renderBusinessPage() {
     historyCard.append(create('p', 'No outreach emails sent to this business yet.', 'small'));
   }
 
-  grid.append(detailsCard, webCard, aiCard, historyCard);
-  container.replaceChildren(topBar, grid);
+  const overview = create('article', '', 'surface dossier-card');
+  overview.append(create('h2', 'Company overview'), create('p', lead.aboutSummary || lead.about || 'No company description available.'));
+  const tabs = create('div', '', 'record-tabs');
+  const sections = [
+    ['Overview', [contactCard, overview, webCard]],
+    ['Contact', [detailsCard]],
+    ['Insights', [aiCard]],
+    ['Outreach', [historyCard]]
+  ];
+  const controls = sections.map(([label, cards]) => button(label, () => {
+    for (const control of controls) control.setAttribute('aria-pressed', String(control.textContent === label));
+    grid.replaceChildren(...cards);
+  }, true));
+  tabs.append(...controls);
+  container.replaceChildren(topBar, tabs, grid, actionGroup);
+  (controls.find(control => control.textContent === container.dataset.section) || controls[0]).click();
+  tabs.addEventListener('click', event => {
+    if (event.target.closest('button')) container.dataset.section = event.target.closest('button').textContent;
+  });
 }
 
 function field(label, name, value = '', { type = 'text', required = false, maxLength = 160, placeholder = '' } = {}) {
@@ -1222,7 +1444,7 @@ function editLead(lead) {
       values.due = '';
     }
     if (lead) Object.assign(lead, values);
-    else leads.unshift({ ...values, id: crypto.randomUUID(), threads: [] });
+    else leads.unshift({ ...values, id: crypto.randomUUID(), savedAt: Date.now(), threads: [] });
     persist();
     if (results.length) renderResults();
     dialog.close();
@@ -1257,7 +1479,7 @@ function importLeads() {
       for (const business of businesses) {
         if (duplicate(business)) skipped++;
         else {
-          leads.unshift({ ...business, id: crypto.randomUUID(), threads: [] });
+          leads.unshift({ ...business, id: crypto.randomUUID(), savedAt: Date.now(), threads: [] });
           added++;
         }
       }
@@ -1317,7 +1539,9 @@ async function enrichMissingEmails() {
 }
 
 function interpolateTemplate(text = '', lead = {}) {
+  const profile = targetProfileFor(lead);
   return text
+    .replace(/\{\{\s*industry_angle\s*\}\}/gi, () => industryAngle(lead, profile) || '[specific opportunity]')
     .replace(/\{\{\s*business_name\s*\}\}/gi, lead.name || 'there')
     .replace(/\{\{\s*city\s*\}\}/gi, lead.city || 'your area')
     .replace(/\{\{\s*industry\s*\}\}/gi, lead.industry || 'local')
@@ -1326,7 +1550,15 @@ function interpolateTemplate(text = '', lead = {}) {
     .replace(/\{\{\s*finding_source\s*\}\}/gi, () =>
       lead.finding?.confirmed ? lead.finding.url : '[specific opportunity source]')
     .replace(/\{\{\s*your_name\s*\}\}/gi, settings.senderName || '[your name]')
-    .replace(/\{\{\s*your_service\s*\}\}/gi, settings.senderService || '[your service]');
+    .replace(/\{\{\s*your_service\s*\}\}/gi, profile?.offer || settings.senderService || '[your service]');
+}
+
+function recordAvatar(name) {
+  const initials = String(name || 'Jobhunta').trim().split(/\s+/).slice(0, 2)
+    .map(word => Array.from(word)[0]).join('').toUpperCase();
+  const avatar = create('span', initials || 'J', 'record-avatar');
+  avatar.setAttribute('aria-hidden', 'true');
+  return avatar;
 }
 
 function renderProfile() {
@@ -1356,17 +1588,23 @@ function renderProfile() {
   const topHeader = create('div', '', 'heading section-title');
   const titleWrap = create('div');
   titleWrap.append(
-    create('h1', 'User Profile & Usage'),
-    create('p', 'Track your daily search and email outreach limits across membership tiers.')
+    create('h1', 'Profile & Usage'),
+    create('p', 'Manage your account and track your daily usage.')
   );
-  const tierBadge = create('span', activeTier.label + ' Tier', 'pill');
-  topHeader.append(titleWrap, tierBadge);
+  const settingsLink = dashboardLink('Account settings', 'settings', 'settings', 'profile-settings');
+  topHeader.append(titleWrap, settingsLink);
 
-  const grid = create('div', '', 'dossier-grid');
+  const grid = create('div', '', 'profile-grid');
 
   // 1. User Account Card
   const userCard = create('article', '', 'surface dossier-card');
-  userCard.append(create('h2', 'Account Identity'));
+  const name = currentUser?.name || settings.senderName || 'Your account';
+  const identity = create('div', '', 'record-identity');
+  const identityText = create('div');
+  identityText.append(create('h2', name), create('p', currentUser?.email || 'Not signed in'),
+    create('span', activeTier.label + ' plan', 'pill'));
+  identity.append(recordAvatar(name), identityText);
+  userCard.append(identity);
   const kv = create('div', '', 'kv-grid');
   kv.append(
     kvItem('Full Name', currentUser?.name || settings.senderName || 'Not set'),
@@ -1376,17 +1614,19 @@ function renderProfile() {
     kvItem('Saved Leads in Workspace', String(leads.length)),
     kvItem('Connected Gmail', account.mailbox || 'Not connected')
   );
-  userCard.append(kv);
+  const accountDetails = create('details', '', 'profile-account-details');
+  accountDetails.append(create('summary', 'Account details'), kv);
+  userCard.append(accountDetails);
 
   // 2. Daily Usage Card
   const usageCard = create('article', '', 'surface dossier-card');
-  usageCard.append(create('h2', `Daily Usage (${usage.usageDate || 'Today'})`));
+  usageCard.append(create('h2', 'Usage overview'));
 
   const addMeter = (title, used, limit) => {
     const wrap = create('div', '', 'stack');
     wrap.style.gap = '4px';
     const isUnlimited = limit === null || limit === undefined;
-    const labelText = isUnlimited ? `${used} used · Unlimited` : `${used} / ${limit} used today`;
+    const labelText = isUnlimited ? `${used.toLocaleString()} · Unlimited` : `${used.toLocaleString()} / ${limit.toLocaleString()}`;
     const rowTop = create('div', '', 'stat-row');
     rowTop.style.border = '0';
     rowTop.style.padding = '0';
@@ -1394,7 +1634,7 @@ function renderProfile() {
 
     const meter = create('div', '', 'meter');
     const fill = create('div', '', 'meter-fill');
-    const pct = isUnlimited ? 100 : Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
+    const pct = isUnlimited ? 0 : Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
     fill.style.width = pct + '%';
     if (!isUnlimited && used >= limit) fill.style.background = '#9e2a2b';
     meter.append(fill);
@@ -1403,33 +1643,38 @@ function renderProfile() {
   };
 
   usageCard.append(
-    addMeter('Business Searches Today', usage.searchesToday || 0, activeTier.dailySearchLimit),
-    addMeter('Search Results Today', usage.resultsToday || 0, activeTier.dailyResultLimit),
-    addMeter('Outreach Emails Sent Today', usage.emailsToday || 0, activeTier.dailyEmailLimit),
+    addMeter('Searches used', usage.searchesToday || 0, activeTier.dailySearchLimit),
+    addMeter('Results used', usage.resultsToday || 0, activeTier.dailyResultLimit),
+    addMeter('Emails sent', usage.emailsToday || 0, activeTier.dailyEmailLimit),
     create('p', 'Daily counters reset automatically every UTC day at 00:00.', 'small')
   );
 
   // 3. Membership Tiers Card
-  const tiersCard = create('article', '', 'surface dossier-card full');
-  tiersCard.append(create('h2', 'Membership Tiers & Daily Quotas'));
-  const tierGrid = create('div', '', 'tier-grid');
+  const tiersCard = create('article', '', 'surface dossier-card');
+  tiersCard.append(create('h2', 'Plan comparison'));
+  const scroll = create('div', '', 'profile-table-scroll');
+  const table = create('table', '', 'profile-table');
+  const headings = table.createTHead().insertRow();
+  headings.append(create('th', 'Daily quota'));
   for (const tier of tierList) {
-    const isCurrent = tier.key === activeTier.key;
-    const card = create('div', '', 'tier-card' + (isCurrent ? ' active' : ''));
-    const head = create('h3', tier.label);
-    if (isCurrent) head.append(create('span', 'Active', 'pill'));
-    const list = create('ul');
-    list.append(
-      create('li', tier.dailySearchLimit === null ? 'Unlimited searches / day' : `${tier.dailySearchLimit} searches / day`),
-      create('li', tier.dailyResultLimit === null ? 'Unlimited search results / day' : `${tier.dailyResultLimit.toLocaleString()} search results / day`),
-      create('li', tier.dailyEmailLimit === null ? 'Unlimited emails / day' : `${tier.dailyEmailLimit} emails / day`),
-      create('li', 'Isolated Supabase workspace & AI pitches')
-    );
-    card.append(head, list);
-    tierGrid.append(card);
+    const cell = create('th', tier.label, tier.key === activeTier.key ? 'current-plan' : '');
+    cell.scope = 'col';
+    if (tier.key === activeTier.key) cell.append(create('small', 'Current'));
+    headings.append(cell);
   }
-  tiersCard.append(tierGrid);
-
+  const body = table.createTBody();
+  for (const [label, field] of [['Searches', 'dailySearchLimit'], ['Results', 'dailyResultLimit'], ['Emails', 'dailyEmailLimit']]) {
+    const line = body.insertRow();
+    const heading = create('th', label);
+    heading.scope = 'row';
+    line.append(heading);
+    for (const tier of tierList) {
+      line.append(create('td', tier[field]?.toLocaleString() ?? 'Unlimited', tier.key === activeTier.key ? 'current-plan' : ''));
+    }
+  }
+  scroll.append(table);
+  tiersCard.append(scroll, create('p', 'Every plan includes an isolated workspace and AI pitches.', 'small'));
+  userCard.classList.add('profile-identity');
   grid.append(userCard, usageCard, tiersCard);
   container.replaceChildren(topHeader, grid);
 }
@@ -1582,7 +1827,7 @@ create table if not exists public.jobhunta_leads (
 
 function renderBroadcast() {
   const title = create('div', '', 'heading section-title');
-  title.append(create('h1', 'Broadcast'));
+  title.append(create('h1', 'Email broadcast'));
   const formCard = create('article', '', 'surface dossier-card full');
   const formHeader = create('div', '', 'heading');
   formHeader.style.margin = '0';
@@ -1631,6 +1876,23 @@ function renderBroadcast() {
     const card = create('article', '', 'surface broadcast-card');
     const actions = create('div', '', 'actions');
     actions.append(
+      button('Use template', () => {
+        if (!leads.length) {
+          report('Save a lead to choose a campaign recipient.');
+          return;
+        }
+        const audience = create('form', '', 'stack');
+        const label = create('label', 'Select a saved lead');
+        const select = create('select');
+        leads.forEach((lead, index) => select.add(new Option(lead.name, index)));
+        label.append(select);
+        audience.append(label, create('button', 'Review email'));
+        audience.onsubmit = event => {
+          event.preventDefault();
+          compose(leads[Number(select.value)], null, null, null, template);
+        };
+        show('Campaign audience', audience);
+      }),
       button('Edit', () => editBroadcastTemplate(template), true),
       button('Copy email', async () => {
         try {
@@ -1670,7 +1932,28 @@ function renderBroadcast() {
         counts.replied + ' replied · ' + counts.booked + ' booked or won', 'small'));
     }
   }
-  $('#broadcast-content').replaceChildren(title, formCard, library, outcomes);
+  for (const [heading, labels] of [
+    ['By folder', lead => leadFolders(lead).length ? leadFolders(lead) : ['No folder']],
+    ['By provider', lead => [lead.discoveryProvider || 'Provider not recorded']]
+  ]) {
+    const groups = new Map();
+    for (const lead of leads) for (const label of new Set(labels(lead))) {
+      const count = groups.get(label) || { saved: 0, qualified: 0, contacted: 0, replied: 0, booked: 0 };
+      count.saved++;
+      if (lead.reviewStatus === 'qualified' || stageOf(lead) === 'qualified') count.qualified++;
+      if (lead.threads?.length) count.contacted++;
+      if (lead.replied) count.replied++;
+      if (['booked', 'won'].includes(stageOf(lead))) count.booked++;
+      groups.set(label, count);
+    }
+    outcomes.append(create('h3', heading));
+    if (!groups.size) outcomes.append(create('p', 'No saved leads yet.', 'small'));
+    for (const [label, count] of groups) outcomes.append(create('p',
+      label + ' · ' + count.saved + ' saved · ' + count.qualified + ' qualified · ' +
+      count.contacted + ' contacted · ' + count.replied + ' replied · ' + count.booked + ' booked or won', 'small'));
+  }
+  outcomes.id = 'outreach-outcomes';
+  $('#broadcast-content').replaceChildren(title, library, formCard, outcomes);
 }
 
 function editBroadcastTemplate(template) {
@@ -1678,7 +1961,7 @@ function editBroadcastTemplate(template) {
   const name = field('Template name', 'name', template?.name || '', { required: true, maxLength: 80 });
   const subject = field('Subject', 'subject', template?.subject || '', { required: true, maxLength: 160 });
   const body = field('Message', 'body', template?.body || '', { type: 'textarea', required: true, maxLength: 16000 });
-  const placeholders = create('p', 'Placeholders: {{business_name}}, {{city}}, {{industry}}, {{your_name}}, {{your_service}}, {{specific_opportunity}}, {{finding_source}}', 'small');
+  const placeholders = create('p', 'Placeholders: {{business_name}}, {{city}}, {{industry}}, {{your_name}}, {{your_service}}, {{specific_opportunity}}, {{finding_source}}, {{industry_angle}}', 'small');
   const feedback = create('p', '', 'small');
   feedback.setAttribute('role', 'status');
   const actions = create('div', '', 'actions');
@@ -1722,7 +2005,7 @@ function futureDateString(days) {
   return date.toLocaleDateString('en-CA');
 }
 
-function compose(lead, conversation, parent, customPitch = null) {
+function compose(lead, conversation, parent, customPitch = null, selectedTemplate = null) {
   const form = create('form', '', 'stack');
   const recipient = parent
     ? (parent.sent
@@ -1733,7 +2016,7 @@ function compose(lead, conversation, parent, customPitch = null) {
 
   const defaultTpl = parent
     ? (settings.templates.find(tpl => tpl.id === 'followup') || settings.templates[0])
-    : settings.templates[0];
+    : (selectedTemplate || settings.templates.find(tpl => tpl.id === targetProfileFor(lead)?.templateId) || settings.templates[0]);
 
   const templateWrapper = create('label', 'Template');
   const templateSelect = create('select');
@@ -1789,15 +2072,24 @@ function compose(lead, conversation, parent, customPitch = null) {
     feedback.textContent = 'Sending…';
     const mailbox = account.mailbox;
     try {
+      const template = settings.templates.find(item => item.id === templateSelect.value);
+      const templateName = template?.name || (customPitch ? 'AI pitch' : 'Custom email');
+      await workspaceSync;
       const sent = await api('/api/send', {
-        ...values, requestId, threadId: conversation?.id, parentId: parent?.id
+        ...values, requestId, leadId: lead.id, templateName, threadId: conversation?.id, parentId: parent?.id
       });
+      if (sent.trackingError) {
+        feedback.textContent = 'Gmail accepted the email, but Jobhunta could not register the conversation. Check Gmail Sent before trying again.';
+        return;
+      }
+      lead.threads ||= [];
       if (!conversation && !lead.threads.some(item => item.id === sent.threadId && item.mailbox === mailbox)) {
         if (['prospect', 'qualified'].includes(stageOf(lead))) lead.stage = 'contacted';
-        const template = settings.templates.find(item => item.id === templateSelect.value);
         lead.threads.push({ id: sent.threadId, mailbox, subject: values.subject, time: Date.now(), to: values.to,
-          templateName: template?.name || (customPitch ? 'AI pitch' : 'Custom email') });
+          templateName });
       }
+      const tracked = lead.threads.find(item => item.id === sent.threadId && item.mailbox === mailbox);
+      if (tracked) tracked.sentTimes = [...(tracked.sentTimes || [tracked.time]), ...(conversation ? [Date.now()] : [])];
       if (!lead.email) lead.email = values.to;
       if (!lead.due && settings.defaultFollowUpDays > 0) {
         lead.due = futureDateString(settings.defaultFollowUpDays);
@@ -1819,21 +2111,100 @@ function compose(lead, conversation, parent, customPitch = null) {
 const threadKey = conversation => conversation.mailbox + ':' + conversation.id;
 const outgoing = () => leads.flatMap(lead => (lead.threads || []).map(conversation => ({ lead, conversation })));
 
+const inboxLabels = { waiting: 'Awaiting reply', reply: 'Responded', bounce: 'Bounced', review: 'Needs review' };
+
 function renderInbox() {
-  const list = outgoing().filter(item => item.conversation.mailbox === account.mailbox);
+  const filter = $('#inbox-status').value;
+  for (const tab of document.querySelectorAll('#inbox-tabs button')) {
+    tab.setAttribute('aria-pressed', String(tab.dataset.status === filter));
+  }
+  const list = outgoing().filter(({ conversation }) => conversation.mailbox === account.mailbox &&
+    (!filter || (conversation.inboxStatus || 'waiting') === filter))
+    .sort((a, b) => inboxActivity(b.conversation) - inboxActivity(a.conversation));
+  const reader = $('#inbox-reader');
+  if (!outgoing().some(({ conversation }) => conversation.mailbox === account.mailbox &&
+    threadKey(conversation) === reader.dataset.thread)) closeInboxReader();
+  $('#inbox-mailbox').textContent = account.mailbox ? 'Gmail connected · ' + account.mailbox : 'Connect Gmail to track your outreach.';
   $('#refresh').disabled = !account.mailbox || refreshing;
   $('#conversations').replaceChildren(...(list.length ? list.map(({ lead, conversation }) => {
-    const thread = messages.get(threadKey(conversation)) || [];
-    const hasIncoming = thread.some(message => !message.sent);
-    const statusLabel = lead.classification
-      ? statusNames[lead.classification]
-      : (hasIncoming ? 'Reply received' : 'Sent');
-    return row(lead, [conversation.subject, conversation.to || lead.email, statusLabel], [
-      create('span', statusLabel, statusPillClass(statusLabel)),
-      button('Open thread', () => openThread(lead, conversation), true)
-    ], () => openBusinessPage(lead));
-  }) : [empty('✉', account.mailbox ? 'No conversations yet' : 'Connect your Gmail account',
-    account.mailbox ? 'Send an email to a saved lead to start a conversation.' : 'Your Jobhunta replies will appear here after you connect.')]));
+    const statusLabel = inboxLabels[conversation.inboxStatus] || inboxLabels.waiting;
+    const item = button('', () => selectInboxThread(lead, conversation), 'inbox-item');
+    if (reader.dataset.thread === threadKey(conversation)) item.setAttribute('aria-current', 'true');
+    const label = create('span', '', 'inbox-item-label');
+    const latest = messages.get(threadKey(conversation))?.at(-1);
+    const activity = inboxActivity(conversation);
+    label.append(create('strong', lead.name), create('b', conversation.subject || '(No subject)'),
+      create('span', latest?.body?.trim().replace(/\s+/g, ' ') || conversation.to || lead.email, 'inbox-snippet'));
+    const meta = create('span', '', 'inbox-meta');
+    if (activity) meta.append(create('time', new Date(activity).toLocaleDateString()));
+    meta.append(create('span', statusLabel, statusPillClass(statusLabel)));
+    item.append(recordAvatar(lead.name), label, meta);
+    return item;
+  }) : [empty('✉', filter ? 'No matching conversations' : account.mailbox ? 'No conversations yet' : 'Connect your Gmail account',
+    filter ? 'Choose another conversation status.' : account.mailbox
+      ? 'Send an email to a saved lead to start a conversation.' : 'Your Jobhunta replies will appear here after you connect.')]));
+}
+$('#inbox-status').onchange = () => {
+  closeInboxReader();
+  renderInbox();
+};
+$('#inbox-tabs').onclick = event => {
+  const tab = event.target.closest('button');
+  if (!tab) return;
+  $('#inbox-status').value = tab.dataset.status;
+  $('#inbox-status').dispatchEvent(new Event('change'));
+};
+$('#inbox-compose').onclick = () => {
+  const form = create('form', '', 'stack');
+  const candidates = [...leads].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  if (!candidates.length) {
+    const discover = dashboardLink('Find businesses', 'discover', 'search');
+    discover.onclick = () => dialog.close();
+    show('Compose', create('p', 'Save a lead before composing an outreach email.'), discover);
+    return;
+  }
+  const label = create('label', 'Choose a saved lead');
+  const select = create('select');
+  candidates.forEach((lead, index) => select.add(new Option(lead.name + (lead.email ? ' · ' + lead.email : ''), index)));
+  label.append(select);
+  form.append(label, create('button', 'Continue'));
+  form.onsubmit = event => {
+    event.preventDefault();
+    compose(candidates[Number(select.value)]);
+  };
+  show('Compose', form);
+};
+
+function inboxActivity(conversation) {
+  return Number(messages.get(threadKey(conversation))?.at(-1)?.time ?? conversation.sentTimes?.at(-1) ?? conversation.time) || 0;
+}
+
+function closeInboxReader() {
+  const reader = $('#inbox-reader');
+  if (!reader.dataset.thread && reader.childElementCount) return;
+  delete reader.dataset.thread;
+  $('#inbox').classList.remove('reading-thread');
+  reader.replaceChildren(create('p', 'Select a conversation to read it here.', 'inbox-reader-empty'));
+}
+
+function selectInboxThread(lead, conversation) {
+  const reader = $('#inbox-reader');
+  reader.dataset.thread = threadKey(conversation);
+  const back = button('Back to inbox', () => {
+    closeInboxReader();
+    renderInbox();
+    $('#conversations .inbox-item')?.focus();
+  }, 'secondary inbox-back');
+  back.prepend(lucide('arrow-left'));
+  const title = create('h2', conversation.subject || '(No subject)');
+  title.tabIndex = -1;
+  const panel = create('div', 'Loading conversation…', 'inbox-thread');
+  panel.setAttribute('aria-live', 'polite');
+  reader.replaceChildren(back, title, panel);
+  $('#inbox').classList.add('reading-thread');
+  renderInbox();
+  title.focus();
+  void loadThread(lead, conversation, panel);
 }
 
 function classify(lead, conversation) {
@@ -1857,14 +2228,32 @@ function classify(lead, conversation) {
 async function syncThread(lead, conversation) {
   const key = threadKey(conversation);
   const thread = await api('/api/thread', { id: conversation.id, mailbox: conversation.mailbox });
+  if (account.mailbox !== conversation.mailbox || !leads.includes(lead)) return [];
   messages.set(key, thread);
-  const incoming = thread.filter(message => !message.sent);
-  const seen = new Set(conversation.seen || []);
-  if (incoming.some(message => !seen.has(message.id))) {
+  const status = thread.findLast(message => ['bounce', 'reply'].includes(message.kind))?.kind ||
+    thread.findLast(message => ['review', 'automatic'].includes(message.kind))?.kind;
+  const inboxStatus = ['bounce', 'reply'].includes(status) ? status : status ? 'review' : 'waiting';
+  const sentTimes = thread.filter(message => message.sent).map(message => message.time);
+  const changed = conversation.inboxStatus !== inboxStatus ||
+    (sentTimes.length > 0 && JSON.stringify(conversation.sentTimes) !== JSON.stringify(sentTimes));
+  if (sentTimes.length) conversation.sentTimes = sentTimes;
+  conversation.inboxStatus = inboxStatus;
+  const replies = thread.filter(message => message.kind === 'reply');
+  const seen = new Set(conversation.seenReplies || []);
+  const newReply = replies.some(message => !seen.has(message.id));
+  if (newReply) {
     if (['prospect', 'qualified', 'contacted'].includes(stageOf(lead))) lead.stage = 'replied';
     lead.replied = true;
     lead.due = '';
-    conversation.seen = incoming.map(message => message.id);
+    conversation.seenReplies = replies.map(message => message.id);
+  }
+  if (status === 'bounce' && !['bounced', 'unsubscribe'].includes(lead.classification)) {
+    lead.classification = 'bounced';
+    lead.due = '';
+    const bouncedAddress = norm(conversation.to || lead.email);
+    if (bouncedAddress) lead.suppressed = [...new Set([...(lead.suppressed || []), bouncedAddress])];
+    persist();
+  } else if (changed || newReply) {
     persist();
   }
   return thread;
@@ -1873,22 +2262,29 @@ async function syncThread(lead, conversation) {
 async function openThread(lead, conversation) {
   const panel = create('div', 'Loading conversation…');
   show(conversation.subject, panel);
+  await loadThread(lead, conversation, panel);
+}
+
+async function loadThread(lead, conversation, panel) {
   try {
     const thread = await syncThread(lead, conversation);
-    const lastIncoming = thread.findLast(message => !message.sent);
-    const replyTarget = lastIncoming || thread.at(-1);
+    const lastIncoming = thread.findLast(message => message.kind === 'reply');
+    const replyTarget = lastIncoming || thread.findLast(message => message.kind === 'sent');
     panel.replaceChildren(...thread.map(message => {
       const mail = create('article', '', 'mail' + (message.sent ? ' outgoing' : ''));
       mail.append(
         create('h3', (message.sent ? 'You → ' + (message.to || conversation.to || lead.email) : message.from)),
-        create('small', new Date(message.time).toLocaleString()),
+        create('small', [
+          { automatic: 'Automatic response', bounce: 'Delivery failure', review: 'Sender needs review' }[message.kind],
+          new Date(message.time).toLocaleString()
+        ].filter(Boolean).join(' · ')),
         create('p', message.body)
       );
       return mail;
     }));
     const footer = create('div', '', 'stack');
     footer.append(classify(lead, conversation));
-    if (replyTarget) {
+    if (replyTarget && conversation.inboxStatus !== 'bounce') {
       footer.append(button(
         lastIncoming ? 'Reply in thread' : 'Send follow-up in thread',
         () => compose(lead, conversation, replyTarget)
@@ -1902,8 +2298,21 @@ async function refresh(manual = false) {
   if (!account.mailbox || refreshing) return;
   refreshing = true;
   renderInbox();
+  const activeUser = currentUser?.id;
+  const activeMailbox = account.mailbox;
   let failed = 0;
   try {
+    const registered = await api('/api/outreach');
+    if (currentUser?.id !== activeUser || account.mailbox !== activeMailbox) return;
+    let restored = false;
+    for (const conversation of registered) {
+      const lead = leads.find(item => item.id === conversation.leadId);
+      if (!lead || lead.threads?.some(thread => thread.id === conversation.id && thread.mailbox === conversation.mailbox)) continue;
+      (lead.threads ||= []).push(conversation);
+      if (['prospect', 'qualified'].includes(lead.stage)) lead.stage = 'contacted';
+      restored = true;
+    }
+    if (restored) persist();
     const list = outgoing().filter(item => item.conversation.mailbox === account.mailbox);
     for (let index = 0; index < list.length; index += 4) {
       const batch = await Promise.allSettled(list.slice(index, index + 4)
@@ -1912,9 +2321,12 @@ async function refresh(manual = false) {
     }
     if (failed) report('Could not refresh ' + failed + ' conversation(s). Check Gmail or reconnect.', true);
     else if (manual) report(list.length ? 'Inbox is up to date.' : 'There are no outreach conversations to refresh.');
+  } catch (error) {
+    if (currentUser?.id === activeUser) report(error.message, true);
   } finally {
     refreshing = false;
     renderInbox();
+    renderDashboard();
   }
 }
 
@@ -1965,10 +2377,15 @@ function renderSavedSearches() {
 
 const discoveryFields = ['industry', 'city', 'rankMode', 'mode', 'terms', 'locations', 'platform', 'sources', 'queries', 'urls'];
 const searchForm = $('#search');
+const discoverModeButtons = document.querySelectorAll('.discover-modes button');
 function syncDiscoveryMode() {
-  const both = searchForm.elements.mode.value === 'both';
+  const mode = searchForm.elements.mode.value;
+  const both = mode === 'both';
   if (both) searchForm.elements.sources.value = 'combined';
   searchForm.elements.sources.disabled = both;
+  for (const control of discoverModeButtons) {
+    control.setAttribute('aria-pressed', String(control.dataset.mode === mode));
+  }
 }
 searchForm.elements.mode.onchange = syncDiscoveryMode;
 for (const platform of Object.keys(platformDomains)) $('#discovery-platform').add(new Option(platform, platform));
@@ -2207,6 +2624,7 @@ $('#save-all').onclick = () => {
         lead = { ...item, threads: [] };
         delete lead.scanning;
         delete lead.scanned;
+        lead.savedAt = Date.now();
         leads.unshift(lead);
       }
       const folders = leadFolders(lead);
@@ -2215,24 +2633,50 @@ $('#save-all').onclick = () => {
     persist();
     renderResults();
     $('#filter-folder').value = key;
-    for (const id of ['filter-query', 'filter-status', 'filter-platform', 'filter-stage']) $('#' + id).value = '';
+    leadReviewFilter = '';
+    reviewSelection.clear();
+    for (const id of ['filter-query', 'filter-status', 'filter-platform', 'filter-stage', 'filter-industry']) $('#' + id).value = '';
     dialog.close();
     location.hash = '#leads';
     renderLeads();
   };
   show('Save search results', form);
 };
-$('#filter-folder').onchange = renderLeads;
+$('#filter-folder').onchange = () => {
+  reviewSelection.clear();
+  renderLeads();
+};
+$('#filter-industry').onchange = () => {
+  reviewSelection.clear();
+  renderLeads();
+};
 
 $('#results-filter').onchange = () => {
   resultsPage = 1;
   renderResults();
 };
+$('#discover-presets').addEventListener('click', event => {
+  const preset = event.target.closest('button');
+  if (!preset) return;
+  const industry = $('#industry-input');
+  industry.value = preset.textContent.trim();
+  industry.focus();
+});
+for (const control of discoverModeButtons) {
+  control.onclick = () => {
+    searchForm.elements.mode.value = control.dataset.mode;
+    syncDiscoveryMode();
+  };
+}
+syncDiscoveryMode();
 
 function setMobileNav(open) {
   document.body.classList.toggle('nav-open', open);
   const toggleBtn = $('#menu-toggle');
-  if (toggleBtn) toggleBtn.setAttribute('aria-expanded', String(open));
+  if (toggleBtn) {
+    toggleBtn.setAttribute('aria-expanded', String(open));
+    toggleBtn.replaceChildren(lucide(open ? 'x' : 'menu'));
+  }
 }
 
 function navigate() {
@@ -2248,7 +2692,8 @@ function navigate() {
     settings: 'Settings'
   };
   const requested = location.hash.slice(1);
-  const page = Object.hasOwn(pageTitles, requested) ? requested : 'dashboard';
+  const page = requested === 'analytics' ? 'broadcast' : Object.hasOwn(pageTitles, requested) ? requested : 'dashboard';
+  document.body.dataset.page = page;
   for (const section of document.querySelectorAll('.page')) section.hidden = section.id !== page;
   for (const link of document.querySelectorAll('nav a')) {
     const activeNav = page === 'business' ? 'leads' : page;
@@ -2261,8 +2706,25 @@ function navigate() {
   if (page === 'inbox') refresh();
   if (page === 'profile') renderProfile();
   if (page === 'settings') renderSettings();
-  if (page === 'broadcast') renderBroadcast();
+  if (page === 'broadcast') {
+    renderBroadcast();
+    if (requested === 'analytics') $('#outreach-outcomes')?.scrollIntoView({ block: 'start' });
+  }
 }
+
+for (const placeholder of document.querySelectorAll('[data-lucide]')) {
+  placeholder.replaceChildren(lucide(placeholder.dataset.lucide));
+}
+
+$('#workspace-search').onsubmit = event => {
+  event.preventDefault();
+  for (const id of ['filter-folder', 'filter-industry', 'filter-status', 'filter-platform', 'filter-stage']) $('#' + id).value = '';
+  leadReviewFilter = '';
+  reviewSelection.clear();
+  $('#filter-query').value = $('#workspace-search-input').value.trim();
+  location.hash = '#leads';
+  renderLeads();
+};
 
 $('#menu-toggle').onclick = () => setMobileNav(!document.body.classList.contains('nav-open'));
 $('#sidebar-close').onclick = () => setMobileNav(false);
@@ -2311,6 +2773,8 @@ function setAuthMode(mode) {
 }
 
 function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMailbox = null) {
+  reviewSelection.clear();
+  leadReviewFilter = '';
   currentUser = user;
   account.user = user;
   account.mailbox = serverMailbox;
@@ -2362,6 +2826,13 @@ function showAuthScreen() {
   setMobileNav(false);
 }
 
+for (const start of document.querySelectorAll('[data-auth-start]')) {
+  start.onclick = () => {
+    $('#auth-screen').classList.add('enter-account');
+    setAuthMode(start.dataset.authStart);
+    $(start.dataset.authStart === 'signup' ? '#auth-name' : '#auth-email').focus();
+  };
+}
 $('#tab-login').onclick = () => setAuthMode('login');
 $('#tab-signup').onclick = () => setAuthMode('signup');
 
@@ -2389,6 +2860,8 @@ $('#auth-form').onsubmit = async event => {
   }
 };
 
+$('#auth-submit').disabled = false;
+
 $('#logout-btn').onclick = async () => {
   try {
     await api('/api/auth/logout', {});
@@ -2398,7 +2871,12 @@ $('#logout-btn').onclick = async () => {
   showAuthScreen();
 };
 
-const oauthResult = new URLSearchParams(location.search).get('gmail');
+const pageUrl = new URL(location.href);
+if (pageUrl.searchParams.has('password')) {
+  for (const field of ['name', 'email', 'password']) pageUrl.searchParams.delete(field);
+  history.replaceState(null, '', pageUrl.pathname + pageUrl.search + pageUrl.hash);
+}
+const oauthResult = pageUrl.searchParams.get('gmail');
 if (oauthResult) {
   report(oauthResult === 'permissions' ? 'Allow both Gmail permissions and try again.' : 'Gmail could not be connected. Check your Google OAuth settings and try again.', true);
   history.replaceState(null, '', location.pathname + location.hash);
@@ -2412,5 +2890,4 @@ try {
   } else {
     showAuthScreen();
   }
-  setInterval(() => { if (currentUser && !document.hidden) refresh(); }, 60000);
 } catch (error) { report(error.message, true); }
