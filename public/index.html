@@ -96,11 +96,11 @@
               <option value="shopify">Low-Ranked Shopify &amp; Retail Stores</option>
             </select>
           </label>
-          <label>Mode<select name="mode"><option value="local">Local businesses</option><option value="online">Online websites</option></select></label>
+          <label>Mode<select name="mode"><option value="local">Local businesses</option><option value="online">Online websites</option><option value="both">Local and online businesses</option></select></label>
           <label>Related terms<input name="terms" maxlength="350" placeholder="e.g. orthodontist, cosmetic dentistry"></label>
           <label>More locations<input name="locations" maxlength="500" placeholder="e.g. Yaba, Lekki, Ajah"></label>
           <label>Platform<select name="platform" id="discovery-platform"><option value="">Any platform</option></select></label>
-          <label>Sources<select name="sources"><option value="combined">Combined sources</option><option value="maps">Bing Maps and OpenStreetMap</option><option value="google">Google web</option><option value="places">Google Places references</option></select></label>
+          <label>Sources<select name="sources"><option value="combined">Combined sources</option><option value="maps">Bing Maps and OpenStreetMap</option><option value="tavily">Tavily web</option><option value="google">Google web</option><option value="places">Google Places references</option></select></label>
           <details class="discovery-options">
             <summary>Google queries and website imports</summary>
             <div class="stack">
@@ -186,6 +186,9 @@
               <option value="Unsubscribed">Unsubscribed</option>
               <option value="Bounced">Bounced</option>
             </select>
+          </label>
+          <label>Search folder
+            <select id="filter-folder"><option value="">All folders</option></select>
           </label>
           <label>Pipeline stage
             <select id="filter-stage"><option value="">All stages</option></select>

@@ -54,7 +54,9 @@ and locations. Use Generate queries to preview editable Google operators or open
 the searches in Google. Paste business URLs or import directory CSV files from
 Saved leads. Include the listing URL in the CSV source column to retain provenance.
 
-Set SERPER_API_KEY server-side to enable automated Google web search. Set
+Set TAVILY_API_KEY server-side to enable Tavily web search. Combined sources
+prefers Tavily when configured. Set SERPER_API_KEY to enable the separate
+Google web source or use Google web in combined mode when Tavily is unconfigured. Set
 GOOGLE_PLACES_API_KEY with Places API (New) enabled to include Google Maps
 references. Google Places lookups request place IDs only. The app opens those
 references in Google Maps and saves lead details from other sources.

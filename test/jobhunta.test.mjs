@@ -22,6 +22,12 @@ test('platform discovery generates hosted and custom-domain queries and preserve
   const queries = googleQueries('skin care', '', 'Shopify', true);
   assert.ok(queries[0].startsWith('site:myshopify.com'));
   assert.match(queries[1], /"add to cart"/);
+  const both = googleQueries('skin care', 'Ikeja', 'Shopify', 'both');
+  assert.deepEqual(both, [
+    '"skin care" "Ikeja" -jobs -vacancies',
+    'site:myshopify.com "skin care" "Ikeja" -jobs -vacancies',
+    '"skin care" "Ikeja" "add to cart" -jobs -vacancies'
+  ]);
   const first = { id: 'one', name: 'Clinic', city: 'Ikeja', address: '12 Allen Ave', website: 'https://clinic.example' };
   const second = { ...first, id: 'two', address: '18 Allen Ave' };
   assert.equal(businessKeys(first, false).some(key => businessKeys(second, false).includes(key)), false);

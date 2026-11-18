@@ -192,7 +192,7 @@ let supabaseStatus = { configured: supabaseConfigured, connected: false, error: 
 function supabaseHeaders(extra = {}) {
   return {
     apikey: supabaseKey,
-    Authorization: 'Bearer ' + supabaseKey,
+    ...(supabaseKey.startsWith('sb_') ? {} : { Authorization: 'Bearer ' + supabaseKey }),
     'Content-Type': 'application/json',
     ...extra
   };
@@ -367,12 +367,12 @@ async function findUserByEmail(email) {
         headers: supabaseHeaders(),
         signal: AbortSignal.timeout(6000)
       });
-      if (res.ok) {
-        const rows = await res.json();
-        if (Array.isArray(rows) && rows[0]) return rows[0];
-      }
+      if (!res.ok) throw new Error('Supabase returned HTTP ' + res.status + '.');
+      const rows = await res.json();
+      if (!Array.isArray(rows)) throw new Error('Unexpected Supabase response.');
+      return rows[0] || null;
     } catch {
-      // Fallback to local store
+      fail(503, 'Jobhunta cannot reach its account database. Check the Supabase server credentials and try again.');
     }
   }
   return store.users.find(u => u.email.toLowerCase() === normalized) || null;
@@ -1164,11 +1164,11 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
 
 function discoveryOptions(values) {
   return {
-    mode: values.mode === 'online' ? 'online' : 'local',
+    mode: ['online', 'both'].includes(values.mode) ? values.mode : 'local',
     locations: String(values.locations || '').slice(0, 500),
     terms: String(values.terms || '').slice(0, 350),
     platform: Object.hasOwn(platformDomains, values.platform) ? values.platform : '',
-    sources: ['combined', 'google', 'maps', 'places'].includes(values.sources) ? values.sources : 'combined',
+    sources: values.mode !== 'both' && ['combined', 'google', 'tavily', 'maps', 'places'].includes(values.sources) ? values.sources : 'combined',
     queries: String(values.queries || '').slice(0, 3000),
     urls: String(values.urls || '').slice(0, 3000)
   };
@@ -1183,14 +1183,37 @@ async function googleDiscovery(query, term, city) {
   });
   if (!response.ok) throw new Error('Google web search returned HTTP ' + response.status + '.');
   const data = await response.json();
-  return (data.organic || []).flatMap(result => {
-    const url = publicWebsite(result.link);
+  return webDiscoveryItems(data.organic || [], 'Google web', query, term, city);
+}
+
+async function tavilyDiscovery(query, term, city) {
+  const includeDomains = [...query.matchAll(/(?:^|\s)site:([a-z0-9.-]+)(?=\s|$)/gi)].map(match => match[1]);
+  const phrase = query.replace(/(?:^|\s)site:[a-z0-9.-]+(?=\s|$)/gi, ' ')
+    .replace(/\s+-\S+/g, '').trim() || [term, city].filter(Boolean).join(' ');
+  const response = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + process.env.TAVILY_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query: phrase.slice(0, 400), search_depth: 'basic', max_results: 10,
+      ...(includeDomains.length ? { include_domains: includeDomains } : {})
+    }),
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!response.ok) throw new Error('Tavily web search returned HTTP ' + response.status + '.');
+  const data = await response.json();
+  if (!Array.isArray(data.results)) throw new Error('Tavily returned an unexpected search response.');
+  return webDiscoveryItems(data.results, 'Tavily web', query, term, city);
+}
+
+function webDiscoveryItems(results, provider, query, term, city) {
+  return results.flatMap(result => {
+    const url = publicWebsite(result?.url || result?.link);
     if (!url) return [];
     const identity = websiteIdentity(url);
     return [{
       id: 'web:' + identity,
       name: result.title || url.hostname, website: identity.includes('/') ? url.href : url.origin, source: url.href,
-      industry: term, city, discoveryQuery: query, discoveryProvider: 'Google web'
+      industry: term, city, discoveryQuery: query, discoveryProvider: provider
     }];
   });
 }
@@ -1227,13 +1250,20 @@ async function streamDiscovery(res, params, userId) {
   for (const term of terms) for (const location of cities) validateSearch(term, location || 'Online');
   const urls = searchList(options.urls, 20).map(publicWebsite);
   if (urls.some(url => !url)) fail(400, 'Enter full HTTP or HTTPS website URLs.');
-  const web = options.sources === 'google' || options.sources === 'combined';
+  const web = ['google', 'tavily', 'combined'].includes(options.sources);
+  const useTavily = options.sources === 'tavily' ||
+    (options.sources === 'combined' && Boolean(process.env.TAVILY_API_KEY?.trim()));
+  const webKey = useTavily ? process.env.TAVILY_API_KEY?.trim() : process.env.SERPER_API_KEY?.trim();
+  const webLabel = useTavily ? 'Tavily' : 'Google';
   const maps = !online && ['maps', 'combined'].includes(options.sources);
   const places = !online && ['places', 'combined'].includes(options.sources);
   if (options.sources === 'places' && (!places || !process.env.GOOGLE_PLACES_API_KEY)) {
     fail(503, 'Google Places requires a local search and GOOGLE_PLACES_API_KEY.');
   }
-  if (!(maps || urls.length || (web && process.env.SERPER_API_KEY) || (places && process.env.GOOGLE_PLACES_API_KEY))) {
+  if (['tavily', 'google'].includes(options.sources) && !webKey && !urls.length) {
+    fail(503, 'Set ' + (useTavily ? 'TAVILY_API_KEY' : 'SERPER_API_KEY') + ' to enable this web search source.');
+  }
+  if (!(maps || urls.length || (web && webKey) || (places && process.env.GOOGLE_PLACES_API_KEY))) {
     fail(503, 'Choose a configured source, open the query links in Google, or paste website URLs.');
   }
   const chargedOn = await consumeQuota(userId, 'search');
@@ -1253,8 +1283,9 @@ async function streamDiscovery(res, params, userId) {
     const batch = new Set();
     for (const item of items) {
       const domain = publicWebsite(item.website)?.hostname.replace(/^www[.]/, '');
-      if (item.discoveryProvider === 'Google web' && domain && mapDomains.has(domain)) continue;
-      const keys = businessKeys(item, online || item.discoveryProvider === 'Google web' || item.discoveryProvider === 'Imported URL');
+      const webResult = ['Google web', 'Tavily web'].includes(item.discoveryProvider);
+      if (webResult && domain && mapDomains.has(domain)) continue;
+      const keys = businessKeys(item, online || webResult || item.discoveryProvider === 'Imported URL');
       if (keys.some(key => seen.has(key) || batch.has(key))) continue;
       for (const key of keys) batch.add(key);
       fresh.push({ item, keys });
@@ -1288,8 +1319,8 @@ async function streamDiscovery(res, params, userId) {
     await emit(items, label);
   };
   try {
-    if (web && !process.env.SERPER_API_KEY) {
-      send({ type: 'query', message: 'Google web automation is unconfigured. Use the Google query links or paste website URLs.' });
+    if (web && !webKey) {
+      send({ type: 'query', message: 'Web search is unconfigured. Set TAVILY_API_KEY or SERPER_API_KEY, open the Google links, or paste website URLs.' });
     }
     if (urls.length) await run('Imported websites', async () => urls.map(url => ({
       id: 'web:' + websiteIdentity(url), name: url.hostname, website: url.href,
@@ -1329,14 +1360,15 @@ async function streamDiscovery(res, params, userId) {
         } catch (error) { send({ type: 'query', message: error.message }); }
       }
     }
-    if (web && process.env.SERPER_API_KEY) {
+    if (web && webKey) {
+      const discoverWeb = useTavily ? tavilyDiscovery : googleDiscovery;
       const custom = options.queries.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(0, 12);
       const queries = custom.length ? custom.map(query => ({ query, term: industry, location: city })) :
-        pairs.flatMap(({ term, location }) => googleQueries(term, location, options.platform, online)
+        pairs.flatMap(({ term, location }) => googleQueries(term, location, options.platform, options.mode)
           .map(query => ({ query, term, location }))).slice(0, 12);
       for (const { query, term, location } of queries) {
         if (stopped) break;
-        await run('Google · ' + query, () => googleDiscovery(query, term, location));
+        await run(webLabel + ' · ' + query, () => discoverWeb(query, term, location));
       }
     }
     if (!successful) {

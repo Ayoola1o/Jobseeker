@@ -514,13 +514,9 @@ function getVisibleSearchResults() {
 
 function renderResults() {
   const visibleResults = getVisibleSearchResults();
-  const unsavedCount = visibleResults.filter(item => !duplicate(item)).length;
   const saveAllBtn = $('#save-all');
-  if (saveAllBtn) {
-    saveAllBtn.hidden = visibleResults.length === 0;
-    saveAllBtn.disabled = unsavedCount === 0;
-    saveAllBtn.textContent = unsavedCount ? `Save all (${unsavedCount})` : 'All results saved';
-  }
+  saveAllBtn.hidden = results.length === 0;
+  saveAllBtn.textContent = 'Save all ' + results.length + ' to folder';
   const withEmailCount = results.filter(item => item.email).length;
   const shopifyCount = results.filter(item => item.platform === 'Shopify').length;
   const countEl = $('#results-count');
@@ -623,8 +619,10 @@ function getFilteredLeads() {
   const sortOrder = $('#filter-sort')?.value || 'recent';
 
   const stage = $('#filter-stage').value;
+  const folder = $('#filter-folder').value;
   const filtered = leads.filter(lead => {
     if (stage && stageOf(lead) !== stage) return false;
+    if (folder && !leadFolders(lead).some(name => norm(name) === folder)) return false;
     const status = leadStatus(lead);
     if (statusFilter && status !== statusFilter) return false;
     if (platformFilter && (lead.platform || '') !== platformFilter) return false;
@@ -661,7 +659,36 @@ function deleteLead(lead) {
   report(`Removed ${lead.name} from saved leads.`);
 }
 
+function leadFolders(lead) {
+  return Array.isArray(lead.folders) ? lead.folders.filter(name => typeof name === 'string' && name.trim()) : [];
+}
+
+function searchFolders() {
+  const folders = new Map();
+  for (const lead of leads) {
+    for (const name of leadFolders(lead)) {
+      const key = norm(name);
+      const entry = folders.get(key) || { name, count: 0 };
+      entry.count++;
+      folders.set(key, entry);
+    }
+  }
+  return folders;
+}
+
+function renderFolderFilter() {
+  const select = $('#filter-folder');
+  const selected = select.value;
+  const folders = searchFolders();
+  select.replaceChildren(new Option('All folders', ''));
+  for (const [key, entry] of [...folders].sort((a, b) => a[1].name.localeCompare(b[1].name))) {
+    select.add(new Option(entry.name + ' (' + entry.count + ')', key));
+  }
+  select.value = folders.has(selected) ? selected : '';
+}
+
 function renderLeads() {
+  renderFolderFilter();
   const navCount = $('#nav-leads-count');
   if (navCount) {
     navCount.textContent = String(leads.length);
@@ -1938,6 +1965,12 @@ function renderSavedSearches() {
 
 const discoveryFields = ['industry', 'city', 'rankMode', 'mode', 'terms', 'locations', 'platform', 'sources', 'queries', 'urls'];
 const searchForm = $('#search');
+function syncDiscoveryMode() {
+  const both = searchForm.elements.mode.value === 'both';
+  if (both) searchForm.elements.sources.value = 'combined';
+  searchForm.elements.sources.disabled = both;
+}
+searchForm.elements.mode.onchange = syncDiscoveryMode;
 for (const platform of Object.keys(platformDomains)) $('#discovery-platform').add(new Option(platform, platform));
 
 function renderGoogleLinks() {
@@ -1952,9 +1985,9 @@ $('#preview-discovery').onclick = () => {
   const { industry, city, terms, locations, platform, mode } = Object.fromEntries(new FormData(searchForm));
   const keywords = searchList([industry, terms].join(','), 4);
   const areas = [city.trim(), ...searchList(locations, 4)].filter(Boolean);
-  if (mode === 'local' && !areas.length) { report('Enter a location for local discovery.', true); return; }
+  if (mode !== 'online' && !areas.length) { report('Enter a location to include local businesses.', true); return; }
   searchForm.elements.queries.value = keywords.flatMap(term => (areas.length ? areas : ['']).flatMap(area =>
-    googleQueries(term, area, platform, mode === 'online'))).slice(0, 12).join('\n');
+    googleQueries(term, area, platform, mode))).slice(0, 12).join('\n');
   renderGoogleLinks();
 };
 
@@ -1964,6 +1997,7 @@ $('#save-search').onclick = () => {
   if (!form.reportValidity()) return;
   const data = new FormData(form);
   const criteria = Object.fromEntries(discoveryFields.map(key => [key, String(data.get(key) || '').trim()]));
+  if (criteria.mode === 'both') criteria.sources = 'combined';
   const saved = settings.savedSearches || [];
   if (criteria.industry.length < 2 || (!criteria.city && !criteria.locations && criteria.mode !== 'online')) {
     report('Enter an industry and a location for local discovery.', true);
@@ -1989,6 +2023,7 @@ $('#run-saved-search').onclick = () => {
   const form = $('#search');
   const defaults = { mode: 'local', sources: 'combined', rankMode: 'all' };
   for (const key of discoveryFields) form.elements.namedItem(key).value = saved[key] || defaults[key] || '';
+  syncDiscoveryMode();
   renderGoogleLinks();
   form.requestSubmit();
 };
@@ -2146,22 +2181,48 @@ $('#inspect-url').onsubmit = async event => {
 };
 
 $('#save-all').onclick = () => {
-  let added = 0;
-  for (const item of getVisibleSearchResults()) {
-    if (!duplicate(item)) {
-      const copy = { ...item, threads: [] };
-      delete copy.scanning;
-      delete copy.scanned;
-      leads.unshift(copy);
-      added++;
+  const batch = [...results];
+  if (!batch.length) return;
+  const form = create('form', '', 'stack');
+  const folder = field('Search folder name', 'folder', '', {
+    required: true, maxLength: 80, placeholder: 'For example, Dentists in Ikeja'
+  });
+  const existing = create('datalist');
+  existing.id = 'search-folder-names';
+  for (const { name } of searchFolders().values()) existing.append(new Option(name, name));
+  folder.lastChild.setAttribute('list', existing.id);
+  const feedback = create('p', '', 'small');
+  feedback.setAttribute('role', 'status');
+  form.append(create('p', 'Save all ' + batch.length + ' results from this search.'), folder, existing, feedback,
+    create('button', 'Save to folder'));
+  form.onsubmit = event => {
+    event.preventDefault();
+    const name = folder.lastChild.value.trim().replace(/\s+/g, ' ');
+    if (!name) { feedback.textContent = 'Enter a folder name.'; return; }
+    const key = norm(name);
+    const canonical = searchFolders().get(key)?.name || name;
+    for (const item of batch) {
+      let lead = duplicate(item);
+      if (!lead) {
+        lead = { ...item, threads: [] };
+        delete lead.scanning;
+        delete lead.scanned;
+        leads.unshift(lead);
+      }
+      const folders = leadFolders(lead);
+      if (!folders.some(value => norm(value) === key)) lead.folders = [...folders, canonical];
     }
-  }
-  if (added) {
     persist();
     renderResults();
-    report(`Saved ${added} business${added === 1 ? '' : 'es'} to your leads.`);
-  }
+    $('#filter-folder').value = key;
+    for (const id of ['filter-query', 'filter-status', 'filter-platform', 'filter-stage']) $('#' + id).value = '';
+    dialog.close();
+    location.hash = '#leads';
+    renderLeads();
+  };
+  show('Save search results', form);
 };
+$('#filter-folder').onchange = renderLeads;
 
 $('#results-filter').onchange = () => {
   resultsPage = 1;

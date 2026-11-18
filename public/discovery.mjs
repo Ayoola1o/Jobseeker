@@ -17,16 +17,20 @@ export function searchList(value, limit) {
   return [...unique.values()].slice(0, limit);
 }
 
-export function googleQueries(term, location, platform, online) {
+export function googleQueries(term, location, platform, mode) {
   const quote = value => '"' + value.replaceAll('"', '').trim() + '"';
   const base = [quote(term), location && quote(location)].filter(Boolean).join(' ');
   const domain = Object.hasOwn(platformDomains, platform) ? platformDomains[platform] : '';
   const suffix = ' -jobs -vacancies';
-  if (!online) return [base + suffix];
+  if (mode !== true && mode !== 'online' && mode !== 'both') return [base + suffix];
   const clue = ['Beehiiv', 'Ghost', 'Substack', 'Kit', 'MailerLite', 'Buttondown', 'Mailchimp'].includes(platform) ? 'newsletter' :
     ['Shopify', 'WooCommerce', 'BigCommerce', ''].includes(platform) ? '"add to cart"' : quote(platform);
   const domains = platform === 'Kit' ? ['kit.com', 'ck.page'] : domain ? [domain] : [];
-  return [...domains.map(host => 'site:' + host + ' ' + base + suffix), base + ' ' + clue + suffix];
+  return [
+    ...(mode === 'both' ? [base + suffix] : []),
+    ...domains.map(host => 'site:' + host + ' ' + base + suffix),
+    base + ' ' + clue + suffix
+  ];
 }
 
 export function publicWebsite(value) {
