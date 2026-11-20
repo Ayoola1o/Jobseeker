@@ -2257,7 +2257,7 @@ export async function handleRequest(req, res) {
         fail(401, 'Invalid email or password.');
       }
       const usage = getUserQuotaStatus(record);
-      const user = { id: record.id, email: record.email, name: record.name || '', tier: usage.tier, usage };
+      const user = { id: record.id, email: record.email, name: record.name || '', tier: usage.tier, createdAt: record.created_at || null, usage };
       session.user = user;
       session.userId = user.id;
       await loadFromSupabase(user.id);
@@ -2352,7 +2352,7 @@ export async function handleRequest(req, res) {
         const record = await findUserById(session.userId);
         if (record) {
           const usage = getUserQuotaStatus(record);
-          activeUser = { id: record.id, email: record.email, name: record.name || '', tier: usage.tier, usage };
+          activeUser = { id: record.id, email: record.email, name: record.name || '', tier: usage.tier, createdAt: record.created_at || null, usage };
           session.user = activeUser;
         }
       }

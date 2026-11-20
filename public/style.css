@@ -315,6 +315,13 @@ table.data-table tr:last-child td{border-bottom:0}
 .hero-glass-pill.emerald{background:rgba(16,185,129,.24);border-color:rgba(52,211,153,.45);color:#d1fae5}
 .hero-btn-ghost{background:rgba(255,255,255,.12);color:white;border:1px solid rgba(255,255,255,.22)}
 .hero-btn-ghost:hover{background:rgba(255,255,255,.22)}
+.profile-info-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-bottom:20px}
+.info-kv-list{display:grid;gap:0}
+.info-kv-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:9px 0;border-bottom:1px solid #eff4f3;font-size:13px}
+.info-kv-row:last-child{border-bottom:0;padding-bottom:0}
+.info-kv-row:first-child{padding-top:0}
+.info-kv-row span{color:var(--muted);flex-shrink:0}
+.info-kv-row strong{color:var(--ink);text-align:right;overflow-wrap:anywhere;font-weight:600}
 .profile-mid-grid{display:grid;grid-template-columns:1.2fr 1fr;gap:18px;margin-bottom:20px}
 .meter{height:11px;border-radius:99px;background:#e6eee9;overflow:hidden;margin:8px 0 4px}
 .meter-fill{height:100%;background:var(--green);border-radius:99px;transition:width .25s ease}
@@ -376,7 +383,7 @@ dialog .heading{margin:0 0 16px}
 .mobile-bottom-nav{display:none}
 
 @media(max-width:1100px){
-  .dossier-overview-grid{grid-template-columns:1fr}
+  .dossier-overview-grid,.profile-info-grid{grid-template-columns:1fr}
   .plan-cards-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
 

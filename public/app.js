@@ -1840,6 +1840,22 @@ function renderProfile() {
   };
   const activeTier = tierList.find(t => t.key === usage.tier) || tierList[0];
   const withEmailCount = leads.filter(l => l.email).length;
+  const contactedCount = leads.filter(l => (l.threads?.length || 0) > 0).length;
+  const totalEmailsSent = leads.reduce((sum, l) => sum + (l.threads?.length || 0), 0);
+  const repliedCount = leads.filter(l => l.replied || l.classification === 'interested').length;
+  const responseRate = contactedCount ? Math.round((repliedCount / contactedCount) * 100) : 0;
+  const shopifyCount = leads.filter(l => l.platform === 'Shopify').length;
+  const aiBriefCount = leads.filter(l => l.aiBrief).length;
+  const cityCounts = new Map();
+  for (const l of leads) {
+    if (l.city) cityCounts.set(l.city, (cityCounts.get(l.city) || 0) + 1);
+  }
+  const topCities = [...cityCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([c]) => c).join(', ') || 'None yet';
+  const memberSince = currentUser?.createdAt
+    ? new Date(currentUser.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : 'Active Member';
+  const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
   const now = new Date();
   const nextMidnightUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
   const minsLeft = Math.max(1, Math.round((nextMidnightUtc - Date.now()) / 60000));
@@ -1853,6 +1869,7 @@ function renderProfile() {
   const heroPills = create('div', '', 'profile-hero-pills');
   const tierGlass = create('span', '', 'hero-glass-pill emerald');
   tierGlass.append(iconEl('crown', 13), document.createTextNode(`${activeTier.label} Plan`));
+  const memberGlass = create('span', `Joined ${memberSince}`, 'hero-glass-pill');
   const idGlass = create('button', '', 'hero-glass-pill');
   idGlass.type = 'button';
   idGlass.style.cursor = 'pointer';
@@ -1861,7 +1878,7 @@ function renderProfile() {
   idGlass.onclick = async () => {
     try { await navigator.clipboard.writeText(currentUser?.id || ''); report('Copied Workspace ID to clipboard.'); } catch {}
   };
-  heroPills.append(tierGlass, idGlass);
+  heroPills.append(tierGlass, memberGlass, idGlass);
   heroText.append(
     create('h1', currentUser?.name || settings.senderName || 'Jobhunta User'),
     create('p', currentUser?.email || 'Personal Workspace', 'profile-hero-email'),
@@ -1871,7 +1888,7 @@ function renderProfile() {
 
   const heroActs = create('div', '', 'actions');
   heroActs.append(
-    btnWithIcon('settings', 'Workspace Settings', () => { location.hash = '#settings'; }, 'hero-btn-ghost'),
+    btnWithIcon('settings', 'Edit Profile', () => { settingsTab = 'outreach'; location.hash = '#settings'; }, 'hero-btn-ghost'),
     btnWithIcon('search', 'Find Businesses', () => { location.hash = '#discover'; })
   );
   hero.append(heroLeft, heroActs);
@@ -1897,7 +1914,72 @@ function renderProfile() {
     makeProfileKpi('refresh', '00:00 UTC', 'Daily Quota Reset', resetCountdown, null, true)
   );
 
-  // 3. 2-Column Split: Daily Usage Meters + Account & Workspace Details
+  // 3. Detailed Profile Info Cards Row (3 Rich Information Cards)
+  const infoGrid = create('div', '', 'profile-info-grid');
+  const makeInfoCard = (icoName, tone, title, subtitle, rows, footerBtn = null) => {
+    const card = create('article', '', 'surface card-pad');
+    const head = create('div', '', 'setting-card-head');
+    const titleWrap = create('div', '', 'setting-card-title');
+    const ico = create('div', '', `setting-ico ${tone}`); ico.append(iconEl(icoName, 18));
+    const txt = create('div'); txt.append(create('h2', title), create('p', subtitle));
+    titleWrap.append(ico, txt);
+    head.append(titleWrap);
+    card.append(head);
+    const list = create('div', '', 'info-kv-list');
+    for (const [k, v] of rows) {
+      const r = create('div', '', 'info-kv-row');
+      r.append(create('span', k), create('strong', String(v || '—')));
+      list.append(r);
+    }
+    card.append(list);
+    if (footerBtn) card.append(footerBtn);
+    return card;
+  };
+
+  const personalInfoCard = makeInfoCard(
+    'user', '', 'Personal & Account Info', 'Your Jobhunta identity & workspace details',
+    [
+      ['Full Name', currentUser?.name || settings.senderName || 'Not set'],
+      ['Email Address', currentUser?.email || '—'],
+      ['Workspace ID', shortId + '…'],
+      ['Subscription Tier', `${activeTier.label} Tier`],
+      ['Member Since', memberSince],
+      ['Local Timezone', localTz]
+    ],
+    btnWithIcon('copy', 'Copy Full Workspace ID', async () => {
+      try { await navigator.clipboard.writeText(currentUser?.id || ''); report('Copied Workspace ID to clipboard.'); } catch {}
+    }, 'btn-soft', 14)
+  );
+
+  const outreachInfoCard = makeInfoCard(
+    'send', 'blue', 'Outreach & Sender Profile', 'Identity used in templates & AI pitches',
+    [
+      ['Sender Name', settings.senderName || currentUser?.name || 'Not set'],
+      ['Core Service / Offer', settings.senderService || 'Not configured yet'],
+      ['Connected Gmail', account.mailbox || 'Not connected'],
+      ['Follow-up Cadence', settings.defaultFollowUpDays ? `Every ${settings.defaultFollowUpDays} days` : 'Off'],
+      ['Email Templates', `${settings.templates.length} template(s) ready`],
+      ['Daily Email Limit', activeTier.emails]
+    ],
+    btnWithIcon('settings', 'Edit Sender Identity', () => { settingsTab = 'outreach'; location.hash = '#settings'; }, 'btn-soft', 14)
+  );
+
+  const pipelineInfoCard = makeInfoCard(
+    'barChart', 'amber', 'Pipeline & Performance', 'All-time discovery & outreach metrics',
+    [
+      ['Total Emails Sent', `${totalEmailsSent} message(s)`],
+      ['Contacted Leads', `${contactedCount} business(es)`],
+      ['Warm Replies', `${repliedCount} (${responseRate}% rate)`],
+      ['Shopify Stores Found', `${shopifyCount} store(s)`],
+      ['AI Lead Briefs', `${aiBriefCount} generated`],
+      ['Top Target Cities', topCities]
+    ],
+    btnWithIcon('bookmark', 'View Saved Leads', () => { location.hash = '#leads'; }, 'btn-soft', 14)
+  );
+
+  infoGrid.append(personalInfoCard, outreachInfoCard, pipelineInfoCard);
+
+  // 4. 2-Column Split: Daily Usage Meters + Security & Integrations Card
   const midGrid = create('div', '', 'profile-mid-grid');
 
   const usageCard = create('article', '', 'surface card-pad');
@@ -1930,7 +2012,8 @@ function renderProfile() {
   usageCard.append(
     addMeter('Business Searches Used Today', usage.searchesToday || 0, activeTier.dailySearchLimit),
     addMeter('Outreach Emails Sent Today', usage.emailsToday || 0, activeTier.dailyEmailLimit),
-    addMeter('Verified Email Coverage', withEmailCount, Math.max(1, leads.length), 'leads')
+    addMeter('Verified Email Coverage', withEmailCount, Math.max(1, leads.length), 'leads'),
+    addMeter('AI Brief Enrichment Coverage', aiBriefCount, Math.max(1, leads.length), 'leads')
   );
   const usageFoot = create('div', '', 'actions');
   usageFoot.style.marginTop = '4px';
@@ -1943,9 +2026,9 @@ function renderProfile() {
   const detailsCard = create('article', '', 'surface card-pad');
   const dHead = create('div', '', 'setting-card-head');
   const dTitleWrap = create('div', '', 'setting-card-title');
-  const dIco = create('div', '', 'setting-ico blue'); dIco.append(iconEl('user', 19));
+  const dIco = create('div', '', 'setting-ico slate'); dIco.append(iconEl('lock', 19));
   const dTitleTxt = create('div');
-  dTitleTxt.append(create('h2', 'Workspace & Account'), create('p', 'Connected integrations and sender identity'));
+  dTitleTxt.append(create('h2', 'Security, Sync & Data'), create('p', 'Workspace protection, cloud sync, and session controls'));
   dTitleWrap.append(dIco, dTitleTxt);
   dHead.append(dTitleWrap);
   detailsCard.append(dHead);
@@ -1957,19 +2040,17 @@ function renderProfile() {
     r.append(c, actionNode);
     detailsCard.append(r);
   };
-  addDetailRow(
-    'Sender Identity',
-    [settings.senderName || currentUser?.name, settings.senderService || 'No service offer set yet'].filter(Boolean).join(' · '),
-    button('Edit', () => { settingsTab = 'outreach'; location.hash = '#settings'; }, 'btn-soft')
-  );
-  addDetailRow(
-    'Gmail Outreach',
-    account.mailbox ? `Connected as ${account.mailbox}` : 'Not connected yet',
-    button(account.mailbox ? 'Manage' : 'Connect', () => { settingsTab = 'integrations'; location.hash = '#settings'; }, account.mailbox ? true : 'btn-soft')
-  );
+  const secBadge = create('span', '', 'pill');
+  secBadge.append(iconEl('check', 12), document.createTextNode('Encrypted'));
+  addDetailRow('Account Security', 'Salted scrypt password hash · HttpOnly AES-256 cookie', secBadge);
   const sbBadge = create('span', '', account.supabase?.connected ? 'pill' : 'pill wait');
   sbBadge.append(create('i', '', 'status-dot'), document.createTextNode(account.supabase?.connected ? 'Synced' : 'Local'));
   addDetailRow('Supabase Cloud Sync', 'Isolated per-user Postgres workspace', sbBadge);
+  addDetailRow(
+    'Export Workspace Data',
+    `Download all ${leads.length} saved lead(s) as a CSV backup`,
+    btnWithIcon('fileText', 'Export CSV', exportLeads, 'btn-soft', 14)
+  );
   addDetailRow(
     'Active Session',
     'Sign out of your Jobhunta account on this device',
@@ -1981,7 +2062,7 @@ function renderProfile() {
 
   midGrid.append(usageCard, detailsCard);
 
-  // 4. Full-Width 5-Tier Modern Plan Comparison Cards
+  // 5. Full-Width 5-Tier Modern Plan Comparison Cards
   const plansSection = create('section', '', 'surface card-pad');
   const pHead = create('div', '', 'heading');
   pHead.style.margin = '0';
@@ -2019,7 +2100,7 @@ function renderProfile() {
   }
   plansSection.append(pHead, cardsGrid);
 
-  container.replaceChildren(hero, kpiGrid, midGrid, plansSection);
+  container.replaceChildren(hero, kpiGrid, infoGrid, midGrid, plansSection);
 }
 
 /* ---------------- SETTINGS (Modern SaaS Categorized Settings, Auto-Saving) ---------------- */
