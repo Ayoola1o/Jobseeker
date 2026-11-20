@@ -2240,9 +2240,11 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
     lead.tiktok && 'TikTok'
   ].filter(Boolean);
 
-  const missingSocials = ['Instagram', 'Facebook', 'LinkedIn'].filter(ch => !socialChannels.includes(ch));
+  const allSocialChannels = ['Instagram', 'Facebook', 'LinkedIn', 'TikTok', 'X/Twitter', 'YouTube'];
+  const missingSocials = allSocialChannels.filter(ch => !socialChannels.includes(ch));
   const ratingNum = parseFloat(lead.rating);
   const signals = lead.signals || {};
+  const auditReport = lead.auditReport || null;
 
   const overviewParts = [
     `${name} operates as a ${industry} in ${city}${lead.address ? ` (${lead.address})` : ''}.`
@@ -2251,106 +2253,160 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
     overviewParts.push(`Current Bing Search Position: Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)}).`);
   }
   if (lead.platform && lead.platform !== 'Custom / Website') {
-    overviewParts.push(`Website platform: ${lead.platform}${lead.shopifyMeta?.themeName ? ` (Theme: ${lead.shopifyMeta.themeName})` : ''}.`);
+    overviewParts.push(`Website platform: ${lead.platform}${lead.shopifyMeta?.themeName ? ` (Theme: ${lead.shopifyMeta.themeName})` : ''}${lead.shopifyMeta?.currency ? ` [${lead.shopifyMeta.currency}]` : ''}.`);
+  } else if (lead.website) {
+    overviewParts.push(`Website: ${lead.website}.`);
+  } else {
+    overviewParts.push('Website: No official website linked.');
+  }
+  if (auditReport?.overallScore !== undefined) {
+    overviewParts.push(`Website Audit Health Score: ${auditReport.overallScore}/100 (${auditReport.counts?.critical || 0} critical, ${auditReport.counts?.warning || 0} warnings${auditReport.ttfbMs ? `, ${auditReport.ttfbMs}ms TTFB` : ''}).`);
   }
   if (Array.isArray(lead.shopifyProducts) && lead.shopifyProducts.length) {
-    overviewParts.push(`Catalog sample: ${lead.shopifyProducts.slice(0, 3).map(p => `${p.title}${p.price ? ` ($${p.price})` : ''}`).join(', ')}.`);
+    overviewParts.push(`Catalog sample: ${lead.shopifyProducts.slice(0, 4).map(p => `${p.title}${p.price ? ` ($${p.price})` : ''}`).join(', ')}.`);
   }
   if (Array.isArray(lead.techStack) && lead.techStack.length) {
     overviewParts.push(`Detected tech stack: ${lead.techStack.join(', ')}.`);
   }
+  if (socialChannels.length) {
+    overviewParts.push(`Active social channels: ${socialChannels.join(', ')} (missing: ${missingSocials.join(', ') || 'none'}).`);
+  } else {
+    overviewParts.push('Social media presence: None linked on website or listing.');
+  }
   if (lead.siteTitle || lead.metaDescription) {
     overviewParts.push(`Website positioning: "${lead.siteTitle || lead.metaDescription}".`);
   }
+  if (lead.headings?.length) {
+    overviewParts.push(`Key headings: ${lead.headings.slice(0, 4).join(' | ')}.`);
+  }
   if (lead.rating) {
     overviewParts.push(`Listed rating: ★ ${lead.rating}${lead.ratingInfo ? ` (${lead.ratingInfo})` : ''}.`);
+  } else {
+    overviewParts.push('Listed rating: No star rating or customer reviews displayed.');
   }
   if (lead.openHours) {
     overviewParts.push(`Operating hours: ${lead.openHours}.`);
   }
+  if (lead.phone || lead.email) {
+    overviewParts.push(`Direct contacts found: ${[lead.email && `Email (${lead.email})`, lead.phone && `Phone (${lead.phone})`].filter(Boolean).join(', ')}.`);
+  }
 
   const gaps = [];
   if (lead.searchRank && lead.searchRank > 10) {
-    gaps.push(`Buried at Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)}) in Bing search for "${industry} in ${city}" — losing high-intent buyers to Page 1 competitors.`);
+    gaps.push(`Local Search Visibility: Buried at Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)}) in search for "${industry} in ${city}" — losing high-intent local buyers to Page 1 competitors.`);
+  } else if (lead.searchRank) {
+    gaps.push(`Search Capture Opportunity: Ranked #${lead.searchRank} in ${city}, meaning competitors right alongside you are competing for the same clicks if your landing page & social proof don’t convert immediately.`);
   }
   if (!lead.website) {
-    gaps.push('No official website linked on their map listing — high-intent customers searching online have no dedicated landing page to convert.');
+    gaps.push('Missing Official Website: No website is linked on your listing — high-intent customers searching online have no dedicated landing page, catalog, or booking funnel to convert.');
   } else {
     if (signals.https === false) {
-      gaps.push('Website is not using HTTPS security, which triggers browser warnings and hurts local search trust.');
+      gaps.push('Security & Trust Warning: Website is not using HTTPS security, which triggers browser "Not Secure" warnings and hurts search trust.');
     }
     if (signals.hasMetaDescription === false) {
-      gaps.push('Missing SEO meta description on their website, reducing click-through rates from Google and Bing local search.');
+      gaps.push('SEO Meta Description Missing: Missing <meta name="description"> on your website, reducing organic click-through rates from Google and Bing.');
     }
     if (lead.platform === 'Shopify' || lead.platform === 'WooCommerce') {
       if (!signals.hasReviewsApp) {
-        gaps.push(`Running on ${lead.platform} without a dedicated product review widget (Judge.me, Loox, or Yotpo) to boost product page conversion.`);
+        gaps.push(`E-Commerce Social Proof (${lead.platform}): Running on ${lead.platform} without a dedicated product review widget (Judge.me, Loox, or Yotpo) to boost product page conversion.`);
       }
       if (!(lead.techStack || []).some(t => /Klaviyo|Omnisend|Mailchimp/i.test(t))) {
-        gaps.push(`No automated e-commerce email retention stack (Klaviyo / Omnisend) detected for abandoned cart and repeat buyer flows.`);
+        gaps.push(`E-Commerce Retention (${lead.platform}): No automated email/SMS retention stack (Klaviyo / Omnisend) detected for abandoned cart recovery and repeat buyer flows.`);
       }
     }
     if (signals.hasBookingOrForm === false) {
-      gaps.push('No clear online booking / instant lead capture form detected — visitors must call manually during open hours.');
+      gaps.push('Missing Online Lead Capture / Booking Form: No clear instant quote, booking, or lead capture form detected — forcing visitors to call manually.');
     }
     if (signals.hasChatWidget === false) {
-      gaps.push('No live chat or WhatsApp quick-response widget on site to capture after-hours inquiries.');
+      gaps.push('No Live Chat / WhatsApp Widget: No instant chat or WhatsApp response widget on site to capture mobile and after-hours inquiries.');
     }
     if (signals.hasAnalytics === false) {
-      gaps.push('No conversion tracking / ad pixel detected (Google Tag, Meta Pixel, or TikTok Pixel), meaning missed retargeting opportunities.');
+      gaps.push('Missing Ad & Conversion Tracking Pixels: No Google Analytics/GTM, Meta Pixel, or TikTok Pixel detected — visitors leave without retargeting or conversion attribution.');
     }
   }
-  if (!lead.email) {
-    gaps.push('No public business email is easily accessible for direct customer or B2B inquiries.');
+
+  // Merge multi-layer Website Audit findings (Bugs, SEO, Performance, Security Hygiene)
+  if (Array.isArray(auditReport?.findings)) {
+    for (const f of auditReport.findings) {
+      const label = `[${(f.category || 'Audit').toUpperCase()} · ${f.severity}] ${f.title} — ${f.detail} (${f.businessImpact})`;
+      if (!gaps.some(existing => existing.toLowerCase().includes(f.title.toLowerCase().slice(0, 22)))) {
+        gaps.push(label);
+      }
+    }
   }
+
+  // Explicit Social Media & Online Presence findings
   if (socialChannels.length === 0) {
-    gaps.push('No social media profiles (Instagram, Facebook, LinkedIn) are linked from their website.');
+    gaps.push('Lack of Social Media Presence: Zero social media profiles (Instagram, Facebook, LinkedIn, TikTok, X/Twitter, YouTube) are linked from your website — hurting brand credibility and missing organic social traffic.');
   } else if (missingSocials.length) {
-    gaps.push(`Active on ${socialChannels.join(', ')}, but missing linked presence on ${missingSocials.join(' & ')}.`);
+    gaps.push(`Incomplete Social Media Footprint: Linked to ${socialChannels.join(', ')}, but missing active/linked presence on ${missingSocials.join(', ')} where local customers discover and vet ${industry.toLowerCase()} brands.`);
   }
-  if (!lead.rating || (!Number.isNaN(ratingNum) && ratingNum < 4.2)) {
-    gaps.push('Local map rating / review volume has room for growth to stand out against top-ranked local competitors.');
+
+  // Contactability, Rating & Local Listing completeness
+  if (!lead.email) {
+    gaps.push('No Public Business Email Listed: Customers and B2B partners cannot easily find a direct email contact on your site or listing.');
+  }
+  if (!lead.phone) {
+    gaps.push('No Direct Phone / Click-to-Call Listed: Missing a visible click-to-call phone number for mobile visitors.');
+  }
+  if (!lead.rating || (!Number.isNaN(ratingNum) && ratingNum < 4.4)) {
+    gaps.push(`Local Reputation & Review Volume: ${lead.rating ? `Current listed rating is ★ ${lead.rating}${lead.ratingInfo ? ` (${lead.ratingInfo})` : ''}` : 'No star rating or customer reviews displayed on your map listing'} — strengthening visible review proof will lift local click-through.`);
+  }
+  if (!lead.openHours) {
+    gaps.push('Missing Operating Hours on Listing: Operating hours are not displayed on your map profile, which reduces local pack engagement.');
   }
   if (!gaps.length) {
-    gaps.push(`Strong baseline presence; primary opportunity is scaling inbound client flow and automating follow-ups via ${senderService}.`);
+    gaps.push(`Growth & Conversion Scaling: Opportunity to scale inbound client flow and automate follow-ups via ${senderService}.`);
   }
-  // Prepend user-spotted issues so they take top priority in both gaps and the pitch
-  const combinedGaps = [...spottedList, ...gaps.filter(g => !spottedList.some(u => u.toLowerCase() === g.toLowerCase()))];
+
+  // Prepend user-spotted issues so they take top priority, followed by ALL discovered business & audit gaps
+  const combinedGaps = [
+    ...spottedList.map(s => `[Spotted Issue] ${s}`),
+    ...gaps.filter(g => !spottedList.some(u => g.toLowerCase().includes(u.toLowerCase())))
+  ];
 
   const primaryGap = spottedList[0]
     ? spottedList[0]
     : !lead.website
       ? 'building a high-converting web presence and local search capture'
-      : signals.hasBookingOrForm === false
-        ? 'turning website visitors into booked appointments automatically'
-        : socialChannels.length === 0
-          ? 'connecting their website with active social proof and local lead capture'
-          : `strengthening their local visibility and conversion flow in ${city}`;
+      : socialChannels.length === 0
+        ? 'fixing website conversion leaks and building an active social media & local search presence'
+        : `fixing website, SEO, social presence, and lead-capture gaps in ${city}`;
 
-  const angle = `Lead with a compliment on their ${industry.toLowerCase()} presence in ${city}${lead.rating ? ` (★ ${lead.rating})` : ''}, walk through the top ${Math.min(4, combinedGaps.length)} specific issues found, and show how fixing them brings more qualified leads via ${senderService}.`;
+  const angle = `Present the full 360° findings across ${name}’s website${lead.platform ? ` (${lead.platform})` : ''}, social media presence (${socialChannels.length ? socialChannels.join(', ') : 'none linked'}), local search rank${lead.searchRank ? ` (#${lead.searchRank})` : ''}, and conversion funnel (${combinedGaps.length} total findings), then offer a tailored action plan using ${senderService}.`;
 
   const specificHook = !lead.website
-    ? `I noticed ${name} on Bing Maps in ${city}, and saw that customers searching online currently don’t have a dedicated website or online funnel to book with you`
+    ? `I found ${name} while researching ${industry.toLowerCase()} businesses in ${city}${lead.searchRank ? ` (currently listed at Rank #${lead.searchRank} on Bing Maps)` : ''}, and noticed you don’t currently have an official website or social funnel linked for customers searching online`
     : lead.headings?.length
-      ? `I was just reviewing ${name}’s website (“${lead.headings[0]}”) while researching ${industry.toLowerCase()} businesses in ${city}`
-      : `I came across ${name} while reviewing top ${industry.toLowerCase()} businesses in ${city}`;
+      ? `I just completed a full 360° online presence & website review of ${name} (${lead.website} — “${lead.headings[0]}”) in ${city}`
+      : `I just completed a full 360° online presence & website review of ${name} (${lead.website}) in ${city}`;
 
-  const topFindings = combinedGaps.slice(0, 4);
-  const bulletLines = topFindings.map(item => `• ${item}`).join('\n');
+  const snapshotLines = [
+    `• Business & Location: ${name} (${industry} in ${city}${lead.address ? ` · ${lead.address}` : ''})`,
+    `• Search & Map Listing: ${lead.searchRank ? `Bing Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)})` : 'Local listing'} · ${lead.rating ? `Rating: ★ ${lead.rating}${lead.ratingInfo ? ` (${lead.ratingInfo})` : ''}` : 'No map reviews displayed'} · ${lead.openHours ? `Hours: ${lead.openHours}` : 'Hours not listed'}`,
+    `• Website & Tech Stack: ${lead.website ? `${lead.platform || 'Website'}${lead.shopifyMeta?.themeName ? ` (Theme: ${lead.shopifyMeta.themeName})` : ''}${auditReport?.overallScore !== undefined ? ` · Health Score: ${auditReport.overallScore}/100` : ''}${auditReport?.ttfbMs ? ` · Response Time: ${auditReport.ttfbMs}ms` : ''}` : 'No website linked'}${lead.techStack?.length ? ` · Stack: ${lead.techStack.join(', ')}` : ''}`,
+    lead.shopifyProducts?.length ? `• Product Catalog Sampled: ${lead.shopifyProducts.slice(0, 3).map(p => `${p.title}${p.price ? ` ($${p.price})` : ''}`).join(', ')}` : null,
+    `• Social Media Presence: ${socialChannels.length ? `Linked: ${socialChannels.join(', ')} | Missing: ${missingSocials.join(', ') || 'None'}` : 'No social media profiles (Instagram, Facebook, LinkedIn, TikTok) linked on site'}`,
+    `• Contact & Lead Capture: ${[lead.email ? `Email: ${lead.email}` : 'No public email', lead.phone ? `Phone: ${lead.phone}` : 'No phone listed', signals.hasBookingOrForm ? 'Lead form present' : 'No instant booking/lead form', signals.hasChatWidget ? 'Chat widget active' : 'No live chat/WhatsApp widget'].join(' · ')}`
+  ].filter(Boolean).join('\n');
+
+  const bulletLines = combinedGaps.map(item => `• ${item}`).join('\n');
   const extraParagraph = cleanExtra
     ? `${/[.!?]$/.test(cleanExtra) ? cleanExtra : cleanExtra + '.'}\n\n`
     : '';
 
-  const pitchSubject = `A few quick ideas to bring more leads to ${name} in ${city}`.slice(0, 88);
+  const pitchSubject = `360° online presence, social & website audit for ${name} in ${city}`.slice(0, 88);
   const pitchBody =
     `Hi ${name} team,\n\n` +
-    `${specificHook}, and I really like the foundation you’ve built for customers in ${city}.\n\n` +
-    `I’m ${senderName}, and I specialize in helping ${industry.toLowerCase()} businesses generate more consistent leads and paying customers through ${senderService}. While looking closely at your online presence, I spotted a few specific issues that are likely costing you inquiries every week:\n\n` +
+    `${specificHook}.\n\n` +
+    `I’m ${senderName}, and I help ${industry.toLowerCase()} businesses generate more consistent leads, stronger social authority, and higher customer conversions through ${senderService}.\n\n` +
+    `Here is the complete snapshot of what we found across ${name}’s online presence:\n` +
+    `${snapshotLines}\n\n` +
+    `Based on that review, here are the specific issues and missed opportunities currently holding back inbound leads and sales:\n\n` +
     `${bulletLines}\n\n` +
-    `Fixing even one or two of these gaps can make a noticeable difference—helping more local searchers find ${name}, trust your brand faster, and reach out or book directly instead of clicking away to a competitor.\n\n` +
+    `Fixing these gaps—from your website technical/SEO health and lead capture forms to your social media presence and local search visibility—ensures that when customers in ${city} search for ${industry.toLowerCase()} services, they find ${name} first, trust your brand immediately, and convert into paying clients.\n\n` +
     extraParagraph +
-    `I’d be happy to send over a quick 2-minute breakdown (or screenshots) showing exactly how to fix these and capture more leads for ${name}—no strings attached.\n\n` +
-    `Would you be open to me sending that over, or hopping on a brief 10-minute chat this week?\n\n` +
+    `I’ve already mapped out a practical step-by-step fix list for ${name}. Would you be open to me sending over a quick 2-minute walkthrough, or hopping on a brief 10-minute chat this week?\n\n` +
     `Best regards,\n${senderName}`;
 
   return {
@@ -2379,13 +2435,16 @@ async function analyzeLeadWithAi(lead, senderSettings, userIssues = '', extraCon
       : '';
 
     const prompt = `You are a senior B2B lead-generation & conversion strategist. Analyze this business and return a JSON object with keys:
-- "overview" (string: 2-3 sentence positioning summary)
-- "gaps" (array of 4-5 specific, actionable issues found on their website/listing)
+- "overview" (string: comprehensive 3-5 sentence 360° summary covering their location, search rank, website platform/tech stack, audit health score, social media presence, rating/reviews, and contactability)
+- "gaps" (array of ALL specific, actionable issues found across their website, technical audit, SEO, social media presence, local listing, and lead capture)
 - "angle" (string: recommended outreach strategy)
 - "pitchSubject" (string under 85 chars, compelling & personalized)
-- "pitchBody" (string: a detailed, persuasive cold outreach email of 180-260 words with NO unreplaced brackets. Structure it with: (1) a personalized opener referencing their business/city, (2) a clear bulleted list using "• " highlighting 3-4 specific issues found including any user-spotted issues, (3) a short paragraph explaining how fixing these issues will bring them more qualified leads & customers, plus any additional user context/offer provided, and (4) a friendly low-friction CTA + sign-off using the sender name).${userIssuesNote}${extraContextNote}
+- "pitchBody" (string: a thorough, high-converting cold outreach email of 260-400 words with NO unreplaced brackets. CRITICAL: You MUST incorporate EVERY single piece of information gathered about the business—including their exact social media presence or lack of social media links, local search rank, map rating/reviews, website platform & tech stack, website audit score/findings, contact/lead-capture gaps, and user-spotted issues. Structure it with: (1) a personalized opener, (2) a "360° Online Presence Snapshot" bulleted block, (3) a comprehensive bulleted list using "• " of ALL issues found, (4) how fixing these brings more leads & sales plus any extra user offer, and (5) a friendly CTA + sign-off using the sender name).${userIssuesNote}${extraContextNote}
 
-Business data:
+All Discovered Gaps & Audit Findings (MUST all be included in the pitch):
+${JSON.stringify(baseline.gaps, null, 2)}
+
+Complete Business Dossier:
 ${JSON.stringify({
       name: lead.name,
       industry: lead.industry,
@@ -2393,7 +2452,10 @@ ${JSON.stringify({
       address: lead.address,
       website: lead.website,
       email: lead.email,
+      emails: lead.emails,
       phone: lead.phone,
+      searchRank: lead.searchRank,
+      searchPage: lead.searchPage,
       rating: lead.rating,
       ratingInfo: lead.ratingInfo,
       openHours: lead.openHours,
@@ -2405,8 +2467,21 @@ ${JSON.stringify({
       techStack: lead.techStack,
       shopifyMeta: lead.shopifyMeta,
       shopifyProducts: lead.shopifyProducts,
-      socials: { facebook: lead.facebook, instagram: lead.instagram, twitter: lead.twitter, linkedin: lead.linkedin },
-      signals: lead.signals
+      socials: {
+        facebook: lead.facebook || null,
+        instagram: lead.instagram || null,
+        twitter: lead.twitter || null,
+        linkedin: lead.linkedin || null,
+        youtube: lead.youtube || null,
+        tiktok: lead.tiktok || null
+      },
+      signals: lead.signals,
+      auditSummary: lead.auditReport ? {
+        overallScore: lead.auditReport.overallScore,
+        scores: lead.auditReport.scores,
+        ttfbMs: lead.auditReport.ttfbMs,
+        counts: lead.auditReport.counts
+      } : null
     })}
 
 Sender profile:
@@ -2792,13 +2867,30 @@ export async function handleRequest(req, res) {
       if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
       const { lead, userIssues, extraContext } = await readJson(req);
       if (!lead || typeof lead !== 'object') fail(400, 'Provide business details to analyze.');
+      let enrichedLead = { ...lead };
+      if (enrichedLead.website && !enrichedLead.auditReport) {
+        try {
+          const combed = await fetchWebsiteEmails(enrichedLead.website);
+          enrichedLead = {
+            ...enrichedLead,
+            ...combed,
+            name: enrichedLead.name || combed.brandName,
+            email: enrichedLead.email || combed.email,
+            phone: enrichedLead.phone || combed.phone
+          };
+        } catch {}
+      }
       const ws = getWorkspace(session.userId || 'default');
-      return json(await analyzeLeadWithAi(
-        lead,
+      const brief = await analyzeLeadWithAi(
+        enrichedLead,
         ws.settings,
-        userIssues ?? lead.userSpottedIssues ?? '',
-        extraContext ?? lead.aiExtraContext ?? ''
-      ));
+        userIssues ?? enrichedLead.userSpottedIssues ?? '',
+        extraContext ?? enrichedLead.aiExtraContext ?? ''
+      );
+      return json({
+        ...brief,
+        auditReport: enrichedLead.auditReport || null
+      });
     }
     if (req.method === 'POST' && path === '/api/send') {
       if (!session.userId) fail(401, 'Sign in to send email.');

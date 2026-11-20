@@ -1780,14 +1780,16 @@ function renderBusinessPage() {
         btn.disabled = true;
         btn.textContent = 'Generating with AI…';
         try {
-          if (lead.website && !lead.aboutSummary && !lead.scanned) {
+          if (lead.website && (!lead.aboutSummary || !lead.auditReport)) {
             try {
               const enriched = await api('/api/enrich', { website: lead.website });
               lead.scanned = true;
               applyEnrichmentToItem(lead, enriched);
             } catch {}
           }
-          lead.aiBrief = await api('/api/analyze', { lead, userIssues, extraContext });
+          const aiRes = await api('/api/analyze', { lead, userIssues, extraContext });
+          if (aiRes.auditReport && !lead.auditReport) lead.auditReport = aiRes.auditReport;
+          lead.aiBrief = aiRes;
           persist();
           report(`Generated detailed AI lead brief & email for ${lead.name}.`);
         } catch (error) {

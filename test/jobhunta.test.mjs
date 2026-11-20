@@ -313,12 +313,14 @@ test('buildLeadIntelligence incorporates user-spotted issues into a detailed lea
     'Mobile checkout button is cut off\nHomepage hero image loads slowly',
     'We also recorded a free 2-minute video audit walking through your mobile checkout'
   );
-  assert.equal(brief.gaps[0], 'Mobile checkout button is cut off');
-  assert.equal(brief.gaps[1], 'Homepage hero image loads slowly');
-  assert.ok(brief.pitchBody.includes('• Mobile checkout button is cut off'));
-  assert.ok(brief.pitchBody.includes('• Homepage hero image loads slowly'));
+  assert.ok(brief.gaps[0].includes('Mobile checkout button is cut off'));
+  assert.ok(brief.gaps[1].includes('Homepage hero image loads slowly'));
+  assert.ok(brief.pitchBody.includes('Mobile checkout button is cut off'));
+  assert.ok(brief.pitchBody.includes('Homepage hero image loads slowly'));
+  assert.ok(brief.pitchBody.includes('Social Media Presence:'));
+  assert.ok(brief.pitchBody.includes('Lack of Social Media Presence'));
   assert.ok(brief.pitchBody.includes('We also recorded a free 2-minute video audit walking through your mobile checkout.'));
-  assert.ok(brief.pitchBody.length > 400, 'Expected detailed multi-paragraph outreach email');
+  assert.ok(brief.pitchBody.length > 500, 'Expected detailed multi-paragraph outreach email with all business data');
 });
 
 test('buildRawMimeMessage creates multipart/mixed MIME email with image and file attachments', () => {

@@ -638,45 +638,97 @@ export function generateClientOutreach(auditReport = {}, lead = {}, senderSettin
   const senderName = senderSettings?.senderName || 'Your Name';
   const senderService = senderSettings?.senderService || 'web conversion, SEO & digital growth';
   const score = auditReport.overallScore ?? 72;
-  const findings = Array.isArray(auditReport.findings) ? auditReport.findings : [];
+  const findings = Array.isArray(auditReport.findings) ? [...auditReport.findings] : [];
+
+  // Incorporate social media presence, local search rank, rating, and contactability gaps into audit outreach
+  const activeSocials = [
+    lead.facebook && 'Facebook',
+    lead.instagram && 'Instagram',
+    lead.twitter && 'X/Twitter',
+    lead.linkedin && 'LinkedIn',
+    lead.youtube && 'YouTube',
+    lead.tiktok && 'TikTok'
+  ].filter(Boolean);
+  const missingSocials = ['Instagram', 'Facebook', 'LinkedIn', 'TikTok'].filter(s => !activeSocials.includes(s));
+
+  if (activeSocials.length === 0) {
+    findings.push({
+      category: 'seo',
+      severity: 'Critical',
+      title: 'No linked social media presence (Instagram, Facebook, LinkedIn, TikTok)',
+      detail: 'Zero social media profiles are linked from the website or business listing.',
+      recommendation: 'Connect active Instagram, Facebook, LinkedIn, and TikTok profiles with visible social proof.',
+      businessImpact: 'Hurts brand trust and misses organic social discovery from local customers.'
+    });
+  } else if (missingSocials.length > 0) {
+    findings.push({
+      category: 'seo',
+      severity: 'Warning',
+      title: `Incomplete social presence (active on ${activeSocials.join(', ')}; missing ${missingSocials.join(', ')})`,
+      detail: `Missing linked profiles on ${missingSocials.join(', ')}.`,
+      recommendation: `Add and cross-link ${missingSocials.join(' & ')} channels to strengthen brand authority.`,
+      businessImpact: 'Leaves organic reach and retargeting touchpoints on the table.'
+    });
+  }
+
+  if (lead.searchRank && lead.searchRank > 10) {
+    findings.push({
+      category: 'seo',
+      severity: 'Critical',
+      title: `Low local search visibility (Bing Rank #${lead.searchRank}, Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)})`,
+      detail: `Currently ranked #${lead.searchRank} for "${industry} in ${city}".`,
+      recommendation: 'Optimize local SEO citations, on-page headings, and schema markup to reach Page 1.',
+      businessImpact: 'High-intent local buyers click Page 1 competitors first.'
+    });
+  }
 
   const sortedFindings = [...findings].sort((a, b) => {
     const weight = { Critical: 3, Warning: 2, Info: 1 };
     return (weight[b.severity] || 0) - (weight[a.severity] || 0);
   });
   const top3 = sortedFindings.slice(0, 3);
-  const topBullets = (top3.length ? top3 : [{
+  const allBullets = (sortedFindings.length ? sortedFindings : [{
     title: 'Conversion & local search capture gaps',
     businessImpact: 'Visitors searching online may leave before booking or requesting a quote.'
-  }]).map(f => `• ${f.title} — ${f.businessImpact}`);
+  }]).map(f => `• [${(f.category || 'AUDIT').toUpperCase()}] ${f.title} — ${f.businessImpact}`);
+
+  const profileContextParts = [
+    `Platform: ${platform}`,
+    lead.searchRank ? `Search Rank: #${lead.searchRank}` : null,
+    lead.rating ? `Rating: ★ ${lead.rating}${lead.ratingInfo ? ` (${lead.ratingInfo})` : ''}` : 'No map rating/reviews listed',
+    activeSocials.length ? `Socials: ${activeSocials.join(', ')} (missing ${missingSocials.join(', ') || 'none'})` : 'Socials: None linked',
+    lead.email ? `Email: ${lead.email}` : 'No public email listed',
+    lead.phone ? `Phone: ${lead.phone}` : 'No phone listed'
+  ].filter(Boolean).join(' · ');
 
   const executiveSummary =
-    `${name} (${platform}) scored ${score}/100 in our passive technical, SEO & conversion audit ` +
+    `${name} (${profileContextParts}) scored ${score}/100 in our 360° technical, SEO, social presence & conversion audit ` +
     `(${auditReport.counts?.critical || 0} critical, ${auditReport.counts?.warning || 0} warnings). ` +
-    `Addressing the top ${Math.min(3, top3.length || 1)} lapses below will directly improve mobile load speed, Google visibility, and inbound lead conversion.`;
+    `Addressing the ${sortedFindings.length} discovered lapses below will directly improve local rankings, social credibility, mobile speed, and inbound customer leads.`;
 
   const extraLine = extraContext ? `\n\n${String(extraContext).trim()}` : '';
 
-  // 1. Short Cold Email (under 120 words, referencing 2-3 specific findings on their exact platform)
-  const shortFindings = top3.slice(0, 2).map(f => `• ${f.title}`).join('\n');
-  const coldEmailSubject = `Quick ${platform} audit for ${name} (${score}/100 health score)`.slice(0, 85);
+  // 1. Short Cold Email (referencing platform, social presence & top findings)
+  const shortFindings = sortedFindings.slice(0, 4).map(f => `• ${f.title}`).join('\n');
+  const coldEmailSubject = `Quick ${platform} & online presence audit for ${name} (${score}/100)`.slice(0, 85);
   const coldEmailBody =
     `Hi ${name} team,\n\n` +
-    `I ran a quick non-intrusive audit on your ${platform} site in ${city} and noticed a couple of quick fixes that could unlock more inbound leads right away:\n\n` +
-    `${shortFindings || '• Mobile conversion & local search visibility opportunities'}\n\n` +
-    `I help ${industry.toLowerCase()} brands with ${senderService}. Fixing these directly boosts Google visibility and stops mobile visitors from bouncing.${extraLine}\n\n` +
+    `I ran a quick 360° audit on ${name}’s ${platform} site and online presence in ${city} (${profileContextParts}) and noticed a few high-impact fixes that could unlock more inbound leads right away:\n\n` +
+    `${shortFindings || '• Mobile conversion, social proof & local search visibility opportunities'}\n\n` +
+    `I help ${industry.toLowerCase()} brands with ${senderService}. Fixing these directly boosts Google/Bing visibility, strengthens social trust, and stops mobile visitors from bouncing.${extraLine}\n\n` +
     `Mind if I send over a 60-second breakdown showing the exact fixes?\n\n` +
     `Best,\n${senderName}`;
 
-  // 2. Detailed Audit Email (multi-paragraph with business impact)
-  const detailedEmailSubject = `${Math.min(3, top3.length || 2)} quick fixes to bring more leads to ${name}`.slice(0, 85);
+  // 2. Detailed Audit Email (uses every single finding & business detail)
+  const detailedEmailSubject = `Full online presence & ${platform} audit for ${name} in ${city}`.slice(0, 85);
   const detailedEmailBody =
     `Hi ${name} team,\n\n` +
-    `While reviewing ${industry.toLowerCase()} businesses in ${city}, I took a closer look at your ${platform} website (${auditReport.url || lead.website || name}). You have a great foundation, and our passive site health check scored it ${score}/100.\n\n` +
-    `I’m ${senderName}, and I specialize in ${senderService}. During the review, I spotted ${top3.length || 'a few'} specific technical and conversion lapses that are likely costing ${name} qualified inquiries every week:\n\n` +
-    `${topBullets.join('\n')}\n\n` +
-    `Resolving these on ${platform} is straightforward and typically makes an immediate impact on local search rankings, mobile speed, and how many visitors actually reach out or buy.${extraLine}\n\n` +
-    `I’ve already put together a short action plan with screenshots for ${name}. Would you be open to me sending it over, or hopping on a brief 10-minute call this week?\n\n` +
+    `While reviewing ${industry.toLowerCase()} businesses in ${city}, I did a complete review of ${name}’s online footprint (${auditReport.url || lead.website || name}).\n\n` +
+    `Current Snapshot: ${profileContextParts} · Overall Health Score: ${score}/100${auditReport.ttfbMs ? ` · Server Response: ${auditReport.ttfbMs}ms` : ''}.\n\n` +
+    `I’m ${senderName}, and I specialize in ${senderService}. Across your website, local search listing, and social presence, here is every specific lapse I found that is likely costing ${name} qualified inquiries and sales:\n\n` +
+    `${allBullets.join('\n')}\n\n` +
+    `Resolving these technical, SEO, and social proof gaps on ${platform} makes an immediate impact on how easily customers find ${name}, trust your brand, and reach out to buy or book.${extraLine}\n\n` +
+    `I’ve already put together a tailored action plan for ${name}. Would you be open to me sending it over, or hopping on a brief 10-minute call this week?\n\n` +
     `Best regards,\n${senderName}`;
 
   // 3. LinkedIn / WhatsApp DM Version (conversational, low-friction)
