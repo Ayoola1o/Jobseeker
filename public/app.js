@@ -289,7 +289,7 @@ function updateHeaderBadges() {
     navCount.textContent = String(leads.length);
     navCount.hidden = leads.length === 0;
   }
-  const convCount = outgoing().filter(item => item.conversation.mailbox === account.mailbox).length;
+  const convCount = getInboxGroups().length;
   const navInbox = $('#nav-inbox-count');
   if (navInbox) {
     navInbox.textContent = String(convCount);
@@ -1748,9 +1748,62 @@ function renderBroadcast() {
   container.replaceChildren(top, grid);
 }
 
-/* ---------------- SPLIT-PANE INBOX (Figma Desktop & Mobile Inbox) ---------------- */
+/* ---------------- SPLIT-PANE INBOX (Grouped by Email Address — Unified Chat History) ---------------- */
 const threadKey = conversation => conversation.mailbox + ':' + conversation.id;
 const outgoing = () => leads.flatMap(lead => (lead.threads || []).map(conversation => ({ lead, conversation })));
+
+function getInboxGroups() {
+  if (!account.mailbox) return [];
+  const allItems = outgoing().filter(item => item.conversation.mailbox === account.mailbox);
+  const byEmail = new Map();
+  for (const entry of allItems) {
+    const emailAddr = norm(entry.conversation.to || entry.lead.email) || threadKey(entry.conversation);
+    let group = byEmail.get(emailAddr);
+    if (!group) {
+      group = {
+        key: emailAddr,
+        email: entry.conversation.to || entry.lead.email || '',
+        lead: entry.lead,
+        entries: [],
+        latestTime: 0,
+        latestEntry: entry,
+        hasReply: false,
+        unread: false,
+        messages: []
+      };
+      byEmail.set(emailAddr, group);
+    }
+    group.entries.push(entry);
+    const tMsgs = messages.get(threadKey(entry.conversation)) || [];
+    const lastMsgTime = tMsgs.length ? Math.max(...tMsgs.map(m => Number(m.time) || 0)) : 0;
+    const entryTime = Math.max(Number(entry.conversation.time) || 0, lastMsgTime);
+    if (entryTime >= group.latestTime) {
+      group.latestTime = entryTime;
+      group.latestEntry = entry;
+      group.lead = entry.lead;
+    }
+    if (entry.conversation.unread) group.unread = true;
+    if (tMsgs.some(m => !m.sent) || entry.lead.replied) group.hasReply = true;
+  }
+
+  // Merge and chronologically sort all messages per email address
+  for (const group of byEmail.values()) {
+    const seenIds = new Set();
+    const merged = [];
+    for (const { conversation } of group.entries) {
+      const tMsgs = messages.get(threadKey(conversation)) || [];
+      for (const m of tMsgs) {
+        if (m.id && seenIds.has(m.id)) continue;
+        if (m.id) seenIds.add(m.id);
+        merged.push({ ...m, _conversation: conversation });
+      }
+    }
+    merged.sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0));
+    group.messages = merged;
+  }
+
+  return [...byEmail.values()].sort((a, b) => b.latestTime - a.latestTime);
+}
 
 function renderInbox() {
   const container = $('#inbox-content');
@@ -1780,54 +1833,62 @@ function renderInbox() {
     return;
   }
 
-  const allItems = outgoing().filter(item => item.conversation.mailbox === account.mailbox);
-  const filteredItems = allItems.filter(({ lead, conversation }) => {
-    const thread = messages.get(threadKey(conversation)) || [];
-    const hasReply = thread.some(m => !m.sent) || lead.replied;
-    if (inboxFilter === 'replied') return hasReply;
-    if (inboxFilter === 'sent') return !hasReply;
+  const allGroups = getInboxGroups();
+  const filteredGroups = allGroups.filter(g => {
+    if (inboxFilter === 'replied') return g.hasReply;
+    if (inboxFilter === 'sent') return !g.hasReply;
     return true;
   });
 
-  if (!selectedInboxKey && filteredItems[0]) {
-    selectedInboxKey = threadKey(filteredItems[0].conversation);
+  // Resolve selected group (accepts either email key or legacy threadKey)
+  let activeGroup = allGroups.find(g => g.key === selectedInboxKey || g.entries.some(e => threadKey(e.conversation) === selectedInboxKey));
+  if (!activeGroup && filteredGroups[0]) {
+    activeGroup = filteredGroups[0];
+    selectedInboxKey = activeGroup.key;
   }
 
   const shell = create('div', '', 'surface inbox-shell');
 
-  // Left List Pane
+  // Left List Pane (1 unified row per email address)
   const listPane = create('div', '', 'inbox-list-pane');
   const tabsRow = create('div', '', 'inbox-tabs');
-  [['all', `All (${allItems.length})`], ['replied', 'Replies'], ['sent', 'Sent']].forEach(([key, lbl]) => {
+  [['all', `All (${allGroups.length})`], ['replied', 'Replies'], ['sent', 'Sent']].forEach(([key, lbl]) => {
     const t = create('button', lbl, 'inbox-tab' + (inboxFilter === key ? ' active' : ''));
     t.type = 'button';
     t.onclick = () => { inboxFilter = key; renderInbox(); };
     tabsRow.append(t);
   });
   const itemsWrap = create('div', '', 'inbox-items');
-  if (filteredItems.length) {
-    for (const { lead, conversation } of filteredItems) {
-      const k = threadKey(conversation);
-      const threadMsgs = messages.get(k) || [];
-      const hasReply = threadMsgs.some(m => !m.sent) || lead.replied;
-      const rowEl = create('div', '', 'inbox-item' + (k === selectedInboxKey ? ' active' : ''));
+  if (filteredGroups.length) {
+    for (const group of filteredGroups) {
+      const { lead, latestEntry } = group;
+      const isSelected = activeGroup && activeGroup.key === group.key;
+      const rowEl = create('div', '', 'inbox-item' + (isSelected ? ' active' : ''));
       const body = create('div', '', 'inbox-item-body');
       const rTop = create('div', '', 'inbox-item-top');
-      rTop.append(create('strong', lead.name), create('small', new Date(conversation.time || Date.now()).toLocaleDateString()));
-      const rSub = create('div', conversation.subject, 'inbox-item-sub');
+      rTop.append(create('strong', lead.name), create('small', new Date(group.latestTime || Date.now()).toLocaleDateString()));
+      const rSub = create('div', group.email || latestEntry.conversation.subject, 'inbox-item-sub');
       const rBadges = create('div', '', 'actions');
       rBadges.style.marginTop = '4px';
-      if (conversation.unread) rBadges.append(create('span', 'New Reply', 'pill'));
-      else if (hasReply) rBadges.append(create('span', 'Replied', 'pill'));
-      else rBadges.append(create('span', `${Math.max(1, threadMsgs.length)} sent`, 'pill neutral'));
+      if (group.unread) rBadges.append(create('span', 'New Reply', 'pill'));
+      else if (group.hasReply) rBadges.append(create('span', 'Replied', 'pill'));
+      else rBadges.append(create('span', `${Math.max(1, group.messages.length)} sent`, 'pill neutral'));
+      if (group.entries.length > 1) rBadges.append(create('span', `${group.entries.length} threads`, 'pill neutral'));
       if (lead.due) rBadges.append(create('span', `Follow-up: ${lead.due}`, 'pill wait'));
       body.append(rTop, rSub, rBadges);
       rowEl.append(makeAvatar(lead.name), body);
       rowEl.onclick = async () => {
-        selectedInboxKey = k;
-        if (conversation.unread) { conversation.unread = false; persist(); }
+        selectedInboxKey = group.key;
+        let clearedUnread = false;
+        for (const e of group.entries) {
+          if (e.conversation.unread) { e.conversation.unread = false; clearedUnread = true; }
+        }
+        if (clearedUnread) persist();
         renderInbox();
-        try { await syncThread(lead, conversation); renderInbox(); } catch {}
+        try {
+          await Promise.allSettled(group.entries.map(e => syncThread(e.lead, e.conversation)));
+          renderInbox();
+        } catch {}
       };
       itemsWrap.append(rowEl);
     }
@@ -1836,15 +1897,20 @@ function renderInbox() {
   }
   listPane.append(tabsRow, itemsWrap);
 
-  // Right Thread Pane
+  // Right Thread Pane (Unified chronological chat history for this email address)
   const threadPane = create('div', '', 'inbox-thread-pane');
-  const activeEntry = allItems.find(item => threadKey(item.conversation) === selectedInboxKey) || filteredItems[0];
-  if (!activeEntry) {
-    threadPane.append(empty('mail', 'Select a conversation', 'Pick a thread from the left to read messages and reply.'));
+  if (!activeGroup) {
+    threadPane.append(empty('mail', 'Select a conversation', 'Pick a contact from the left to read messages and reply.'));
   } else {
-    const { lead, conversation } = activeEntry;
+    const { lead, latestEntry, messages: unifiedMsgs } = activeGroup;
+    const conversation = latestEntry.conversation;
     const threadHead = create('div', '', 'heading');
     threadHead.style.margin = '0';
+    const headTitle = create('div');
+    headTitle.append(
+      create('h2', conversation.subject),
+      create('div', `${lead.name} · ${activeGroup.email} (${unifiedMsgs.length} message${unifiedMsgs.length === 1 ? '' : 's'})`, 'small')
+    );
     const headRight = create('div', '', 'actions');
     const dueInput = create('input');
     dueInput.type = 'date';
@@ -1862,19 +1928,18 @@ function renderInbox() {
       classify(lead, conversation),
       btnWithIcon('plus', 'Compose', () => compose(lead))
     );
-    threadHead.append(create('h2', conversation.subject), headRight);
+    threadHead.append(headTitle, headRight);
 
-    const threadMsgs = messages.get(threadKey(conversation)) || [];
     const msgsWrap = create('div', '', 'inbox-messages');
-    if (threadMsgs.length) {
-      for (const m of threadMsgs) {
+    if (unifiedMsgs.length) {
+      for (const m of unifiedMsgs) {
         const mail = create('article', '', 'mail' + (m.sent ? ' outgoing' : ''));
         const mHead = create('div', '', 'mail-head');
         const mSender = create('div', '', 'mail-sender');
         const senderLabel = m.sent ? (currentUser?.name || 'You') : lead.name;
         const senderMeta = create('div');
         senderMeta.append(
-          create('h3', m.sent ? `You → ${m.to || conversation.to || lead.email}` : m.from),
+          create('h3', m.sent ? `You → ${m.to || activeGroup.email}` : m.from),
           create('small', new Date(m.time).toLocaleString())
         );
         mSender.append(makeAvatar(senderLabel), senderMeta);
@@ -1883,12 +1948,12 @@ function renderInbox() {
         msgsWrap.append(mail);
       }
     } else {
-      msgsWrap.append(create('p', 'Loading thread messages… (or click Refresh Inbox)', 'small'));
+      msgsWrap.append(create('p', 'Loading messages… (or click Refresh Inbox)', 'small'));
     }
 
     const replyForm = create('form', '', 'reply-box-wrap');
     const replyBox = create('textarea');
-    replyBox.placeholder = `Write a reply to ${lead.name}…`;
+    replyBox.placeholder = `Write a reply to ${lead.name} (${activeGroup.email})…`;
     replyBox.required = true;
     const replyAtts = createAttachmentPicker();
     const replyActions = create('div', '', 'actions');
@@ -1901,23 +1966,25 @@ function renderInbox() {
       event.preventDefault();
       const text = replyBox.value.trim();
       if (!text) return;
-      const lastIncoming = threadMsgs.findLast(m => !m.sent);
-      const replyTarget = lastIncoming || threadMsgs.at(-1);
+      const targetConv = unifiedMsgs.at(-1)?._conversation || conversation;
+      const targetThreadMsgs = messages.get(threadKey(targetConv)) || [];
+      const lastIncoming = targetThreadMsgs.findLast(m => !m.sent);
+      const replyTarget = lastIncoming || targetThreadMsgs.at(-1);
       sendReplyBtn.disabled = true;
       sendReplyBtn.textContent = 'Sending…';
       try {
         await api('/api/send', {
-          to: conversation.to || lead.email,
-          subject: conversation.subject,
+          to: targetConv.to || activeGroup.email,
+          subject: targetConv.subject,
           body: text,
           attachments: replyAtts.getAttachments(),
           requestId: crypto.randomUUID(),
-          threadId: conversation.id,
+          threadId: targetConv.id,
           parentId: replyTarget?.id
         });
         replyBox.value = '';
         replyAtts.clear();
-        await syncThread(lead, conversation);
+        await syncThread(lead, targetConv);
         if (currentUser?.usage) currentUser.usage.emailsToday = (currentUser.usage.emailsToday || 0) + 1;
         persist();
         report(`Reply sent to ${lead.name}.`);
@@ -1930,6 +1997,8 @@ function renderInbox() {
     };
 
     threadPane.append(threadHead, msgsWrap, replyForm);
+    // Auto-scroll to the latest message at the bottom
+    requestAnimationFrame(() => { msgsWrap.scrollTop = msgsWrap.scrollHeight; });
   }
 
   shell.append(listPane, threadPane);
