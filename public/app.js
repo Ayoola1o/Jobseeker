@@ -59,6 +59,7 @@ let resultsPage = 1;
 let leadsPage = 1;
 let activeBusinessId = null;
 let dossierTab = 'overview';
+let settingsTab = 'integrations';
 let selectedInboxKey = null;
 let inboxFilter = 'all';
 let selectedBroadcastTplId = 'intro';
@@ -1936,115 +1937,270 @@ function renderProfile() {
   container.replaceChildren(topHeader, topGrid, botGrid);
 }
 
-/* ---------------- SETTINGS (Figma 2-Col Auto-Saving Grid, No Save Button) ---------------- */
+/* ---------------- SETTINGS (Modern SaaS Categorized Settings, Auto-Saving) ---------------- */
 function renderSettings() {
   const container = $('#settings-content');
   if (!container) return;
+
+  const autoSaveBadge = create('span', '', 'pill');
+  autoSaveBadge.append(iconEl('check', 13), document.createTextNode('Auto-saves on change'));
 
   const topHeader = create('div', '', 'heading section-title');
   const titleWrap = create('div');
   titleWrap.append(
     create('h1', 'Settings'),
-    create('p', 'Configure your integrations, sender profile, and outreach templates (auto-saves).')
+    create('p', 'Manage your integrations, sender identity, outreach automation, and workspace data.')
   );
-  topHeader.append(titleWrap);
+  const topActs = create('div', '', 'actions');
+  topActs.append(
+    autoSaveBadge,
+    btnWithIcon('search', 'Find Businesses', () => { location.hash = '#discover'; }, 'btn-soft')
+  );
+  topHeader.append(titleWrap, topActs);
 
-  const grid = create('div', '', 'grid-2');
+  const shell = create('div', '', 'settings-shell');
 
-  // 1. Gmail Integration Card
-  const gmailCard = create('article', '', 'surface card-pad');
-  const gHead = create('div', '', 'heading');
-  gHead.style.margin = '0';
-  const gTitle = create('h2'); gTitle.style.display = 'flex'; gTitle.style.alignItems = 'center'; gTitle.style.gap = '8px';
-  gTitle.append(iconEl('mail', 18), document.createTextNode('Gmail Integration'));
-  const gPill = create('span', '', account.mailbox ? 'pill' : 'pill wait');
-  gPill.append(create('i', '', 'status-dot'), document.createTextNode(account.mailbox ? 'Connected' : 'Not Connected'));
-  gHead.append(gTitle, gPill);
-  gmailCard.append(gHead);
-  const expectedUri = account.redirectUri || (location.origin + '/oauth/callback');
-  if (account.mailbox) {
-    gmailCard.append(
-      kvItem('Connected Mailbox', account.mailbox),
-      button('Disconnect Gmail', async () => {
-        try { await api('/api/disconnect', {}); account.mailbox = null; messages.clear(); renderAccount(); report('Disconnected Gmail.'); }
-        catch (e) { report(e.message, true); }
-      }, 'danger')
-    );
-  } else {
-    const connectBtn = btnWithIcon('mail', 'Connect Gmail', async event => {
-      const btn = event.currentTarget;
-      btn.disabled = true; btn.textContent = 'Redirecting…';
-      try { location.assign((await api('/api/connect', {})).url); }
-      catch (e) { btn.disabled = false; btn.replaceChildren(iconEl('mail', 15), document.createTextNode('Connect Gmail')); report(e.message, true); }
-    });
-    const copyUriBtn = btnWithIcon('copy', 'Copy Redirect URI', async e => {
-      try { await navigator.clipboard.writeText(expectedUri); e.currentTarget.textContent = 'Copied!'; } catch {}
-    }, 'btn-soft');
-    const acts = create('div', '', 'actions');
-    acts.append(connectBtn, copyUriBtn);
-    gmailCard.append(
-      kvItem('OAuth Client ID', account.clientId || 'Configure GOOGLE_CLIENT_ID'),
-      kvItem('Authorized Redirect URI', expectedUri),
-      acts
-    );
+  // Left vertical category nav
+  const nav = create('nav', '', 'settings-nav');
+  nav.setAttribute('aria-label', 'Settings sections');
+  const sections = [
+    ['integrations', 'mail', 'Integrations'],
+    ['outreach', 'sparkles', 'Sender & Outreach'],
+    ['data', 'database', 'Data & Workspace'],
+    ['account', 'user', 'Account & Plan']
+  ];
+  for (const [key, ico, lbl] of sections) {
+    const b = create('button', '', 'settings-nav-btn' + (settingsTab === key ? ' active' : ''));
+    b.type = 'button';
+    b.append(iconEl(ico, 17), document.createTextNode(lbl));
+    b.onclick = () => { settingsTab = key; renderSettings(); };
+    nav.append(b);
   }
 
-  // 2. Supabase Cloud Sync Card
-  const sbCard = create('article', '', 'surface card-pad');
-  const sbHead = create('div', '', 'heading');
-  sbHead.style.margin = '0';
-  const sbTitle = create('h2'); sbTitle.style.display = 'flex'; sbTitle.style.alignItems = 'center'; sbTitle.style.gap = '8px';
-  sbTitle.append(iconEl('database', 18), document.createTextNode('Supabase Cloud Sync'));
-  const sbPill = create('span', '', account.supabase?.connected ? 'pill' : 'pill wait');
-  sbPill.append(create('i', '', 'status-dot'), document.createTextNode(account.supabase?.connected ? 'Connected' : 'Local Mode'));
-  sbHead.append(sbTitle, sbPill);
-  sbCard.append(
-    sbHead,
-    create('p', account.supabase?.connected
-      ? 'Your leads, AI briefs, templates, and daily usage are synced with Supabase Postgres.'
-      : (account.supabase?.error || 'Add SUPABASE_URL and SUPABASE_ANON_KEY to enable cloud sync.'), 'small'),
-    create('div', '', 'actions')
-  );
-  sbCard.lastChild.append(button('Import CSV', importLeads, 'btn-soft'), button('Export CSV', exportLeads, 'btn-soft'));
+  const panel = create('div', '', 'settings-panel');
 
-  // 3. Sender Profile & Outreach Defaults (Auto-Saving, NO Save Button)
-  const profCard = create('article', '', 'surface card-pad');
-  const pTitle = create('h2'); pTitle.style.display = 'flex'; pTitle.style.alignItems = 'center'; pTitle.style.gap = '8px';
-  pTitle.append(iconEl('user', 18), document.createTextNode('Sender Profile & Outreach Defaults'));
-  profCard.append(pTitle);
-  const sName = field('Your Name', 'senderName', settings.senderName, { placeholder: 'Ayoola Adebisi' });
-  const sService = field('Your Service / Offer (used by AI Pitch)', 'senderService', settings.senderService, { placeholder: 'Shopify CRO, web design & local SEO' });
-  const sDays = field('Default Follow-up Reminder (days)', 'defaultFollowUpDays', String(settings.defaultFollowUpDays ?? 4), { type: 'number' });
-  const autoSave = () => {
-    settings.senderName = sName.lastChild.value.trim();
-    settings.senderService = sService.lastChild.value.trim();
-    settings.defaultFollowUpDays = Math.max(0, Math.min(90, Number(sDays.lastChild.value) || 0));
+  const cardHead = (icoName, icoTone, title, subtitle, rightBadge = null) => {
+    const h = create('div', '', 'setting-card-head');
+    const left = create('div', '', 'setting-card-title');
+    const ico = create('div', '', `setting-ico ${icoTone}`);
+    ico.append(iconEl(icoName, 19));
+    const txt = create('div');
+    txt.append(create('h2', title), create('p', subtitle));
+    left.append(ico, txt);
+    h.append(left);
+    if (rightBadge) h.append(rightBadge);
+    return h;
+  };
+
+  const actionRow = (title, desc, ...btns) => {
+    const row = create('div', '', 'setting-row');
+    const copy = create('div', '', 'setting-row-copy');
+    copy.append(create('strong', title), create('small', desc));
+    const acts = create('div', '', 'actions');
+    acts.append(...btns);
+    row.append(copy, acts);
+    return row;
+  };
+
+  const flashSaved = () => {
+    autoSaveBadge.replaceChildren(iconEl('check', 13), document.createTextNode('Saved just now'));
+    setTimeout(() => {
+      autoSaveBadge.replaceChildren(iconEl('check', 13), document.createTextNode('Auto-saves on change'));
+    }, 2000);
+  };
+
+  const autoSaveSettings = () => {
     if (currentUser?.id) {
       localStorage.setItem(userSettingsKey(currentUser.id), JSON.stringify(settings));
       syncWorkspaceToServer();
     }
     renderDashboard();
+    flashSaved();
   };
-  sName.lastChild.onchange = autoSave;
-  sService.lastChild.onchange = autoSave;
-  sDays.lastChild.onchange = autoSave;
-  profCard.append(sName, sService, sDays);
 
-  // 4. Email Templates Card (Quick Link to Broadcast Template Cards)
-  const tplCard = create('article', '', 'surface card-pad');
-  const tplHead = create('div', '', 'heading');
-  tplHead.style.margin = '0';
-  const tTitle = create('h2'); tTitle.style.display = 'flex'; tTitle.style.alignItems = 'center'; tTitle.style.gap = '8px';
-  tTitle.append(iconEl('fileText', 18), document.createTextNode('Email Templates'));
-  tplHead.append(tTitle, create('span', `${settings.templates.length} saved`, 'pill'));
-  tplCard.append(
-    tplHead,
-    create('p', 'Create, edit, and preview your outreach email template cards directly on the Email Broadcast page.', 'small'),
-    btnWithIcon('send', 'Open Templates in Broadcast', () => { location.hash = '#broadcast'; }, 'btn-soft')
-  );
+  if (settingsTab === 'integrations') {
+    // 1. Gmail OAuth Integration
+    const gmailCard = create('article', '', 'surface card-pad');
+    const gPill = create('span', '', account.mailbox ? 'pill' : 'pill wait');
+    gPill.append(create('i', '', 'status-dot'), document.createTextNode(account.mailbox ? 'Connected' : 'Not Connected'));
+    gmailCard.append(cardHead('mail', '', 'Gmail Integration', 'Send 1-to-1 outreach emails and track replies directly from Jobhunta.', gPill));
 
-  grid.append(gmailCard, sbCard, profCard, tplCard);
-  container.replaceChildren(topHeader, grid);
+    const expectedUri = account.redirectUri || (location.origin + '/oauth/callback');
+    if (account.mailbox) {
+      gmailCard.append(
+        kvItem('Connected Mailbox', account.mailbox),
+        actionRow(
+          'Inbox Sync & Connection',
+          'Refresh Gmail threads or disconnect this mailbox from your workspace.',
+          btnWithIcon('refresh', 'Sync Inbox', () => { location.hash = '#inbox'; refresh(true); }, 'btn-soft'),
+          button('Disconnect Gmail', async () => {
+            try { await api('/api/disconnect', {}); account.mailbox = null; messages.clear(); renderAccount(); report('Disconnected Gmail.'); }
+            catch (e) { report(e.message, true); }
+          }, 'danger')
+        )
+      );
+    } else {
+      const connectBtn = btnWithIcon('mail', 'Connect Gmail', async event => {
+        const btn = event.currentTarget;
+        btn.disabled = true; btn.textContent = 'Redirecting…';
+        try { location.assign((await api('/api/connect', {})).url); }
+        catch (e) { btn.disabled = false; btn.replaceChildren(iconEl('mail', 15), document.createTextNode('Connect Gmail')); report(e.message, true); }
+      });
+      const copyUriBtn = btnWithIcon('copy', 'Copy Redirect URI', async e => {
+        try { await navigator.clipboard.writeText(expectedUri); e.currentTarget.textContent = 'Copied!'; } catch {}
+      }, 'btn-soft');
+      gmailCard.append(
+        kvItem('OAuth Client ID', account.clientId || 'Configure GOOGLE_CLIENT_ID in .env'),
+        kvItem('Authorized Redirect URI', expectedUri),
+        actionRow('Authorize Gmail Access', 'Connect your Google account to unlock 1-to-1 sending and Broadcast campaigns.', connectBtn, copyUriBtn)
+      );
+    }
+
+    // 2. Supabase Cloud Sync
+    const sbCard = create('article', '', 'surface card-pad');
+    const sbPill = create('span', '', account.supabase?.connected ? 'pill' : 'pill wait');
+    sbPill.append(create('i', '', 'status-dot'), document.createTextNode(account.supabase?.connected ? 'Cloud Synced' : 'Local Mode'));
+    sbCard.append(
+      cardHead('database', 'blue', 'Supabase Cloud Sync', 'Per-user isolated Postgres storage for leads, AI briefs, templates, and quotas.', sbPill),
+      actionRow(
+        `${leads.length} Leads · ${settings.templates.length} Templates`,
+        account.supabase?.connected
+          ? 'Everything syncs automatically to your isolated Supabase workspace.'
+          : (account.supabase?.error || 'Add SUPABASE_URL and SUPABASE_ANON_KEY to enable cloud sync.'),
+        btnWithIcon('refresh', 'Sync Now', async e => {
+          const b = e.currentTarget; b.disabled = true; b.textContent = 'Syncing…';
+          try {
+            await api('/api/workspace', { userId: currentUser.id, leads, settings });
+            report('Workspace synced with Supabase.');
+          } catch (err) { report(err.message, true); }
+          finally { b.disabled = false; b.replaceChildren(iconEl('refresh', 15), document.createTextNode('Sync Now')); }
+        }, 'btn-soft')
+      )
+    );
+
+    panel.append(gmailCard, sbCard);
+  } else if (settingsTab === 'outreach') {
+    // 1. Sender Identity Card
+    const idCard = create('article', '', 'surface card-pad');
+    idCard.append(cardHead('user', '', 'Sender Identity', 'Used automatically in {{your_name}}, {{your_service}}, and AI pitch generation.'));
+
+    const fieldsGrid = create('div', '', 'grid-2');
+    const sName = field('Your Display Name', 'senderName', settings.senderName, { placeholder: 'e.g. Ayoola Adebisi' });
+    const sService = field('Your Service / Offer', 'senderService', settings.senderService, { placeholder: 'e.g. Shopify CRO, web design & local SEO' });
+    fieldsGrid.append(sName, sService);
+
+    const sigBox = create('div', '', 'sig-preview');
+    const updateSig = () => {
+      const nm = settings.senderName || currentUser?.name || 'Your Name';
+      const srv = settings.senderService || 'your core service offer';
+      sigBox.replaceChildren(
+        create('small', 'Live Outreach Preview'),
+        document.createTextNode(`“Hi team, I’m ${nm}. I help businesses with ${srv} and put together a quick idea for your website.”`)
+      );
+    };
+    updateSig();
+
+    sName.lastChild.oninput = () => { settings.senderName = sName.lastChild.value.trim(); updateSig(); };
+    sService.lastChild.oninput = () => { settings.senderService = sService.lastChild.value.trim(); updateSig(); };
+    sName.lastChild.onchange = autoSaveSettings;
+    sService.lastChild.onchange = autoSaveSettings;
+
+    idCard.append(fieldsGrid, sigBox);
+
+    // 2. Outreach Automation & Follow-up Cadence
+    const autoCard = create('article', '', 'surface card-pad');
+    autoCard.append(cardHead('sparkles', 'amber', 'Outreach Automation', 'Configure default follow-up reminders and access your email template cards.'));
+
+    const presetWrap = create('div', '', 'preset-pills');
+    const presets = [
+      [0, 'Off'],
+      [2, '2 days'],
+      [4, '4 days'],
+      [7, '7 days'],
+      [14, '14 days']
+    ];
+    const currentDays = Number(settings.defaultFollowUpDays ?? 4);
+    presets.forEach(([d, label]) => {
+      const p = create('button', label, 'preset-pill' + (currentDays === d ? ' active' : ''));
+      p.type = 'button';
+      p.onclick = () => {
+        settings.defaultFollowUpDays = d;
+        autoSaveSettings();
+        renderSettings();
+      };
+      presetWrap.append(p);
+    });
+
+    autoCard.append(
+      actionRow('Default Follow-up Reminder', 'Automatically sets a follow-up due date after sending an initial outreach email.', presetWrap),
+      actionRow(
+        `Email Template Cards (${settings.templates.length} saved)`,
+        'Create, edit, and preview your outreach templates directly on the Broadcast page.',
+        btnWithIcon('send', 'Manage Templates', () => { location.hash = '#broadcast'; }, 'btn-soft')
+      )
+    );
+
+    panel.append(idCard, autoCard);
+  } else if (settingsTab === 'data') {
+    const dataCard = create('article', '', 'surface card-pad');
+    dataCard.append(cardHead('folder', 'blue', 'Lead Data & Enrichment', 'Import, export, or bulk-enrich your saved business leads.'));
+
+    const missingCount = leads.filter(l => !l.email && l.website).length;
+    const dlTpl = create('a', 'Download Template');
+    dlTpl.href = '/business-import.csv';
+    dlTpl.download = 'business-import.csv';
+    dlTpl.className = 'secondary';
+    dlTpl.style.cssText = 'text-decoration:none;padding:9px 14px;border-radius:10px;border:1px solid var(--line);font-size:13.5px;font-weight:600;color:var(--ink)';
+
+    dataCard.append(
+      actionRow('Import Businesses (CSV)', 'Upload a Jobhunta or Bing Maps Scraper CSV file into your workspace.', btnWithIcon('plus', 'Import CSV', importLeads, 'btn-soft'), dlTpl),
+      actionRow('Export Saved Leads', `Download all ${leads.length} saved business lead(s) as a clean CSV spreadsheet.`, btnWithIcon('fileText', 'Export CSV', exportLeads, 'btn-soft')),
+      actionRow('Bulk Website Email Combing', missingCount ? `${missingCount} saved business(es) have websites without an email address yet.` : 'All saved businesses with websites already have emails or were combed.', btnWithIcon('sparkles', enrichingAll ? 'Combing…' : `Enrich Missing (${missingCount})`, enrichMissingEmails, 'btn-soft'))
+    );
+
+    const toolsCard = create('article', '', 'surface card-pad');
+    toolsCard.append(cardHead('settings', 'slate', 'Workspace Tools', 'Quick shortcuts and local cache controls.'));
+    toolsCard.append(
+      actionRow('Business Discovery', 'Jump straight to the Bing Maps & Shopify scraper to find new leads.', btnWithIcon('search', 'Find Businesses', () => { location.hash = '#discover'; })),
+      actionRow('Reset Local Browser Cache', 'Clears cached browser data and reloads your latest workspace from Supabase.', button('Clear Local Cache', () => {
+        if (currentUser?.id) {
+          localStorage.removeItem(userLeadsKey(currentUser.id));
+          localStorage.removeItem(userSettingsKey(currentUser.id));
+        }
+        report('Local browser cache cleared. Reloading workspace…');
+        setTimeout(() => location.reload(), 600);
+      }, true))
+    );
+
+    panel.append(dataCard, toolsCard);
+  } else if (settingsTab === 'account') {
+    const tierLabel = currentUser?.usage?.label || 'Basic';
+    const accCard = create('article', '', 'surface card-pad');
+    const tierPill = create('span', '', 'pill');
+    tierPill.append(iconEl('crown', 13), document.createTextNode(`${tierLabel} Plan`));
+    accCard.append(cardHead('crown', 'amber', 'Account & Subscription', 'Your Jobhunta identity, unique workspace ID, and daily quota tier.', tierPill));
+
+    accCard.append(
+      kvItem('Account Name', currentUser?.name || settings.senderName || 'Jobhunta User'),
+      kvItem('Email Address', currentUser?.email || '—'),
+      kvItem('Unique Workspace ID', currentUser?.id || '—'),
+      actionRow('Usage & Tier Limits', 'Track your daily searches, email quota, and compare available plans.', btnWithIcon('barChart', 'Open Profile & Usage', () => { location.hash = '#profile'; }, 'btn-soft'))
+    );
+
+    const secCard = create('article', '', 'surface card-pad');
+    secCard.append(
+      cardHead('lock', 'slate', 'Session & Security', 'Manage your active login session on this device.'),
+      actionRow('Sign Out of Jobhunta', 'Securely end your current session and return to the sign-in screen.', btnWithIcon('logOut', 'Log Out', async () => {
+        try { await api('/api/auth/logout', {}); } catch {}
+        showAuthScreen();
+      }, 'danger'))
+    );
+
+    panel.append(accCard, secCard);
+  }
+
+  shell.append(nav, panel);
+  container.replaceChildren(topHeader, shell);
 }
 
 /* ---------------- SHARED HELPERS & MODALS ---------------- */
