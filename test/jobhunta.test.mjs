@@ -407,7 +407,8 @@ test('detectPlatform, analyzePageAudit, and generateClientOutreach perform multi
   assert.ok(audit.findings.some(f => f.category === 'security' && f.title.includes('mixed-content')));
 
   const outreach = generateClientOutreach(audit, { name: 'Demo Shop', city: 'Lagos', industry: 'Fashion' }, { senderName: 'Ayoola', senderService: 'Shopify CRO' });
-  assert.ok(outreach.executiveSummary.includes('Demo Shop (Shopify)'));
+  assert.ok(outreach.executiveSummary.includes('Demo Shop (Platform: Shopify'));
+  assert.ok(outreach.executiveSummary.includes('Socials: None linked'));
   assert.ok(outreach.variants.coldEmail.body.includes('Shopify'));
   assert.ok(outreach.variants.detailedEmail.body.length > 250);
   assert.ok(outreach.variants.dmMessage.includes('Demo Shop'));
