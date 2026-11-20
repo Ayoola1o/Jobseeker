@@ -287,18 +287,22 @@ table.data-table tr:last-child td{border-bottom:0}
 .reply-box-wrap textarea{border:0;background:transparent;padding:4px;min-height:80px}
 .reply-box-wrap textarea:focus{outline:none}
 
-/* Broadcast Page (Figma Email Broadcast) */
-.broadcast-grid{display:grid;grid-template-columns:1fr 1.25fr;gap:18px}
-.tpl-pick{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;cursor:pointer;background:white;text-align:left;width:100%}
-.tpl-pick:hover{border-color:#93d3bd;background:#f8fcfb}
-.tpl-pick.active{border-color:var(--green);background:#eef8f4}
+/* Broadcast Page (Figma Email Broadcast + Template Cards) */
+.broadcast-grid{display:grid;grid-template-columns:1.05fr 1.2fr;gap:18px;align-items:start}
+.tpl-card{border:1px solid var(--line);border-radius:14px;padding:16px;background:white;display:grid;gap:10px;cursor:pointer;transition:border-color .15s,box-shadow .15s,background .15s}
+.tpl-card:hover{border-color:#93d3bd;box-shadow:0 4px 14px rgba(5,150,105,.07)}
+.tpl-card.active{border-color:var(--green);background:#f3fbf7;box-shadow:0 0 0 1px var(--green)}
+.tpl-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .tpl-pick-left{display:flex;align-items:center;gap:12px;min-width:0}
 .tpl-badge{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;flex-shrink:0}
 .tpl-badge.mint{background:#e6f7ef;color:#059669}
 .tpl-badge.blue{background:#eff6ff;color:#2563eb}
 .tpl-badge.amber{background:#fef3c7;color:#d97706}
-.tpl-pick strong{display:block;color:var(--ink);font-size:14.5px}
-.tpl-pick small{display:block;color:var(--muted);font-size:12.5px}
+.tpl-card strong{display:block;color:var(--ink);font-size:14.5px;font-weight:650}
+.tpl-card .tpl-subj{font-size:12.5px;color:var(--muted);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tpl-card .tpl-snippet{margin:0;font-size:13px;color:#41595e;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.tpl-card-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:8px;border-top:1px solid #ebf3f0}
+.tpl-card-foot button{padding:6px 11px;font-size:12.5px}
 
 /* Profile & Plan Comparison (Figma Profile & Usage) */
 .plan-split-card{display:grid;grid-template-columns:1fr 1fr;align-items:center;padding:24px}

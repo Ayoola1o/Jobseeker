@@ -1408,20 +1408,67 @@ function getBroadcastAudienceLeads(type) {
   return leads.filter(l => l.email && !blocked(l.email));
 }
 
+function editTemplateModal(tpl = null) {
+  const form = create('form', '', 'stack');
+  const nameInput = field('Template Name', 'name', tpl?.name || '', { required: true, maxLength: 80, placeholder: 'e.g. Initial Introduction' });
+  const descInput = field('Short Description', 'desc', tpl?.desc || '', { maxLength: 140, placeholder: 'e.g. Introduce your service to a new local lead' });
+  const subjInput = field('Email Subject', 'subject', tpl?.subject || 'Quick introduction to {{business_name}}', { required: true, maxLength: 160 });
+  const bodyInput = field('Email Body (supports {{business_name}}, {{city}}, {{industry}}, {{your_name}}, {{your_service}})', 'body', tpl?.body || 'Hi {{business_name}} team,\n\nI’m {{your_name}}...\n\nThanks,\n{{your_name}}', { type: 'textarea', required: true, maxLength: 16000 });
+  bodyInput.lastChild.style.minHeight = '160px';
+
+  const acts = create('div', '', 'actions');
+  acts.append(create('button', tpl ? 'Save Template' : 'Create Template'));
+  if (tpl && settings.templates.length > 1) {
+    acts.append(button('Delete Template', () => {
+      const idx = settings.templates.findIndex(t => t.id === tpl.id);
+      if (idx !== -1) {
+        settings.templates.splice(idx, 1);
+        if (selectedBroadcastTplId === tpl.id) selectedBroadcastTplId = settings.templates[0]?.id || '';
+        persist();
+        dialog.close();
+        report(`Deleted template "${tpl.name}".`);
+      }
+    }, 'danger'));
+  }
+
+  form.append(nameInput, descInput, subjInput, bodyInput, acts);
+  form.onsubmit = event => {
+    event.preventDefault();
+    const values = Object.fromEntries([...new FormData(form)].map(([k, v]) => [k, v.trim()]));
+    if (!values.name || !values.subject || !values.body) return;
+    if (tpl) {
+      Object.assign(tpl, values);
+      report(`Updated template "${tpl.name}".`);
+    } else {
+      const created = { id: crypto.randomUUID(), ...values };
+      settings.templates.push(created);
+      selectedBroadcastTplId = created.id;
+      report(`Created template "${created.name}".`);
+    }
+    persist();
+    dialog.close();
+  };
+  show(tpl ? `Edit Template: ${tpl.name}` : 'New Email Template', form);
+}
+
 function renderBroadcast() {
   const container = $('#broadcast-content');
   if (!container) return;
 
   const top = create('div', '', 'heading section-title');
   const titleWrap = create('div');
-  titleWrap.append(create('h1', 'Email Broadcast'), create('p', 'Reach out to your saved leads with personalised 1-to-1 Gmail messages.'));
-  top.append(titleWrap, btnWithIcon('plus', 'Manage Templates', () => { location.hash = '#settings'; }, 'btn-soft'));
+  titleWrap.append(create('h1', 'Email Broadcast'), create('p', 'Manage your email template cards and send personalised 1-to-1 Gmail campaigns.'));
+  top.append(titleWrap, btnWithIcon('plus', 'New Template', () => editTemplateModal(null)));
 
   const grid = create('div', '', 'broadcast-grid');
 
-  // Left: Templates Picker with colorful Lucide badges
+  // Left: Email Templates as rich interactive cards
   const leftCard = create('article', '', 'surface card-pad');
-  leftCard.append(create('h2', 'Templates'));
+  const leftHead = create('div', '', 'heading');
+  leftHead.style.margin = '0';
+  leftHead.append(create('h2', `Email Templates (${settings.templates.length})`), btnWithIcon('plus', 'Add', () => editTemplateModal(null), 'btn-soft', 14));
+  leftCard.append(leftHead);
+
   const tplList = create('div', '', 'stack');
   const currentTpl = settings.templates.find(t => t.id === selectedBroadcastTplId) || settings.templates[0];
   selectedBroadcastTplId = currentTpl.id;
@@ -1433,17 +1480,46 @@ function renderBroadcast() {
 
   settings.templates.forEach((tpl, idx) => {
     const [icoName, colorClass] = tplStyles[idx % tplStyles.length];
-    const item = create('button', '', 'tpl-pick' + (tpl.id === selectedBroadcastTplId ? ' active' : ''));
-    item.type = 'button';
+    const isActive = tpl.id === selectedBroadcastTplId;
+    const card = create('article', '', 'tpl-card' + (isActive ? ' active' : ''));
+    card.onclick = () => { selectedBroadcastTplId = tpl.id; renderBroadcast(); };
+
+    const head = create('div', '', 'tpl-card-head');
     const left = create('div', '', 'tpl-pick-left');
     const badge = create('div', '', `tpl-badge ${colorClass}`);
     badge.append(iconEl(icoName, 19));
     const textWrap = create('div');
-    textWrap.append(create('strong', tpl.name), create('small', tpl.desc || tpl.subject));
+    textWrap.style.minWidth = '0';
+    textWrap.append(create('strong', tpl.name), create('div', tpl.subject, 'tpl-subj'));
     left.append(badge, textWrap);
-    item.append(left, iconEl('chevronRight', 16));
-    item.onclick = () => { selectedBroadcastTplId = tpl.id; renderBroadcast(); };
-    tplList.append(item);
+    head.append(left);
+    if (isActive) {
+      const selPill = create('span', '', 'pill');
+      selPill.append(iconEl('check', 12), document.createTextNode('Selected'));
+      head.append(selPill);
+    }
+
+    const snippet = create('p', tpl.desc || tpl.body.replace(/\s+/g, ' ').slice(0, 130), 'tpl-snippet');
+
+    const foot = create('div', '', 'tpl-card-foot');
+    const footActs = create('div', '', 'actions');
+    footActs.onclick = e => e.stopPropagation();
+    footActs.append(
+      button(isActive ? 'Active in Composer' : 'Use Template', () => { selectedBroadcastTplId = tpl.id; renderBroadcast(); }, isActive ? 'btn-soft' : true),
+      button('Edit', () => editTemplateModal(tpl), true)
+    );
+    if (settings.templates.length > 1) {
+      footActs.append(button('Delete', () => {
+        settings.templates.splice(idx, 1);
+        if (selectedBroadcastTplId === tpl.id) selectedBroadcastTplId = settings.templates[0]?.id || '';
+        persist();
+        report(`Deleted template "${tpl.name}".`);
+      }, 'danger'));
+    }
+    foot.append(footActs);
+
+    card.append(head, snippet, foot);
+    tplList.append(card);
   });
   leftCard.append(tplList);
 
@@ -1954,36 +2030,18 @@ function renderSettings() {
   sDays.lastChild.onchange = autoSave;
   profCard.append(sName, sService, sDays);
 
-  // 4. Email Templates Card (Auto-Saving)
+  // 4. Email Templates Card (Quick Link to Broadcast Template Cards)
   const tplCard = create('article', '', 'surface card-pad');
   const tplHead = create('div', '', 'heading');
   tplHead.style.margin = '0';
-  tplHead.append(create('h2', 'Email Templates'), create('span', 'Auto-saves', 'small'));
-  const tplsWrap = create('div', '', 'stack');
-  function renderTplCards() {
-    tplsWrap.replaceChildren();
-    settings.templates.forEach((tpl, idx) => {
-      const box = create('div', '', 'template-card');
-      const nf = field('Template Name', `tn_${idx}`, tpl.name);
-      nf.lastChild.onchange = e => { tpl.name = e.target.value.trim() || 'Untitled'; autoSave(); };
-      const sf = field('Subject', `ts_${idx}`, tpl.subject);
-      sf.lastChild.onchange = e => { tpl.subject = e.target.value.trim(); autoSave(); };
-      const bf = field('Body', `tb_${idx}`, tpl.body, { type: 'textarea' });
-      bf.lastChild.style.minHeight = '90px';
-      bf.lastChild.onchange = e => { tpl.body = e.target.value.trim(); autoSave(); };
-      box.append(nf, sf, bf);
-      if (settings.templates.length > 1) {
-        box.append(button('Remove', () => { settings.templates.splice(idx, 1); autoSave(); renderTplCards(); }, 'danger'));
-      }
-      tplsWrap.append(box);
-    });
-  }
-  renderTplCards();
-  tplCard.append(tplHead, tplsWrap, button('+ Add Template', () => {
-    settings.templates.push({ id: crypto.randomUUID(), name: 'New Template', subject: 'Quick question for {{business_name}}', body: 'Hi {{business_name}} team,\n\nI’m {{your_name}}...\n\nThanks,\n{{your_name}}' });
-    autoSave();
-    renderTplCards();
-  }, true));
+  const tTitle = create('h2'); tTitle.style.display = 'flex'; tTitle.style.alignItems = 'center'; tTitle.style.gap = '8px';
+  tTitle.append(iconEl('fileText', 18), document.createTextNode('Email Templates'));
+  tplHead.append(tTitle, create('span', `${settings.templates.length} saved`, 'pill'));
+  tplCard.append(
+    tplHead,
+    create('p', 'Create, edit, and preview your outreach email template cards directly on the Email Broadcast page.', 'small'),
+    btnWithIcon('send', 'Open Templates in Broadcast', () => { location.hash = '#broadcast'; }, 'btn-soft')
+  );
 
   grid.append(gmailCard, sbCard, profCard, tplCard);
   container.replaceChildren(topHeader, grid);
