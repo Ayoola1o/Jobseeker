@@ -300,12 +300,14 @@ function updateHeaderBadges() {
   const tierLabel = currentUser?.usage?.label || 'Basic';
   const planTitle = $('#sidebar-plan-title');
   const planSub = $('#sidebar-plan-sub');
+  const planCta = document.querySelector('#sidebar-plan-card .plan-cta');
   if (planTitle) planTitle.textContent = tierLabel === 'Diamond' ? 'Diamond Plan Active' : `${tierLabel} Plan`;
   if (planSub) {
     planSub.textContent = tierLabel === 'Diamond'
       ? 'Unlimited searches & outreach'
       : 'Upgrade for higher daily quotas';
   }
+  if (planCta) planCta.textContent = tierLabel === 'Diamond' ? 'View Usage & Plan' : 'Upgrade Now';
 }
 
 function applyEnrichmentToItem(item, found) {
