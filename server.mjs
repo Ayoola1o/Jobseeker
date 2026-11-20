@@ -1992,11 +1992,9 @@ async function fetchShopifyProducts(originUrl) {
 
 async function fetchWebsiteEmails(websiteUrl) {
   const base = await assertSafePublicUrl(websiteUrl);
-  const fetchHtml = async targetUrl => {
-    let target = await assertSafePublicUrl(String(targetUrl));
   let homepageMeta = { status: 200, ttfbMs: 0, headers: {} };
   const fetchHtml = async (url, captureMeta = false) => {
-    let target = await assertSafePublicUrl(url);
+    let target = await assertSafePublicUrl(String(url));
     let response;
     const t0 = Date.now();
     for (let redirects = 0; redirects <= 3; redirects++) {
