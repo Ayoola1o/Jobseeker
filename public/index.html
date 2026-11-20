@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Find local businesses and manage Gmail outreach.">
+  <meta name="description" content="Find local businesses, analyze leads with AI, and manage Gmail outreach.">
   <title>Jobhunta</title>
   <link rel="icon" type="image/png" href="/logo.png">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
@@ -13,168 +13,182 @@
 </head>
 <body class="auth-locked">
   <section id="auth-screen" class="auth-screen">
-    <div class="surface auth-card">
-      <div class="auth-header">
-        <img src="/logo.png" alt="Jobhunta logo" width="48" height="48">
-        <h1>Jobhunta</h1>
-        <p>Personal business discovery, AI lead intelligence &amp; Gmail outreach workspace.</p>
+    <div class="auth-shell">
+      <div class="auth-brand">
+        <img src="/logo.png" alt="Jobhunta logo" width="44" height="44">
+        <span>Jobhunta</span>
       </div>
-      <div class="auth-tabs" role="tablist">
-        <button id="tab-login" class="auth-tab active" type="button" role="tab" aria-selected="true">Sign in</button>
-        <button id="tab-signup" class="auth-tab" type="button" role="tab" aria-selected="false">Create account</button>
+      <div class="surface auth-card">
+        <div class="auth-tabs" role="tablist">
+          <button id="tab-login" class="auth-tab active" type="button" role="tab" aria-selected="true">Sign In</button>
+          <button id="tab-signup" class="auth-tab" type="button" role="tab" aria-selected="false">Create Account</button>
+        </div>
+        <form id="auth-form" class="stack">
+          <label id="auth-name-wrap" hidden>Full Name
+            <input name="name" id="auth-name" autocomplete="name" placeholder="e.g. Ayoola Adebisi" maxlength="80">
+          </label>
+          <label>Email Address
+            <input name="email" id="auth-email" type="email" autocomplete="email" placeholder="you@example.com" maxlength="254" required>
+          </label>
+          <label>Password
+            <div class="password-wrap">
+              <input name="password" id="auth-password" type="password" autocomplete="current-password" placeholder="Enter your password" minlength="6" maxlength="128" required>
+              <button id="toggle-password" type="button" class="icon-ghost" aria-label="Show password">👁</button>
+            </div>
+          </label>
+          <p id="auth-error" class="small" role="status" hidden></p>
+          <button id="auth-submit" type="submit">Sign In</button>
+        </form>
+        <p class="auth-switch small">
+          <span id="auth-switch-text">Don't have an account?</span>
+          <button id="auth-switch-btn" type="button" class="link-btn">Create Account</button>
+        </p>
       </div>
-      <form id="auth-form" class="stack">
-        <label id="auth-name-wrap" hidden>Full name
-          <input name="name" id="auth-name" autocomplete="name" placeholder="e.g. Ayoola Adebisi" maxlength="80">
-        </label>
-        <label>Email address
-          <input name="email" id="auth-email" type="email" autocomplete="email" placeholder="you@example.com" maxlength="254" required>
-        </label>
-        <label>Password
-          <input name="password" id="auth-password" type="password" autocomplete="current-password" placeholder="Enter your password" minlength="6" maxlength="128" required>
-        </label>
-        <p id="auth-error" class="small" role="status" hidden></p>
-        <button id="auth-submit" type="submit">Sign in to workspace →</button>
-      </form>
     </div>
   </section>
+
   <div id="sidebar-backdrop" class="sidebar-backdrop" aria-hidden="true"></div>
+
   <aside id="sidebar">
     <div class="sidebar-top">
-      <a href="#dashboard" class="brand"><img src="/logo.png" alt="Jobhunta logo" width="35" height="35"> Jobhunta</a>
-      <button id="sidebar-close" class="icon-btn sidebar-close" type="button" aria-label="Close navigation">✕</button>
+      <a href="#dashboard" class="brand"><img src="/logo.png" alt="Jobhunta logo" width="34" height="34"> Jobhunta</a>
+      <button id="sidebar-close" class="sidebar-close" type="button" aria-label="Close navigation">✕</button>
     </div>
     <nav aria-label="Workspace">
-      <a href="#dashboard"><span aria-hidden="true">⊞</span> Dashboard</a>
-      <a href="#discover"><span aria-hidden="true">⌕</span> Find businesses</a>
-      <a href="#leads"><span aria-hidden="true">▤</span> Saved leads <small id="nav-leads-count" class="badge" hidden></small></a>
-      <a href="#broadcast"><span aria-hidden="true">◈</span> Broadcast</a>
-      <a href="#inbox"><span aria-hidden="true">✉</span> Inbox</a>
+      <a href="#dashboard"><span aria-hidden="true">⌂</span> Dashboard</a>
+      <a href="#discover"><span aria-hidden="true">⌕</span> Find Businesses</a>
+      <a href="#leads"><span aria-hidden="true">▤</span> Saved Leads <small id="nav-leads-count" class="badge" hidden></small></a>
+      <a href="#business"><span aria-hidden="true">▣</span> Business Dossier</a>
+      <a href="#inbox"><span aria-hidden="true">✉</span> Inbox <small id="nav-inbox-count" class="badge" hidden></small></a>
+      <a href="#broadcast"><span aria-hidden="true">➤</span> Broadcast</a>
       <a href="#profile"><span aria-hidden="true">◉</span> Profile &amp; Usage</a>
       <a href="#settings"><span aria-hidden="true">⚙</span> Settings</a>
     </nav>
+    <div class="sidebar-plan-card" id="sidebar-plan-card">
+      <strong id="sidebar-plan-title">Upgrade Plan</strong>
+      <p id="sidebar-plan-sub">Get more leads &amp; features</p>
+      <a href="#profile" class="plan-cta">View Plan</a>
+    </div>
     <div class="sidebar-footer">
       <div id="sidebar-user"><i></i> Personal workspace</div>
       <button id="logout-btn" class="secondary logout-btn" type="button">Log out</button>
     </div>
   </aside>
+
   <main>
-    <header>
+    <header class="topbar">
       <div class="header-left">
         <button id="menu-toggle" class="hamburger" type="button" aria-label="Toggle navigation" aria-expanded="false" aria-controls="sidebar">
           <span></span><span></span><span></span>
         </button>
-        <a href="#dashboard" class="mobile-brand"><img src="/logo.png" alt="Jobhunta logo" width="28" height="28"> Jobhunta</a>
+        <div class="global-search-wrap">
+          <span class="search-ico" aria-hidden="true">⌕</span>
+          <input id="global-search" type="search" placeholder="Search leads, businesses..." aria-label="Search leads and businesses">
+        </div>
       </div>
       <div class="actions header-actions">
-        <span id="gmail-pill" class="pill" hidden></span>
-        <button id="settings-btn" class="secondary" type="button">⚙ Settings</button>
+        <button id="header-settings-btn" class="icon-circle" type="button" aria-label="Settings" title="Settings">⚙</button>
+        <button id="header-bell-btn" class="icon-circle" type="button" aria-label="Priority notifications" title="Priority follow-ups">
+          🔔<span id="bell-dot" class="bell-dot" hidden></span>
+        </button>
+        <button id="header-avatar-btn" class="avatar-btn" type="button" aria-label="Profile and usage" title="Profile &amp; Usage">AA</button>
       </div>
     </header>
+
     <div class="content">
       <p id="notice" role="status" hidden></p>
+
       <section id="dashboard" class="page">
         <div id="dashboard-content"></div>
       </section>
+
       <section id="discover" class="page" hidden>
-        <div class="hero">
-          <div class="radar" aria-hidden="true"><i></i><i></i><i></i><i></i><b>⌖</b></div>
-          <p class="eyebrow">BUSINESS DISCOVERY</p>
-          <h1>Find businesses</h1>
-          <p>Find local businesses, online stores, and publications.</p>
-        </div>
-        <form id="search" class="surface search search-4">
-          <label>Industry / E-commerce Niche
-            <input name="industry" id="industry-input" list="industries" placeholder="e.g. Clothing &amp; Fashion, Cosmetics, Dentists" minlength="2" maxlength="50" required>
-            <datalist id="industries"></datalist>
-          </label>
-          <label>Primary city or state<input name="city" placeholder="e.g. Ikeja, Lagos State, Texas, California" minlength="2" maxlength="75"></label>
-          <label>Ranking &amp; Store Target
-            <select name="rankMode" id="rank-mode">
-              <option value="all">All Ranks (Pages 1–8)</option>
-              <option value="low">Low-Ranked Prospects (Pages 3–8 · Rank #21+)</option>
-              <option value="shopify">Low-Ranked Shopify &amp; Retail Stores</option>
-            </select>
-          </label>
-          <label>Mode<select name="mode"><option value="local">Local businesses</option><option value="online">Online websites</option><option value="both">Local and online businesses</option></select></label>
-          <label>Related terms<input name="terms" maxlength="350" placeholder="e.g. orthodontist, cosmetic dentistry"></label>
-          <label>More locations<input name="locations" maxlength="500" placeholder="e.g. Yaba, Lekki, Ajah"></label>
-          <label>Platform<select name="platform" id="discovery-platform"><option value="">Any platform</option></select></label>
-          <label>Sources<select name="sources"><option value="combined">Combined sources</option><option value="maps">Bing Maps and OpenStreetMap</option><option value="tavily">Tavily web</option><option value="google">Google web</option><option value="places">Google Places references</option></select></label>
-          <details class="discovery-options">
-            <summary>Google queries and website imports</summary>
-            <div class="stack">
-              <label>Google queries (one per line)<textarea name="queries" maxlength="3000"></textarea></label>
-              <div class="actions"><button id="preview-discovery" class="secondary" type="button">Generate queries</button>
-                <a href="#leads">Import directory CSV from Saved leads</a></div>
-              <div id="google-query-links" class="actions"></div>
-              <label>Website URLs (one per line)<textarea name="urls" maxlength="3000" placeholder="https://example.com"></textarea></label>
-            </div>
-          </details>
-          <button type="submit">Search businesses <span aria-hidden="true">↗</span></button>
-        </form>
-        <div class="actions saved-searches">
-          <select id="saved-search" aria-label="Saved searches"><option value="">Saved searches</option></select>
-          <button id="run-saved-search" class="secondary" type="button" disabled>Run search</button>
-          <button id="save-search" class="secondary" type="button">Save current search</button>
-          <button id="remove-search" class="secondary" type="button" disabled>Remove saved search</button>
-        </div>
-        <form id="inspect-url" class="surface search url-inspector">
-          <label>Direct Shopify Store or Business Website Inspector
-            <input name="website" type="text" placeholder="Paste any Shopify store or business URL (e.g. allbirds.com or mystore.myshopify.com)…" required>
-          </label>
-          <label>City / Market (optional)<input name="city" placeholder="e.g. Lagos / Online"></label>
-          <button class="secondary">Comb URL &amp; Open Dossier ✦</button>
-        </form>
-        <div class="heading">
-          <h2>Search results <small id="results-count" class="small"></small></h2>
-          <div class="actions">
-            <select id="results-filter" aria-label="Filter search results">
-              <option value="">Show all scraped results</option>
-              <option value="shopify">Shopify stores only</option>
-              <option value="ecommerce">Shopify &amp; WooCommerce only</option>
-              <option value="low">Low-ranked only (Rank #21+)</option>
-              <option value="no-website">No website listed</option>
-              <option value="has-email">Public email found</option>
-              <option value="qualified">Confirmed opportunity</option>
-              <option value="target-platform">Matches selected platform</option>
-            </select>
-            <button id="stop-search" class="danger" type="button" hidden>Stop scraping</button>
-            <button id="save-all" class="secondary" type="button" hidden>Save all results</button>
-            <a href="https://www.bing.com/maps" target="_blank" rel="noreferrer">Bing Maps &amp; OpenStreetMap</a>
+        <div class="discover-hero">
+          <div class="discover-hero-copy">
+            <h1>Discover Businesses.<br>Find New Opportunities.</h1>
+            <p>Search Bing Maps &amp; Shopify stores, discover emails, and enrich leads automatically.</p>
+          </div>
+          <form id="search" class="surface search-bar-card">
+            <label>Industry
+              <input name="industry" id="industry-input" list="industries" placeholder="e.g. Clothing &amp; Fashion, Dentists" minlength="2" maxlength="50" required>
+              <datalist id="industries"></datalist>
+            </label>
+            <label>City or State
+              <input name="city" id="city-input" placeholder="e.g. Lagos, Ikeja, Texas" minlength="2" maxlength="75" required>
+            </label>
+            <label>Mode
+              <select name="rankMode" id="rank-mode">
+                <option value="all">All Ranks (Pages 1–8)</option>
+                <option value="low">Low-Ranked (Pages 3–8)</option>
+                <option value="shopify">Low-Ranked Shopify Stores</option>
+              </select>
+            </label>
+            <button type="submit">Search Businesses</button>
+          </form>
+          <div class="popular-chips">
+            <span>Popular Searches:</span>
+            <button type="button" class="chip-pill" data-industry="Clothing & Fashion">Clothing &amp; Fashion</button>
+            <button type="button" class="chip-pill" data-industry="Cosmetics & Skincare">Skincare</button>
+            <button type="button" class="chip-pill" data-industry="Dentists">Dentists</button>
+            <button type="button" class="chip-pill" data-industry="Restaurants">Restaurants</button>
+            <button type="button" class="chip-pill" data-industry="Real estate">Real Estate</button>
           </div>
         </div>
-        <div id="scrape-banner" class="surface scrape-banner" role="status" aria-live="polite" hidden>
-          <span><i class="pulse" aria-hidden="true"></i> <strong id="scrape-status">Scraping businesses…</strong></span>
-          <span id="scrape-metrics" class="small"></span>
+
+        <form id="inspect-url" class="surface search url-inspector">
+          <label>Direct Shopify Store or Website Inspector
+            <input name="website" type="text" placeholder="Paste any Shopify store or website URL (e.g. allbirds.com or store.myshopify.com)…" required>
+          </label>
+          <label>City / Market (optional)
+            <input name="city" placeholder="e.g. Lagos / Online">
+          </label>
+          <button class="secondary" type="submit">Comb URL &amp; Open Dossier ✦</button>
+        </form>
+
+        <div class="surface results-panel">
+          <div class="results-panel-head">
+            <div>
+              <h2>Search Results <small id="results-count" class="small"></small></h2>
+            </div>
+            <div class="actions">
+              <select id="results-filter" aria-label="Filter search results">
+                <option value="">All scraped results</option>
+                <option value="shopify">Shopify stores only</option>
+                <option value="ecommerce">Shopify &amp; WooCommerce</option>
+                <option value="low">Low-ranked (Rank #21+)</option>
+              </select>
+              <button id="stop-search" class="danger" type="button" hidden>Stop</button>
+              <button id="save-all" class="secondary" type="button" hidden>Save all results</button>
+            </div>
+          </div>
+          <div id="scrape-banner" class="scrape-banner" role="status" aria-live="polite" hidden>
+            <span><i class="pulse" aria-hidden="true"></i> <strong id="scrape-status">Scraping businesses…</strong></span>
+            <span id="scrape-metrics" class="small"></span>
+          </div>
+          <div id="results" aria-live="polite"></div>
+          <div id="results-pagination" class="pagination" hidden></div>
         </div>
-        <details id="discovery-activity" class="surface discovery-activity" hidden>
-          <summary>Source activity</summary>
-          <ul id="discovery-log"></ul>
-          <div id="place-references" class="actions"></div>
-        </details>
-        <div id="results" aria-live="polite"></div>
-        <div id="results-pagination" class="surface pagination" hidden></div>
       </section>
+
       <section id="leads" class="page" hidden>
         <div class="heading section-title">
           <div>
-            <h1>Saved leads</h1>
-            <p>Select a business name to open its dossier, scan its website, and draft an outreach pitch.</p>
+            <h1>Saved Leads</h1>
+            <p>Manage, filter, and organize your discovered business leads.</p>
           </div>
           <div class="actions">
             <button id="enrich-all" class="secondary" type="button">Find missing emails</button>
             <button id="import" class="secondary" type="button">Import CSV</button>
             <button id="export" class="secondary" type="button">Export CSV</button>
-            <button id="add" type="button">Add lead</button>
+            <button id="add" type="button">+ Add Lead</button>
           </div>
         </div>
-        <div id="leads-kpi-strip" class="kpi-strip"></div>
+        <div id="leads-kpi-grid" class="kpi-grid"></div>
         <div class="surface filters" id="lead-filters">
-          <label>Search leads<input id="filter-query" type="search" placeholder="Filter by name, city, email, phone or notes…"></label>
+          <label>Search leads<input id="filter-query" type="search" placeholder="Search leads..."></label>
           <label>Status
             <select id="filter-status">
-              <option value="">All statuses</option>
+              <option value="">All Status</option>
               <option value="New">New</option>
               <option value="Needs email">Needs email</option>
               <option value="Contacted">Contacted</option>
@@ -187,15 +201,9 @@
               <option value="Bounced">Bounced</option>
             </select>
           </label>
-          <label>Search folder
-            <select id="filter-folder"><option value="">All folders</option></select>
-          </label>
-          <label>Pipeline stage
-            <select id="filter-stage"><option value="">All stages</option></select>
-          </label>
           <label>Platform
             <select id="filter-platform">
-              <option value="">All platforms</option>
+              <option value="">All Platforms</option>
               <option value="Shopify">Shopify</option>
               <option value="WooCommerce">WooCommerce</option>
               <option value="WordPress">WordPress</option>
@@ -206,39 +214,48 @@
           </label>
           <label>Sort by
             <select id="filter-sort">
-              <option value="recent">Newest saved</option>
+              <option value="recent">Sort: Newest</option>
               <option value="due">Follow-up date</option>
               <option value="name">Business name (A–Z)</option>
             </select>
           </label>
         </div>
-        <div class="heading"><span id="lead-summary" class="small"></span></div>
-        <div id="lead-list"></div>
+        <div class="surface table-card">
+          <div id="lead-summary" class="table-meta small"></div>
+          <div id="lead-list"></div>
+        </div>
       </section>
+
       <section id="business" class="page" hidden>
         <div id="business-detail"></div>
       </section>
+
       <section id="inbox" class="page" hidden>
-        <div class="heading section-title">
-          <div>
-            <h1>Outreach inbox</h1>
-            <p>Read, follow up and reply to your Jobhunta conversations.</p>
-          </div>
-          <button id="refresh" class="secondary" type="button">Refresh inbox</button>
-        </div>
-        <div id="conversations"></div>
+        <div id="inbox-content"></div>
       </section>
-      <section id="profile" class="page" hidden>
-        <div id="profile-content"></div>
-      </section>
+
       <section id="broadcast" class="page" hidden>
         <div id="broadcast-content"></div>
       </section>
+
+      <section id="profile" class="page" hidden>
+        <div id="profile-content"></div>
+      </section>
+
       <section id="settings" class="page" hidden>
         <div id="settings-content"></div>
       </section>
     </div>
   </main>
+
+  <nav class="mobile-bottom-nav" aria-label="Mobile navigation">
+    <a href="#dashboard"><span aria-hidden="true">⌂</span><small>Home</small></a>
+    <a href="#leads"><span aria-hidden="true">▤</span><small>Leads</small></a>
+    <a href="#discover"><span aria-hidden="true">⌕</span><small>Search</small></a>
+    <a href="#inbox"><span aria-hidden="true">✉</span><small>Inbox</small></a>
+    <a href="#profile"><span aria-hidden="true">◉</span><small>Profile</small></a>
+  </nav>
+
   <dialog id="dialog">
     <div class="heading"><h2 id="dialog-title"></h2><button id="close" class="secondary" type="button" aria-label="Close">×</button></div>
     <div id="dialog-body"></div>
