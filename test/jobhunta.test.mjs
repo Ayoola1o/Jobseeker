@@ -1,9 +1,11 @@
 import { test } from 'node:test';
+import { assessLead, industryAngle, normalizeLeadProfiles } from '../public/qualification.mjs';
 import { googleQueries, businessKeys } from '../public/discovery.mjs';
 import assert from 'node:assert/strict';
 import { readBusinessCsv, writeBusinessCsv } from '../public/csv.mjs';
 import {
   extractMessageBody,
+  outreachMessageKind,
   extractEmailsFromHtml,
   extractSocialsFromHtml,
   extractWebsiteInsights,
@@ -17,6 +19,32 @@ import {
   getUserQuotaStatus,
   industries
 } from '../server.mjs';
+
+test('outreach separates client replies, delivery failures and automatic messages', () => {
+  const registration = { recipient: 'client@example.com' };
+  assert.equal(outreachMessageKind({ sent: true, to: 'Client <CLIENT@example.com>' }, registration), 'sent');
+  assert.equal(outreachMessageKind({ sent: true, to: 'other@example.com' }, registration), 'unrelated');
+  assert.equal(outreachMessageKind({ from: 'Client <client@example.com>' }, registration), 'reply');
+  assert.equal(outreachMessageKind({ from: 'client@example.com', autoSubmitted: 'auto-replied' }, registration), 'automatic');
+  assert.equal(outreachMessageKind({ from: 'mailer-daemon@example.com' }, registration), 'bounce');
+  assert.equal(outreachMessageKind({ from: 'different@example.com' }, registration), 'review');
+});
+
+test('lead qualification distinguishes industry fit, platform evidence and contactability', () => {
+  const [profile] = normalizeLeadProfiles([{ folder: ' Skincare ', industry: 'skincare',
+    platform: 'Shopify', requireContact: true, exclude: 'directory', templateId: 'intro' }]);
+  assert.equal(profile.folder, 'skincare');
+  assert.equal(profile.templateId, 'intro');
+  const lead = { name: 'Glow', industry: 'Skincare store', platform: 'Shopify',
+    platformConfidence: 'Confirmed', email: 'hello@glow.example' };
+  assert.equal(assessLead(lead, profile).fit, 'Matches target');
+  assert.equal(assessLead({ ...lead, platformConfidence: 'Likely' }, profile).fit, 'Needs research');
+  assert.equal(assessLead({ ...lead, suppressed: ['HELLO@GLOW.EXAMPLE'] }, profile).fit, 'Needs research');
+  assert.equal(assessLead({ ...lead, name: 'Store directory' }, profile).fit, 'Excluded');
+  assert.equal(assessLead({ ...lead, industry: 'Dentists' }, profile).fit, 'Outside target');
+  assert.match(industryAngle(lead, profile), /repeat customers/);
+  assert.match(industryAngle({ industry: 'Dentists' }), /book appointments/);
+});
 
 test('platform discovery generates hosted and custom-domain queries and preserves separate branches', () => {
   const queries = googleQueries('skin care', '', 'Shopify', true);
