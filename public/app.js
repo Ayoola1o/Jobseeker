@@ -190,7 +190,19 @@ async function api(path, payload) {
   } catch {
     throw new Error(`Server returned an invalid response (HTTP ${response.status}).`);
   }
-  if (!response.ok) throw new Error(data.error || 'Request failed.');
+  if (!response.ok) {
+    const errMsg = data.error || 'Request failed.';
+    if (response.status === 429 || /limit|quota/i.test(errMsg)) {
+      pushNotification({
+        icon: 'barChart',
+        tone: 'warn',
+        title: 'Daily quota limit reached',
+        sub: errMsg,
+        targetHash: '#profile'
+      });
+    }
+    throw new Error(errMsg);
+  }
   return data;
 }
 
@@ -296,8 +308,13 @@ function updateHeaderBadges() {
     navInbox.hidden = convCount === 0;
   }
   const notifications = buildNotifications();
+  const unreadCount = notifications.filter(n => n.unread).length;
+  const badgeCount = unreadCount || notifications.length;
   const bellDot = $('#bell-dot');
-  if (bellDot) bellDot.hidden = notifications.length === 0;
+  if (bellDot) {
+    bellDot.hidden = badgeCount === 0;
+    bellDot.textContent = badgeCount > 9 ? '9+' : String(badgeCount);
+  }
   if (!$('#notif-popover')?.hidden) renderNotificationsPopover();
 
   const avatarBtn = $('#header-avatar-btn');
@@ -1824,6 +1841,13 @@ function renderBroadcast() {
       broadcastSending = false;
       broadcastAtts.clear();
       persist();
+      pushNotification({
+        icon: 'megaphone',
+        tone: failedCount ? 'amber' : 'blue',
+        title: `Broadcast campaign complete (${sentCount} sent)`,
+        sub: `${currentTpl.name} · ${sentCount} delivered${failedCount ? `, ${failedCount} failed` : ''}`,
+        targetHash: '#inbox'
+      });
       report(`Campaign finished: ${sentCount} sent, ${failedCount} failed.`);
     }
   );
@@ -2118,6 +2142,7 @@ async function syncThread(lead, conversation) {
   const incoming = thread.filter(message => !message.sent);
   const seen = new Set(conversation.seen || []);
   if (incoming.some(message => !seen.has(message.id))) {
+    const newestReply = incoming.filter(message => !seen.has(message.id)).at(-1) || incoming.at(-1);
     lead.replied = true;
     lead.due = '';
     conversation.seen = incoming.map(message => message.id);
@@ -2125,6 +2150,14 @@ async function syncThread(lead, conversation) {
       conversation.unread = true;
     }
     dismissedNotifs.delete('replied');
+    pushNotification({
+      icon: 'mail',
+      tone: '',
+      title: `New reply from ${lead.name}`,
+      sub: (newestReply?.body || conversation.subject || 'Open Inbox to view message').replace(/\s+/g, ' ').slice(0, 90),
+      targetHash: '#inbox',
+      inboxKey: norm(conversation.to || lead.email)
+    });
     persist();
     report(`New reply received from ${lead.name}! Open Inbox to read and follow up.`);
   }
@@ -3055,6 +3088,14 @@ function composeDirectEmail({ defaultTo = '', defaultSubject = '', defaultBody =
       if (!targetLead.due && settings.defaultFollowUpDays > 0) targetLead.due = futureDateString(settings.defaultFollowUpDays);
       selectedInboxKey = threadKey(conv);
       if (currentUser?.usage) currentUser.usage.emailsToday = (currentUser.usage.emailsToday || 0) + 1;
+      pushNotification({
+        icon: 'send',
+        tone: '',
+        title: `Email sent to ${toAddr}`,
+        sub: subj,
+        targetHash: '#inbox',
+        inboxKey: norm(toAddr)
+      });
       persist();
       dialog.close();
       report(`Email sent to ${toAddr}! It is now tracked in your Inbox for replies and follow-ups.`);
@@ -3122,6 +3163,14 @@ function compose(lead, conversation, parent, customPitch = null) {
       if (!lead.email) lead.email = values.to;
       if (!lead.due && settings.defaultFollowUpDays > 0) lead.due = futureDateString(settings.defaultFollowUpDays);
       if (currentUser?.usage) currentUser.usage.emailsToday = (currentUser.usage.emailsToday || 0) + 1;
+      pushNotification({
+        icon: 'send',
+        tone: '',
+        title: `Email sent to ${lead.name}`,
+        sub: `${values.subject} (${values.to})`,
+        targetHash: '#inbox',
+        inboxKey: norm(values.to)
+      });
       persist(); dialog.close(); report('Email sent to ' + values.to + '.');
     } catch (e) { feedback.textContent = e.message; submit.disabled = false; }
   };
@@ -3136,9 +3185,81 @@ function renderAccount() {
 }
 
 const dismissedNotifs = new Set();
+let notificationEvents = [];
+const userNotifsKey = userId => `jobhunta.notifs.v1.${userId}`;
+
+function loadUserNotifications(userId) {
+  if (!userId) return [];
+  try {
+    const raw = JSON.parse(localStorage.getItem(userNotifsKey(userId)) || '[]');
+    return Array.isArray(raw) ? raw.slice(0, 30) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveUserNotifications() {
+  if (!currentUser?.id) return;
+  try {
+    localStorage.setItem(userNotifsKey(currentUser.id), JSON.stringify(notificationEvents.slice(0, 30)));
+  } catch {}
+}
+
+function formatRelativeTime(ts) {
+  if (!ts) return '';
+  const diffSec = Math.max(0, Math.floor((Date.now() - Number(ts)) / 1000));
+  if (diffSec < 45) return 'Just now';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  return new Date(Number(ts)).toLocaleDateString();
+}
+
+function pushNotification({ icon = 'bell', tone = '', title = '', sub = '', targetHash = '', folder = '', inboxKey = '' }) {
+  if (!title) return;
+  const ev = {
+    id: 'ev_' + crypto.randomUUID(),
+    icon,
+    tone,
+    title,
+    sub,
+    targetHash,
+    folder,
+    inboxKey,
+    time: Date.now(),
+    unread: true
+  };
+  notificationEvents.unshift(ev);
+  if (notificationEvents.length > 30) notificationEvents.length = 30;
+  saveUserNotifications();
+  updateHeaderBadges();
+}
 
 function buildNotifications() {
   const items = [];
+
+  // 1. Live Real-Time Events (Inbox messages, Search discovery, Combing, Quota Limit hits)
+  for (const ev of notificationEvents) {
+    items.push({
+      id: ev.id,
+      isEvent: true,
+      unread: Boolean(ev.unread),
+      time: ev.time,
+      icon: ev.icon || 'bell',
+      tone: ev.tone || '',
+      title: ev.title,
+      sub: ev.sub || '',
+      action: () => {
+        ev.unread = false;
+        saveUserNotifications();
+        if (ev.folder) { selectedLeadFolder = ev.folder; leadsPage = 1; }
+        if (ev.inboxKey) { selectedInboxKey = ev.inboxKey; }
+        if (ev.targetHash) location.hash = ev.targetHash;
+        updateHeaderBadges();
+      }
+    });
+  }
+
+  // 2. Active Workspace Alerts & Quota Monitors
   const dueLeads = leads.filter(l => leadStatus(l) === 'Follow-up due');
   const repliedLeads = leads.filter(l => leadStatus(l) === 'Replied' || leadStatus(l) === 'Interested');
   const missingEmailLeads = leads.filter(l => !l.email && l.website);
@@ -3146,6 +3267,7 @@ function buildNotifications() {
   if (dueLeads.length && !dismissedNotifs.has('due')) {
     items.push({
       id: 'due',
+      unread: true,
       icon: 'bell',
       tone: 'amber',
       title: `${dueLeads.length} follow-up${dueLeads.length === 1 ? '' : 's'} due`,
@@ -3153,14 +3275,40 @@ function buildNotifications() {
       action: () => jumpToLeadsFilter('Follow-up due')
     });
   }
-  if (repliedLeads.length && !dismissedNotifs.has('replied')) {
+  if (repliedLeads.length && !dismissedNotifs.has('replied') && !notificationEvents.some(e => e.icon === 'mail' && e.unread)) {
     items.push({
       id: 'replied',
+      unread: true,
       icon: 'mail',
       tone: '',
-      title: `${repliedLeads.length} warm repl${repliedLeads.length === 1 ? 'y' : 'ies'} waiting`,
+      title: `${repliedLeads.length} warm repl${repliedLeads.length === 1 ? 'y' : 'ies'} in Inbox`,
       sub: 'Open Outreach Inbox to respond while interest is fresh.',
       action: () => { location.hash = '#inbox'; }
+    });
+  }
+  const usage = currentUser?.usage;
+  if (usage?.dailySearchLimit && (usage.searchesToday || 0) >= Math.ceil(usage.dailySearchLimit * 0.8) && !dismissedNotifs.has('quota_search')) {
+    const reached = (usage.searchesToday || 0) >= usage.dailySearchLimit;
+    items.push({
+      id: 'quota_search',
+      unread: reached,
+      icon: 'barChart',
+      tone: reached ? 'warn' : 'amber',
+      title: reached ? 'Daily search limit reached!' : `Search quota at ${Math.min(100, Math.round(((usage.searchesToday || 0) / usage.dailySearchLimit) * 100))}%`,
+      sub: `${usage.searchesToday || 0} of ${usage.dailySearchLimit} searches used today.`,
+      action: () => { location.hash = '#profile'; }
+    });
+  }
+  if (usage?.dailyEmailLimit && (usage.emailsToday || 0) >= Math.ceil(usage.dailyEmailLimit * 0.8) && !dismissedNotifs.has('quota_email')) {
+    const reached = (usage.emailsToday || 0) >= usage.dailyEmailLimit;
+    items.push({
+      id: 'quota_email',
+      unread: reached,
+      icon: 'mail',
+      tone: reached ? 'warn' : 'amber',
+      title: reached ? 'Daily email limit reached!' : `Email quota at ${Math.min(100, Math.round(((usage.emailsToday || 0) / usage.dailyEmailLimit) * 100))}%`,
+      sub: `${usage.emailsToday || 0} of ${usage.dailyEmailLimit} emails sent today.`,
+      action: () => { location.hash = '#profile'; }
     });
   }
   if (!account.mailbox && !dismissedNotifs.has('gmail')) {
@@ -3183,17 +3331,6 @@ function buildNotifications() {
       action: () => { location.hash = '#leads'; enrichMissingEmails(); }
     });
   }
-  const usage = currentUser?.usage;
-  if (usage?.dailySearchLimit && (usage.searchesToday || 0) >= Math.ceil(usage.dailySearchLimit * 0.8) && !dismissedNotifs.has('quota')) {
-    items.push({
-      id: 'quota',
-      icon: 'barChart',
-      tone: 'amber',
-      title: `Daily search quota at ${Math.min(100, Math.round(((usage.searchesToday || 0) / usage.dailySearchLimit) * 100))}%`,
-      sub: `${usage.searchesToday || 0} of ${usage.dailySearchLimit} searches used today.`,
-      action: () => { location.hash = '#profile'; }
-    });
-  }
   return items;
 }
 
@@ -3203,7 +3340,18 @@ function setNotificationsOpen(open) {
   if (!pop || !btn) return;
   pop.hidden = !open;
   btn.setAttribute('aria-expanded', String(open));
-  if (open) renderNotificationsPopover();
+  if (open) {
+    renderNotificationsPopover();
+    // Mark live events as read once viewed
+    let changed = false;
+    for (const ev of notificationEvents) {
+      if (ev.unread) { ev.unread = false; changed = true; }
+    }
+    if (changed) {
+      saveUserNotifications();
+      updateHeaderBadges();
+    }
+  }
 }
 
 function renderNotificationsPopover() {
@@ -3218,6 +3366,8 @@ function renderNotificationsPopover() {
   if (items.length) {
     head.append(button('Clear all', () => {
       items.forEach(i => dismissedNotifs.add(i.id));
+      notificationEvents = [];
+      saveUserNotifications();
       updateHeaderBadges();
       renderNotificationsPopover();
     }, 'link-btn'));
@@ -3226,12 +3376,15 @@ function renderNotificationsPopover() {
   const body = create('div', '', 'notif-list');
   if (items.length) {
     for (const item of items) {
-      const row = create('button', '', 'notif-item');
+      const row = create('button', '', 'notif-item' + (item.unread ? ' unread' : ''));
       row.type = 'button';
       const ico = create('div', '', `notif-ico ${item.tone}`);
       ico.append(iconEl(item.icon, 16));
       const txt = create('div', '', 'notif-body');
-      txt.append(create('strong', item.title), create('small', item.sub));
+      const topLine = create('div', '', 'notif-top-line');
+      topLine.append(create('strong', item.title));
+      if (item.time) topLine.append(create('span', formatRelativeTime(item.time), 'notif-time'));
+      txt.append(topLine, create('small', item.sub));
       row.append(ico, txt, iconEl('chevronRight', 15));
       row.onclick = () => {
         setNotificationsOpen(false);
@@ -3244,7 +3397,7 @@ function renderNotificationsPopover() {
     const ic = create('div', '', 'empty-ico');
     ic.style.margin = '0 auto 10px';
     ic.append(iconEl('checkCircle', 22));
-    emptyEl.append(ic, create('strong', 'All caught up!'), create('p', 'No urgent follow-ups or workspace alerts right now.', 'small'));
+    emptyEl.append(ic, create('strong', 'All caught up!'), create('p', 'Live inbox replies, search discoveries, and quota alerts will appear here.', 'small'));
     body.append(emptyEl);
   }
   pop.replaceChildren(head, body);
@@ -3336,6 +3489,15 @@ $('#search').onsubmit = async event => {
             scheduleAutoPersist(false);
             renderResults(); updateScrapeBanner(); triggerEnrichmentWorkers(generation);
           }
+        } else if (msg.type === 'limit') {
+          pushNotification({
+            icon: 'barChart',
+            tone: 'warn',
+            title: 'Search result limit reached',
+            sub: msg.message || 'Your daily search result allowance was reached.',
+            targetHash: '#profile'
+          });
+          report(msg.message || 'Daily search result limit reached.', true);
         } else if (msg.type === 'error') throw new Error(msg.error);
       }
     }
@@ -3343,10 +3505,28 @@ $('#search').onsubmit = async event => {
       $('#results').replaceChildren(empty('search', 'No matching businesses', 'Try a nearby city or another industry.'));
     } else if (generation === searchGeneration && results.length) {
       scheduleAutoPersist(true);
+      const shopifyFound = results.filter(r => r.platform === 'Shopify').length;
+      pushNotification({
+        icon: 'search',
+        tone: '',
+        title: `Discovered ${results.length} business${results.length === 1 ? '' : 'es'}`,
+        sub: `Folder "${activeSearchFolder}"${shopifyFound ? ` · ${shopifyFound} Shopify` : ''} — click to open folder`,
+        targetHash: '#leads',
+        folder: activeSearchFolder
+      });
       report(`Saved ${results.length} business${results.length === 1 ? '' : 'es'} into folder "${activeSearchFolder}" in Saved Leads.`);
     }
   } catch (error) {
     if (error.name !== 'AbortError') {
+      if (/limit|quota/i.test(error.message)) {
+        pushNotification({
+          icon: 'barChart',
+          tone: 'warn',
+          title: 'Daily search limit reached',
+          sub: error.message,
+          targetHash: '#profile'
+        });
+      }
       if (!results.length) $('#results').replaceChildren(empty('search', 'Search unavailable', error.message));
       else report(error.message, true);
     }
@@ -3386,6 +3566,13 @@ $('#inspect-url').onsubmit = async event => {
     applyEnrichmentToItem(newItem, enriched);
     form.reset();
     openBusinessPage(newItem);
+    pushNotification({
+      icon: 'sparkles',
+      tone: 'blue',
+      title: `Combed ${newItem.name}`,
+      sub: `${newItem.platform || 'Website'}${newItem.email ? ` · Found ${newItem.email}` : ' · Dossier ready'}`,
+      targetHash: '#business'
+    });
     report(`Combed ${newItem.name} (${newItem.platform || 'Website'}) and opened its dossier.`);
   } catch (error) { report(error.message, true); }
   finally {
@@ -3497,6 +3684,7 @@ function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMai
   if (sidebarUser) sidebarUser.replaceChildren(create('i'), document.createTextNode(' ' + (user.name || user.email)));
 
   const { cachedLeads, cachedSettings } = loadLocalUserCache(user.id);
+  notificationEvents = loadUserNotifications(user.id);
   leads = Array.isArray(serverLeads) && serverLeads.length ? serverLeads : (Array.isArray(cachedLeads) ? cachedLeads : []);
   if (Array.isArray(cachedLeads) && cachedLeads.length && Array.isArray(serverLeads) && serverLeads.length) {
     for (const localLead of cachedLeads) if (!duplicate(localLead)) leads.push(localLead);
