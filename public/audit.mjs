@@ -753,3 +753,306 @@ export function generateClientOutreach(auditReport = {}, lead = {}, senderSettin
     }
   };
 }
+
+export function generateLeadSolutionPack(lead = {}, senderSettings = {}) {
+  const name = lead.name || 'Client Business';
+  const industry = lead.industry || 'Local Business';
+  const city = lead.city || 'your market';
+  const platform = lead.auditReport?.stack?.platform || lead.platform || 'Website';
+  const senderName = senderSettings?.senderName || 'Your Name';
+  const senderService = senderSettings?.senderService || 'web conversion, SEO & digital growth';
+  const signals = lead.signals || {};
+  const auditFindings = Array.isArray(lead.auditReport?.findings) ? lead.auditReport.findings : [];
+
+  const activeSocials = [
+    lead.facebook && 'Facebook',
+    lead.instagram && 'Instagram',
+    lead.twitter && 'X/Twitter',
+    lead.linkedin && 'LinkedIn',
+    lead.youtube && 'YouTube',
+    lead.tiktok && 'TikTok'
+  ].filter(Boolean);
+  const missingSocials = ['Instagram', 'Facebook', 'LinkedIn', 'TikTok'].filter(s => !activeSocials.includes(s));
+
+  const spottedList = String(lead.userSpottedIssues || '')
+    .split(/[\r\n;]+/)
+    .map(s => s.replace(/^[\s•\-*]+/, '').trim())
+    .filter(Boolean);
+
+  // Build Problem -> Solution -> Outcome matrix
+  const matrix = [];
+  const addRow = (problem, solution, expectedOutcome, phase) => {
+    if (!matrix.some(r => r.problem.toLowerCase() === problem.toLowerCase())) {
+      matrix.push({ problem, solution, expectedOutcome, phase });
+    }
+  };
+
+  for (const issue of spottedList) {
+    addRow(
+      `Custom Spotted Issue: ${issue}`,
+      `Resolve "${issue}" directly on ${name}’s ${platform} setup and verify across mobile & desktop viewports.`,
+      'Eliminates immediate visitor friction and recovers lost inquiries.',
+      'Phase 1'
+    );
+  }
+
+  if (!lead.website) {
+    addRow(
+      'No official website or dedicated landing page linked on listing',
+      'Build and launch a fast, mobile-first conversion landing page with click-to-call, service showcase, and instant quote form.',
+      'Gives high-intent searchers a 24/7 destination to trust and book with you.',
+      'Phase 1'
+    );
+  } else {
+    if (signals.https === false) {
+      addRow(
+        'Website served over unencrypted HTTP ("Not Secure" warning)',
+        'Provision SSL/TLS certificate and enforce 301 HTTPS redirects across all pages and assets.',
+        'Restores browser padlock trust and protects search rankings.',
+        'Phase 1'
+      );
+    }
+    if (!signals.hasBookingOrForm) {
+      addRow(
+        'No instant online booking or lead capture form',
+        'Add an above-the-fold instant quote / appointment booking form with email & WhatsApp notifications.',
+        'Captures visitors who prefer booking online rather than calling.',
+        'Phase 1'
+      );
+    }
+    if (!signals.hasChatWidget) {
+      addRow(
+        'No Live Chat or WhatsApp quick-response widget',
+        'Install a floating WhatsApp / Live Chat widget with automated greeting and after-hours lead capture.',
+        'Increases mobile visitor engagement and captures after-hours leads.',
+        'Phase 1'
+      );
+    }
+  }
+
+  // Pull in Website Audit findings into their respective phases
+  for (const f of auditFindings) {
+    const phaseLabel = f.category === 'bugs' || f.category === 'security'
+      ? 'Phase 1'
+      : f.category === 'seo' || f.category === 'performance'
+        ? 'Phase 2'
+        : 'Phase 3';
+    addRow(f.title, f.recommendation, f.businessImpact, phaseLabel);
+  }
+
+  // Social Media & Local Search gaps
+  if (activeSocials.length === 0) {
+    addRow(
+      'Lack of linked social media presence (Instagram, Facebook, LinkedIn, TikTok)',
+      'Set up, brand, and cross-link official social profiles on the website header/footer with embedded social proof.',
+      'Builds immediate brand credibility and opens organic social discovery channels.',
+      'Phase 3'
+    );
+  } else if (missingSocials.length > 0) {
+    addRow(
+      `Incomplete social footprint (missing ${missingSocials.join(', ')})`,
+      `Connect and optimize ${missingSocials.join(' & ')} profiles and link them to your ${platform} site.`,
+      'Expands multi-channel brand visibility and retargeting reach.',
+      'Phase 3'
+    );
+  }
+
+  if (lead.searchRank && lead.searchRank > 10) {
+    addRow(
+      `Buried at Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)}) for "${industry} in ${city}"`,
+      `Optimize local map citations, on-page city/industry headings, and LocalBusiness JSON-LD schema for ${city}.`,
+      'Moves listing toward Page 1 where 80%+ of local clicks happen.',
+      'Phase 3'
+    );
+  }
+
+  if (!lead.rating || parseFloat(lead.rating) < 4.4) {
+    addRow(
+      `Local review proof gap (${lead.rating ? `★ ${lead.rating}` : 'no reviews displayed'})`,
+      'Deploy an automated post-purchase / post-service review request flow and showcase top reviews on the homepage.',
+      'Higher star rating and review count lift local conversion by 20–35%.',
+      'Phase 3'
+    );
+  }
+
+  if (!signals.hasAnalytics || (lead.platform === 'Shopify' && !signals.hasReviewsApp)) {
+    addRow(
+      'Missing conversion tracking pixels & automated retention flows',
+      'Install Google Analytics 4, Meta/TikTok Pixels, and automated follow-up / abandoned-cart email sequences.',
+      'Turns one-time visitors into tracked leads and repeat customers.',
+      'Phase 4'
+    );
+  }
+
+  // Build 4-Phase Implementation Roadmap
+  const p1Tasks = [
+    ...spottedList.map(s => `Fix spotted issue: ${s}`),
+    !lead.website ? 'Launch mobile-first conversion landing page' : 'Resolve mobile viewport, broken links, and layout bugs',
+    'Install high-converting instant quote / booking form & floating WhatsApp / Live Chat widget',
+    'Enforce HTTPS security, fix mixed-content assets, and configure HTTP security headers'
+  ];
+  const p2Tasks = [
+    `Optimize homepage & service <title>, <meta name="description">, and single primary <h1> for "${industry} in ${city}"`,
+    'Add descriptive image alt attributes, canonical tags, Open Graph social cards, and JSON-LD Schema.org markup',
+    'Publish clean /robots.txt and /sitemap.xml for faster Google & AI search indexing',
+    `Speed optimization on ${platform}: defer render-blocking scripts, enable lazy-loading images, and edge caching`
+  ];
+  const p3Tasks = [
+    activeSocials.length === 0
+      ? 'Establish and link official Instagram, Facebook, LinkedIn & TikTok profiles to the website'
+      : `Cross-link ${activeSocials.join(', ')} and expand presence to ${missingSocials.join(', ') || 'all key social channels'}`,
+    `Local SEO boost in ${city}: align NAP (Name, Address, Phone, Hours) and target Page 1 local pack rankings`,
+    'Embed verified customer reviews / testimonials widget on homepage and key conversion pages'
+  ];
+  const p4Tasks = [
+    'Install Google Analytics 4 (GA4), Meta Pixel, and conversion event tracking on all forms, calls & checkouts',
+    platform === 'Shopify' || platform === 'WooCommerce'
+      ? 'Launch automated abandoned-cart, welcome, and repeat-buyer email flows (Klaviyo / Omnisend)'
+      : 'Set up automated instant email/SMS lead follow-up sequence so no inquiry goes cold',
+    'Deliver final before/after audit score report and monthly lead growth dashboard'
+  ];
+
+  const makeTasks = (prefix, list) => list.map((text, idx) => ({ id: `${prefix}_${idx + 1}`, text, done: false }));
+
+  const phases = [
+    {
+      id: 'phase_1',
+      badge: 'Phase 1 · Days 1–3',
+      title: 'Quick Wins, Bug Fixes & Instant Lead Capture',
+      goal: 'Stop immediate visitor leaks and make it effortless for mobile & desktop visitors to contact or buy.',
+      deliverables: 'Mobile UX & bug fixes, HTTPS/security hygiene, instant lead form + WhatsApp/Live Chat widget',
+      tasks: makeTasks('p1', p1Tasks)
+    },
+    {
+      id: 'phase_2',
+      badge: 'Phase 2 · Days 4–7',
+      title: `On-Page SEO, Speed & ${platform} Optimization`,
+      goal: `Make ${name} load fast and rank higher on Google, Bing, and AI search engines for ${industry.toLowerCase()} searches in ${city}.`,
+      deliverables: 'Optimized Titles/Meta/H1, JSON-LD Schema, XML Sitemap, script deferral & Core Web Vitals tune-up',
+      tasks: makeTasks('p2', p2Tasks)
+    },
+    {
+      id: 'phase_3',
+      badge: 'Phase 3 · Week 2',
+      title: 'Social Media Presence, Reputation & Local Authority',
+      goal: 'Build undeniable social proof and climb local map rankings ahead of competitors.',
+      deliverables: 'Connected social profiles, local listing optimization, and on-site customer review showcase',
+      tasks: makeTasks('p3', p3Tasks)
+    },
+    {
+      id: 'phase_4',
+      badge: 'Phase 4 · Weeks 3–4',
+      title: 'Conversion Tracking, Retargeting & Automated Follow-Up',
+      goal: 'Track every lead source and automatically nurture prospects into paying customers.',
+      deliverables: 'GA4 & Ad Pixels, automated lead/cart follow-up sequences, and live performance report',
+      tasks: makeTasks('p4', p4Tasks)
+    }
+  ];
+
+  const replyProposalSubject = `Action Plan & 4-Phase Solution Roadmap for ${name}`.slice(0, 88);
+  const replyProposalBody =
+    `Hi ${name} team,\n\n` +
+    `Thanks for getting back to me! As promised, I put together a clear, step-by-step Solution Pack & Phased Roadmap tailored specifically to the gaps we uncovered across ${name}’s ${platform} site, social media presence, and local search listing in ${city}.\n\n` +
+    `Here is how we solve every issue in 4 focused phases without disrupting your day-to-day operations:\n\n` +
+    phases.map(p =>
+      `${p.badge.toUpperCase()} — ${p.title}\n` +
+      `Goal: ${p.goal}\n` +
+      p.tasks.map(t => `  ✓ ${t.text}`).join('\n')
+    ).join('\n\n') +
+    `\n\nEXPECTED OUTCOME FOR ${name.toUpperCase()}:\n` +
+    `• Faster mobile experience and higher website health score (targeting 90+/100)\n` +
+    `• Stronger local search visibility in ${city} and connected social media proof\n` +
+    `• More qualified calls, form submissions, and customers captured automatically\n\n` +
+    `I’ve attached the full Solution Pack breakdown for your review. Would you like to kick off with Phase 1 (Quick Wins & Lead Capture) this week, or hop on a quick 10-minute call to walk through the roadmap?\n\n` +
+    `Best regards,\n${senderName}\n${senderService}`;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    businessName: name,
+    industry,
+    city,
+    platform,
+    matrix,
+    phases,
+    replyProposalSubject,
+    replyProposalBody
+  };
+}
+
+export function buildSolutionPackHtml(pack = {}, lead = {}, senderSettings = {}) {
+  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const name = esc(pack.businessName || lead.name || 'Client');
+  const city = esc(pack.city || lead.city || '');
+  const industry = esc(pack.industry || lead.industry || '');
+  const platform = esc(pack.platform || lead.platform || 'Website');
+  const senderName = esc(senderSettings?.senderName || 'Outreach Specialist');
+  const senderService = esc(senderSettings?.senderService || 'Digital Growth & Conversion');
+  const score = lead.auditReport?.overallScore ?? 'N/A';
+
+  const matrixRows = (pack.matrix || []).map(r => `
+    <tr>
+      <td><strong>${esc(r.problem)}</strong></td>
+      <td>${esc(r.solution)}</td>
+      <td>${esc(r.expectedOutcome)}</td>
+      <td><span class="tag">${esc(r.phase)}</span></td>
+    </tr>`).join('');
+
+  const phaseCards = (pack.phases || []).map(p => `
+    <div class="phase">
+      <div class="phase-top"><span class="tag">${esc(p.badge)}</span><h3>${esc(p.title)}</h3></div>
+      <p class="goal">${esc(p.goal)}</p>
+      <ul>${(p.tasks || []).map(t => `<li>✓ ${esc(t.text)}</li>`).join('')}</ul>
+      <div class="deliv"><strong>Deliverables:</strong> ${esc(p.deliverables)}</div>
+    </div>`).join('');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Solution Pack &amp; Roadmap — ${name}</title>
+<style>
+  body{font-family:Inter,-apple-system,Segoe UI,sans-serif;color:#0f2a2e;background:#f5f8f9;margin:0;padding:32px 18px;line-height:1.55}
+  .wrap{max-width:920px;margin:auto;background:#fff;border:1px solid #dce7e4;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.06)}
+  .hero{background:linear-gradient(135deg,#042e2a,#0a4f44);color:#fff;padding:28px 32px}
+  .hero h1{margin:0 0 6px;font-size:26px}
+  .hero p{margin:0;color:#bfe0d8;font-size:14px}
+  .sec{padding:24px 32px;border-bottom:1px solid #e6eeec}
+  h2{margin:0 0 14px;font-size:18px;color:#052e2b}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .phase{border:1px solid #dce7e4;border-radius:12px;padding:16px;background:#fafcfc}
+  .phase h3{margin:6px 0;font-size:15.5px}
+  .goal{margin:0 0 10px;font-size:13px;color:#5b7479}
+  .phase ul{margin:0 0 10px;padding-left:18px;font-size:13px}
+  .deliv{font-size:12px;color:#065f46;background:#e6f7ef;padding:8px 10px;border-radius:8px}
+  .tag{display:inline-block;background:#e6f7ef;color:#057a55;padding:3px 10px;border-radius:99px;font-size:11.5px;font-weight:700}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:10px 12px;border-bottom:1px solid #e6eeec;text-align:left;vertical-align:top}
+  th{background:#f7fafa;color:#5b7479;font-size:11.5px;text-transform:uppercase}
+  .foot{padding:20px 32px;background:#f8fbfa;font-size:13px;color:#5b7479;display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <h1>Client Solution Pack &amp; 4-Phase Growth Roadmap</h1>
+      <p>Prepared for ${name} (${industry}${city ? ' · ' + city : ''}) · Platform: ${platform} · Initial Audit Score: ${esc(score)}/100</p>
+    </div>
+    <div class="sec">
+      <h2>1. Phased Implementation Plan</h2>
+      <div class="grid">${phaseCards}</div>
+    </div>
+    <div class="sec">
+      <h2>2. Discovered Problems → Solutions → Expected ROI</h2>
+      <table>
+        <thead><tr><th>Problem Discovered</th><th>Proposed Solution</th><th>Expected Client Outcome</th><th>Phase</th></tr></thead>
+        <tbody>${matrixRows}</tbody>
+      </table>
+    </div>
+    <div class="foot">
+      <span>Prepared by <strong>${senderName}</strong> (${senderService})</span>
+      <span>Generated ${new Date().toLocaleDateString()}</span>
+    </div>
+  </div>
+</body>
+</html>`;
+}

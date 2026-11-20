@@ -1,6 +1,6 @@
 import { readBusinessCsv, writeBusinessCsv } from './csv.mjs';
 import { iconEl, iconSvg } from './icons.mjs';
-import { generateClientOutreach } from './audit.mjs';
+import { generateClientOutreach, generateLeadSolutionPack, buildSolutionPackHtml } from './audit.mjs';
 
 const $ = selector => document.querySelector(selector);
 const dialog = $('#dialog');
@@ -1273,6 +1273,7 @@ function renderBusinessPage() {
   const tabDefs = [
     ['overview', 'Overview'],
     ['audit', `Website Audit${lead.auditReport ? ` (${lead.auditReport.overallScore}/100)` : ''}`],
+    ['solution', 'Solution Pack & Phases'],
     ['tech', 'Tech Stack'],
     ['socials', 'Social Links'],
     ['insights', 'Insights & History'],
@@ -1620,6 +1621,146 @@ function renderBusinessPage() {
         auditCard.append(scoreGrid, stackSec, findSec, outSec);
       }
       tabBody.append(auditCard);
+    } else if (dossierTab === 'solution') {
+      if (!lead.solutionPack) {
+        lead.solutionPack = generateLeadSolutionPack(lead, settings);
+      }
+      const pack = lead.solutionPack;
+      const allTasks = (pack.phases || []).flatMap(p => p.tasks || []);
+      const doneTasks = allTasks.filter(t => t.done).length;
+
+      const solCard = create('article', '', 'surface dossier-card full');
+      const solHead = create('div', '', 'heading');
+      solHead.style.margin = '0';
+      const solTitleWrap = create('div');
+      solTitleWrap.append(
+        create('h2', `Client Solution Pack & 4-Phase Roadmap for ${lead.name}`),
+        create('p', 'Ready-to-send phased implementation plan and problem-to-solution breakdown for when this client replies.', 'small')
+      );
+      const solTopActs = create('div', '', 'actions');
+      const progPill = create('span', `${doneTasks}/${allTasks.length} tasks done`, 'pill');
+      const regenPackBtn = btnWithIcon('refresh', 'Rebuild from Latest Audit', () => {
+        lead.solutionPack = generateLeadSolutionPack(lead, settings);
+        persist();
+        report(`Rebuilt 4-phase Solution Pack for ${lead.name}.`);
+      }, 'btn-soft');
+      const downloadPackBtn = btnWithIcon('fileText', 'Download Solution Pack (.html)', () => {
+        const htmlDoc = buildSolutionPackHtml(pack, lead, settings);
+        const url = URL.createObjectURL(new Blob([htmlDoc], { type: 'text/html;charset=utf-8' }));
+        const a = create('a');
+        const slug = (lead.name || 'client').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        a.href = url;
+        a.download = `${slug}-solution-pack.html`;
+        document.body.append(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        report(`Downloaded ${slug}-solution-pack.html.`);
+      }, true);
+      solTopActs.append(progPill, regenPackBtn, downloadPackBtn);
+      solHead.append(solTitleWrap, solTopActs);
+
+      // 1. 4-Phase Implementation Roadmap Grid
+      const phasesSec = create('div', '', 'ai-section stack');
+      phasesSec.append(create('h3', '1. Phased Implementation Plan (Interactive Delivery Checklist)'));
+      const phasesGrid = create('div', '', 'phases-grid');
+      for (const phase of pack.phases || []) {
+        const pCard = create('div', '', 'phase-card');
+        const pTop = create('div', '', 'heading');
+        pTop.style.margin = '0';
+        const pDone = (phase.tasks || []).filter(t => t.done).length;
+        pTop.append(create('span', phase.badge, 'pill'), create('small', `${pDone}/${(phase.tasks || []).length} done`, 'small'));
+        const pTitle = create('h3', phase.title);
+        const pGoal = create('p', phase.goal, 'small');
+        pGoal.style.margin = '0';
+
+        const tList = create('div', '', 'phase-task-list');
+        for (const task of phase.tasks || []) {
+          const lbl = create('label', '', 'phase-task' + (task.done ? ' done' : ''));
+          const cb = create('input');
+          cb.type = 'checkbox';
+          cb.checked = Boolean(task.done);
+          cb.onchange = () => {
+            task.done = cb.checked;
+            persist();
+          };
+          lbl.append(cb, create('span', task.text));
+          tList.append(lbl);
+        }
+
+        const deliv = create('div', '', 'phase-deliv');
+        deliv.append(create('strong', 'Deliverables: '), document.createTextNode(phase.deliverables));
+        pCard.append(pTop, pTitle, pGoal, tList, deliv);
+        phasesGrid.append(pCard);
+      }
+      phasesSec.append(phasesGrid);
+
+      // 2. Problem -> Solution -> Expected Client ROI Matrix
+      const matrixSec = create('div', '', 'ai-section stack');
+      matrixSec.append(create('h3', `2. Discovered Problems → Solutions → Expected ROI (${pack.matrix?.length || 0} items)`));
+      const mWrap = create('div', '', 'data-table-wrap');
+      const mTable = create('table', '', 'data-table');
+      const mHead = create('thead');
+      mHead.innerHTML = '<tr><th>Problem Discovered</th><th>Proposed Solution</th><th>Expected Client Outcome</th><th>Phase</th></tr>';
+      const mBody = create('tbody');
+      for (const row of pack.matrix || []) {
+        const tr = create('tr');
+        const tdProb = create('td'); tdProb.append(create('strong', row.problem));
+        const tdSol = create('td', row.solution);
+        const tdOut = create('td', row.expectedOutcome);
+        const tdPh = create('td'); tdPh.append(create('span', row.phase, 'pill neutral'));
+        tr.append(tdProb, tdSol, tdOut, tdPh);
+        mBody.append(tr);
+      }
+      mTable.append(mHead, mBody);
+      mWrap.append(mTable);
+      matrixSec.append(mWrap);
+
+      // 3. Ready-to-Send "When Client Replies" Follow-Up Proposal
+      const propSec = create('div', '', 'ai-section stack');
+      const propHead = create('div', '', 'heading');
+      propHead.style.margin = '0';
+      const propBadge = create('span', '', 'pill');
+      propBadge.append(iconEl('check', 12), document.createTextNode('Editable · Ready for Client Reply'));
+      propHead.append(create('h3', '3. Client Reply Follow-Up Proposal Message'), propBadge);
+
+      const propSubj = field('Follow-Up Proposal Subject (Editable)', 'solSubj', pack.replyProposalSubject, { maxLength: 160 });
+      const propBody = field('Phased Solution Proposal Body (Editable — send when client asks for details)', 'solBody', pack.replyProposalBody, { type: 'textarea', maxLength: 16000 });
+      propBody.lastChild.style.minHeight = '260px';
+      propBody.lastChild.style.lineHeight = '1.6';
+
+      const savePropEdits = () => {
+        pack.replyProposalSubject = propSubj.lastChild.value.trim();
+        pack.replyProposalBody = propBody.lastChild.value;
+        if (currentUser?.id) {
+          localStorage.setItem(userLeadsKey(currentUser.id), JSON.stringify(leads));
+          syncWorkspaceToServer();
+        }
+      };
+      propSubj.lastChild.onchange = savePropEdits;
+      propBody.lastChild.onchange = savePropEdits;
+
+      const propActs = create('div', '', 'actions');
+      propActs.append(
+        btnWithIcon('mail', 'Send Proposal in Gmail Composer', () => {
+          savePropEdits();
+          compose(lead, null, null, {
+            subject: pack.replyProposalSubject,
+            body: pack.replyProposalBody
+          });
+        }),
+        btnWithIcon('copy', 'Copy Proposal Message', async () => {
+          savePropEdits();
+          try {
+            await navigator.clipboard.writeText(`${pack.replyProposalSubject}\n\n${pack.replyProposalBody}`);
+            report('Copied 4-phase Solution Pack proposal to clipboard.');
+          } catch {}
+        }, 'btn-soft')
+      );
+      propSec.append(propHead, propSubj, propBody, propActs);
+
+      solCard.append(solHead, phasesSec, matrixSec, propSec);
+      tabBody.append(solCard);
     } else if (dossierTab === 'tech') {
       const platCard = create('article', '', 'surface dossier-card');
       platCard.append(create('h2', 'Platform & Tech Stack'));
@@ -1871,6 +2012,11 @@ function renderBusinessPage() {
               await navigator.clipboard.writeText(`${lead.aiBrief.pitchSubject}\n\n${lead.aiBrief.pitchBody}`);
               report('Copied edited AI email to clipboard.');
             } catch {}
+          }, 'btn-soft'),
+          btnWithIcon('folder', 'Build 4-Phase Solution Pack', () => {
+            lead.solutionPack = generateLeadSolutionPack(lead, settings);
+            dossierTab = 'solution';
+            persist();
           }, 'btn-soft'),
           btnWithIcon('refresh', 'Regenerate', e => runAiAnalysis(e.currentTarget), true)
         );
@@ -2321,7 +2467,19 @@ function renderInbox() {
     const sendReplyBtn = create('button', '', '');
     sendReplyBtn.type = 'submit';
     sendReplyBtn.append(iconEl('send', 14), document.createTextNode('Send Reply'));
-    replyActions.append(sendReplyBtn, button('View Dossier', () => openBusinessPage(lead), 'btn-soft'));
+    const loadSolutionBtn = btnWithIcon('sparkles', 'Insert Solution Pack Proposal', () => {
+      if (!lead.solutionPack) lead.solutionPack = generateLeadSolutionPack(lead, settings);
+      replyBox.value = lead.solutionPack.replyProposalBody;
+      replyBox.focus();
+      report(`Loaded 4-phase Solution Pack proposal for ${lead.name} into reply box.`);
+    }, 'btn-soft', 14);
+    replyActions.append(sendReplyBtn, loadSolutionBtn, button('Open Solution Pack', () => {
+      if (!lead.solutionPack) lead.solutionPack = generateLeadSolutionPack(lead, settings);
+      activeBusinessId = lead.id;
+      dossierTab = 'solution';
+      location.hash = '#business';
+      renderBusinessPage();
+    }, true));
     replyForm.append(replyBox, replyAtts.el, replyActions);
     replyForm.onsubmit = async event => {
       event.preventDefault();

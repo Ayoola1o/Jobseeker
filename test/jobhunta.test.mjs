@@ -3,7 +3,7 @@ import { assessLead, industryAngle, normalizeLeadProfiles } from '../public/qual
 import { googleQueries, businessKeys } from '../public/discovery.mjs';
 import assert from 'node:assert/strict';
 import { readBusinessCsv, writeBusinessCsv } from '../public/csv.mjs';
-import { detectPlatform, analyzePageAudit, generateClientOutreach } from '../public/audit.mjs';
+import { detectPlatform, analyzePageAudit, generateClientOutreach, generateLeadSolutionPack, buildSolutionPackHtml } from '../public/audit.mjs';
 import {
   extractMessageBody,
   outreachMessageKind,
@@ -413,4 +413,15 @@ test('detectPlatform, analyzePageAudit, and generateClientOutreach perform multi
   assert.ok(outreach.variants.detailedEmail.body.length > 250);
   assert.ok(outreach.variants.dmMessage.includes('Demo Shop'));
   assert.ok(outreach.variants.loomTalkingPoints.includes('Finding #1'));
+
+  const solutionPack = generateLeadSolutionPack(
+    { name: 'Demo Shop', city: 'Lagos', industry: 'Fashion', platform: 'Shopify', searchRank: 28, auditReport: audit, userSpottedIssues: 'Checkout button hidden on mobile' },
+    { senderName: 'Ayoola', senderService: 'Shopify CRO' }
+  );
+  assert.equal(solutionPack.phases.length, 4);
+  assert.ok(solutionPack.matrix.length >= 4);
+  assert.ok(solutionPack.replyProposalBody.includes('PHASE 1'));
+  assert.ok(solutionPack.replyProposalBody.includes('PHASE 4'));
+  const htmlDoc = buildSolutionPackHtml(solutionPack, { name: 'Demo Shop', auditReport: audit }, { senderName: 'Ayoola' });
+  assert.ok(htmlDoc.includes('Client Solution Pack &amp; 4-Phase Growth Roadmap'));
 });
