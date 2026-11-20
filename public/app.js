@@ -87,6 +87,187 @@ const statusNames = {
   bounced: 'Bounced'
 };
 
+const TIER_CATALOG = [
+  {
+    key: 'basic',
+    label: 'Basic',
+    displayLabel: 'Basic (Free)',
+    price: 'Free',
+    level: 1,
+    tagline: 'Taste the product & land your first lead',
+    searches: '10',
+    leads: '50',
+    emails: '20',
+    dailySearchLimit: 10,
+    dailyResultLimit: 50,
+    dailyEmailLimit: 20,
+    maxBroadcastRecipients: 0,
+    features: [
+      '10 searches & 50 leads discovered / day',
+      '20 outreach emails / day (1-to-1 Gmail)',
+      'Standard local search & 1 Search Folder',
+      'Single-lead website combing & Audit Score preview',
+      'Baseline AI pitch template preview'
+    ]
+  },
+  {
+    key: 'silver',
+    label: 'Silver',
+    displayLabel: 'Silver (Starter)',
+    price: '$29/mo',
+    level: 2,
+    tagline: 'Solo freelancer essentials',
+    searches: '40',
+    leads: '300',
+    emails: '100',
+    dailySearchLimit: 40,
+    dailyResultLimit: 300,
+    dailyEmailLimit: 100,
+    maxBroadcastRecipients: 0,
+    features: [
+      '40 searches & 300 leads discovered / day',
+      '100 outreach emails / day + File/Image Attachments',
+      'Low-Ranking Business Discovery (Rank #11+)',
+      'Bad Ranking & Bad Performance Filters + All Folders',
+      'Website Audit Bugs & SEO tabs + Editable 360° AI Pitch',
+      'Phase 1 Quick-Wins Solution Pack checklist'
+    ]
+  },
+  {
+    key: 'gold',
+    label: 'Gold',
+    displayLabel: 'Gold (Pro)',
+    price: '$79/mo',
+    level: 3,
+    tagline: 'Full diagnostic & campaign power',
+    searches: '150',
+    leads: '1,000',
+    emails: '400',
+    dailySearchLimit: 150,
+    dailyResultLimit: 1000,
+    dailyEmailLimit: 400,
+    maxBroadcastRecipients: 50,
+    features: [
+      '150 searches & 1,000 leads discovered / day',
+      '400 outreach emails / day + Broadcast (50/run)',
+      'Shopify Store Discovery (site:myshopify.com)',
+      'Full 4-Layer Audit (Bugs, SEO, Speed, Security Hygiene)',
+      'Custom AI Prompt Refinement + 4 Outreach Variants',
+      'Full 4-Phase Solution Pack, ROI Matrix & CSV Import/Export'
+    ]
+  },
+  {
+    key: 'premium',
+    label: 'Premium',
+    displayLabel: 'Premium (Agency)',
+    price: '$199/mo',
+    level: 4,
+    tagline: 'Regional scale & client closing',
+    searches: '500',
+    leads: '4,000',
+    emails: '2,000',
+    dailySearchLimit: 500,
+    dailyResultLimit: 4000,
+    dailyEmailLimit: 2000,
+    maxBroadcastRecipients: 250,
+    features: [
+      '500 searches & 4,000 leads discovered / day',
+      '2,000 outreach emails / day + Broadcast (250/run)',
+      'State-Wide Multi-City Expansion Scraping',
+      'Bulk Combing All Websites (Find missing emails)',
+      'Downloadable .html Client Solution Pack Proposal',
+      '1-Click Solution Pack Insertion in Outreach Inbox'
+    ]
+  },
+  {
+    key: 'diamond',
+    label: 'Diamond',
+    displayLabel: 'Diamond',
+    price: '$499/mo',
+    level: 5,
+    tagline: 'Unrestricted enterprise scale',
+    searches: 'Unlimited',
+    leads: 'Unlimited',
+    emails: 'Unlimited',
+    dailySearchLimit: null,
+    dailyResultLimit: null,
+    dailyEmailLimit: null,
+    maxBroadcastRecipients: null,
+    features: [
+      'Unlimited searches & leads discovered / day',
+      'Unlimited outreach emails & Broadcast batch size',
+      'All Discovery Modes + Priority Multi-City Expansion',
+      'Full 4-Layer Audit, Custom AI Prompts & Bulk Combing',
+      'White-Label Downloadable Client Solution Packs'
+    ]
+  }
+];
+
+const TIER_KEY_ALIASES = { free: 'basic', starter: 'silver', pro: 'gold', agency: 'premium' };
+
+function getActiveTier() {
+  if (String(currentUser?.email || '').trim().toLowerCase() === 'philipibitade@gmail.com') {
+    return TIER_CATALOG[4];
+  }
+  const raw = String(currentUser?.usage?.tier || currentUser?.tier || 'basic').trim().toLowerCase();
+  const key = TIER_KEY_ALIASES[raw] || raw;
+  return TIER_CATALOG.find(t => t.key === key) || TIER_CATALOG[0];
+}
+
+function getUserTierLevel() {
+  return getActiveTier().level;
+}
+
+function showUpgradeModal(reqTier, featureTitle, description = '') {
+  const curTier = getActiveTier();
+  const box = create('div', '', 'stack');
+  const badgeRow = create('div', '', 'actions');
+  const curPill = create('span', `Current: ${curTier.displayLabel}`, 'pill neutral');
+  const reqPill = create('span', '', 'pill');
+  reqPill.append(iconEl('crown', 13), document.createTextNode(`Unlocks on ${reqTier.displayLabel} (${reqTier.price})`));
+  badgeRow.append(curPill, reqPill);
+
+  const descP = create('p', description || `"${featureTitle}" is available on the ${reqTier.displayLabel} plan and higher.`);
+  descP.style.margin = '0';
+
+  const card = create('div', '', 'surface card-pad stack');
+  card.style.background = '#f3faf7';
+  card.append(create('strong', `${reqTier.displayLabel} Plan Highlights (${reqTier.price}):`));
+  const ul = create('ul', '', 'tier-features');
+  for (const f of reqTier.features) {
+    const li = create('li');
+    li.append(iconEl('check', 14), document.createTextNode(f));
+    ul.append(li);
+  }
+  card.append(ul);
+
+  const acts = create('div', '', 'actions');
+  acts.append(
+    btnWithIcon('crown', 'Compare Plans & Upgrade', () => {
+      dialog.close();
+      location.hash = '#profile';
+    }),
+    button('Maybe Later', () => dialog.close(), true)
+  );
+  box.append(badgeRow, descP, card, acts);
+  show(`Upgrade Required: ${featureTitle}`, box);
+}
+
+function requireTier(minLevel, featureTitle, description = '') {
+  if (getUserTierLevel() >= minLevel) return true;
+  const reqTier = TIER_CATALOG.find(t => t.level === minLevel) || TIER_CATALOG[1];
+  pushNotification({
+    icon: 'crown',
+    tone: 'amber',
+    title: `${featureTitle} requires ${reqTier.displayLabel}`,
+    sub: `Upgrade from ${getActiveTier().displayLabel} to ${reqTier.displayLabel} (${reqTier.price}) to unlock.`,
+    targetHash: '#profile'
+  });
+  report(`${featureTitle} requires the ${reqTier.displayLabel} plan or higher.`, true);
+  showUpgradeModal(reqTier, featureTitle, description);
+  return false;
+}
+
 const avatarColors = ['#0f4c81', '#059669', '#7c3aed', '#b45309', '#be185d', '#0369a1'];
 function getInitials(name = '') {
   const parts = String(name).trim().split(/\s+/).filter(Boolean);
@@ -324,17 +505,26 @@ function updateHeaderBadges() {
   if (avatarBtn && currentUser) {
     avatarBtn.textContent = getInitials(currentUser.name || currentUser.email);
   }
-  const tierLabel = currentUser?.usage?.label || 'Basic';
+  const activeTier = getActiveTier();
+  const tierLabel = activeTier.displayLabel;
   const planTitle = $('#sidebar-plan-title');
   const planSub = $('#sidebar-plan-sub');
   const planCta = document.querySelector('#sidebar-plan-card .plan-cta');
-  if (planTitle) planTitle.textContent = tierLabel === 'Diamond' ? 'Diamond Plan Active' : `${tierLabel} Plan`;
+  if (planTitle) planTitle.textContent = activeTier.key === 'diamond' ? 'Diamond Plan Active' : `${tierLabel} Plan`;
   if (planSub) {
-    planSub.textContent = tierLabel === 'Diamond'
-      ? 'Unlimited searches & outreach'
-      : 'Upgrade for higher daily quotas';
+    planSub.textContent = activeTier.key === 'diamond'
+      ? 'Unlimited searches, leads & outreach'
+      : `${activeTier.searches} searches · ${activeTier.leads} leads · ${activeTier.emails} emails/day`;
   }
-  if (planCta) planCta.textContent = tierLabel === 'Diamond' ? 'View Usage & Plan' : 'Upgrade Now';
+  if (planCta) planCta.textContent = activeTier.key === 'diamond' ? 'View Usage & Plan' : 'Upgrade Plan';
+
+  const rankModeSelect = $('#rank-mode');
+  if (rankModeSelect) {
+    const lowOpt = rankModeSelect.querySelector('option[value="low"]');
+    const shopOpt = rankModeSelect.querySelector('option[value="shopify"]');
+    if (lowOpt) lowOpt.textContent = activeTier.level < 2 ? 'Low-Ranked (Pages 3–8) [Starter+]' : 'Low-Ranked (Pages 3–8)';
+    if (shopOpt) shopOpt.textContent = activeTier.level < 3 ? 'Low-Ranked Shopify Stores [Pro+]' : 'Low-Ranked Shopify Stores';
+  }
 }
 
 function applyEnrichmentToItem(item, found) {
@@ -1104,13 +1294,25 @@ function renderLeads() {
       allChip.onclick = () => { selectedLeadFolder = ''; leadsPage = 1; renderLeads(); };
       fGrid.append(allChip);
 
-      for (const f of folderList) {
+      folderList.forEach((f, idx) => {
+        const isLockedFolder = idx >= 1 && getUserTierLevel() < 2;
         const chip = create('button', '', 'folder-chip' + (selectedLeadFolder === f.name ? ' active' : ''));
         chip.type = 'button';
-        chip.append(iconEl('folder', 14), document.createTextNode(f.name), create('span', String(f.count), 'folder-cnt'));
-        chip.onclick = () => { selectedLeadFolder = f.name; leadsPage = 1; renderLeads(); };
+        chip.append(
+          iconEl(isLockedFolder ? 'lock' : 'folder', 14),
+          document.createTextNode(f.name + (isLockedFolder ? ' [Starter+]' : '')),
+          create('span', String(f.count), 'folder-cnt')
+        );
+        chip.onclick = () => {
+          if (isLockedFolder && !requireTier(2, 'Unlimited Search Folders', 'Organize every industry and city search into unlimited dedicated folders on Silver (Starter) and above.')) {
+            return;
+          }
+          selectedLeadFolder = f.name;
+          leadsPage = 1;
+          renderLeads();
+        };
         fGrid.append(chip);
-      }
+      });
       foldersEl.replaceChildren(fHead, fGrid);
     } else {
       foldersEl.hidden = true;
@@ -1569,31 +1771,71 @@ function renderBusinessPage() {
           stackSec.append(stHead, stBadges);
         }
 
-        // Categorized Findings Explorer
+        // Categorized Findings Explorer (Tier-Aware: Basic = Preview, Silver = Bugs & SEO, Gold+ = All 4 Layers)
+        const tierLevel = getUserTierLevel();
         const findSec = create('div', '', 'ai-section stack');
         const fHead = create('div', '', 'heading');
         fHead.style.margin = '0';
-        fHead.append(create('h3', `2. Multi-Layer Audit Findings (${reportData.findings?.length || 0})`));
-        const catTabs = create('div', '', 'preset-pills');
         const allFindings = reportData.findings || [];
+        fHead.append(create('h3', `2. Multi-Layer Audit Findings (${reportData.totalDiscoveredFindings || allFindings.length})`));
+        const catTabs = create('div', '', 'preset-pills');
         [
-          ['all', `All (${allFindings.length})`],
-          ['bugs', `Bugs & UX (${allFindings.filter(f => f.category === 'bugs').length})`],
-          ['seo', `SEO & AI (${allFindings.filter(f => f.category === 'seo').length})`],
-          ['performance', `Performance (${allFindings.filter(f => f.category === 'performance').length})`],
-          ['security', `Security Hygiene (${allFindings.filter(f => f.category === 'security').length})`]
-        ].forEach(([k, lbl]) => {
+          ['all', `All (${allFindings.length})`, 1],
+          ['bugs', `Bugs & UX (${allFindings.filter(f => f.category === 'bugs').length})`, 2],
+          ['seo', `SEO & AI (${allFindings.filter(f => f.category === 'seo').length})`, 2],
+          ['performance', `Performance (${allFindings.filter(f => f.category === 'performance').length})${tierLevel < 3 ? ' [Pro+]' : ''}`, 3],
+          ['security', `Security Hygiene (${allFindings.filter(f => f.category === 'security').length})${tierLevel < 3 ? ' [Pro+]' : ''}`, 3]
+        ].forEach(([k, lbl, reqLvl]) => {
           const b = create('button', lbl, 'preset-pill' + (auditCategoryFilter === k ? ' active' : ''));
           b.type = 'button';
-          b.onclick = () => { auditCategoryFilter = k; renderBusinessPage(); };
+          b.onclick = () => {
+            if (!requireTier(reqLvl, `Website Audit — ${lbl.replace(/\s*\[.*$/, '')}`, 'Unlock the full 4-layer technical, SEO, performance & security hygiene audit on Gold (Pro) and above.')) return;
+            auditCategoryFilter = k;
+            renderBusinessPage();
+          };
           catTabs.append(b);
         });
         fHead.append(catTabs);
         findSec.append(fHead);
 
-        const visibleFindings = auditCategoryFilter === 'all'
+        if (tierLevel === 1) {
+          const gateBanner = create('div', '', 'pitch-banner');
+          const gateCopy = create('div', '', 'pitch-banner-copy');
+          const gateH3 = create('h3');
+          gateH3.append(iconEl('lock', 16), document.createTextNode('Basic Plan Audit Preview (1 Finding Shown)'));
+          gateCopy.append(
+            gateH3,
+            create('p', 'Upgrade to Silver (Starter) to unlock all Bugs & SEO findings, or Gold (Pro) for the full 4-Layer Performance & Security Hygiene audit.')
+          );
+          gateBanner.append(
+            gateCopy,
+            btnWithIcon('crown', 'Unlock Full Audit', () => requireTier(2, 'Multi-Layer Website Audit Findings'))
+          );
+          findSec.append(gateBanner);
+        } else if (tierLevel === 2) {
+          const gateBanner = create('div', '', 'pitch-banner');
+          const gateCopy = create('div', '', 'pitch-banner-copy');
+          const gateH3 = create('h3');
+          gateH3.append(iconEl('crown', 16), document.createTextNode('Bugs & SEO Active — Upgrade to Pro for Speed & Security Hygiene'));
+          gateCopy.append(
+            gateH3,
+            create('p', 'Gold (Pro) unlocks Core Web Vitals performance checks, passive security header & library audits, and multi-channel DM/Loom outreach scripts.')
+          );
+          gateBanner.append(
+            gateCopy,
+            btnWithIcon('crown', 'Unlock 4-Layer Pro Audit', () => requireTier(3, 'Performance & Security Hygiene Audit Layers'))
+          );
+          findSec.append(gateBanner);
+        }
+
+        const visibleFindings = (auditCategoryFilter === 'all'
           ? allFindings
-          : allFindings.filter(f => f.category === auditCategoryFilter);
+          : allFindings.filter(f => f.category === auditCategoryFilter)
+        ).filter(f => {
+          if (tierLevel === 1) return true;
+          if (tierLevel === 2) return f.category === 'bugs' || f.category === 'seo';
+          return true;
+        }).slice(0, tierLevel === 1 ? 1 : 50);
 
         const fList = create('div', '', 'finding-list');
         if (!visibleFindings.length) {
@@ -1638,14 +1880,18 @@ function renderBusinessPage() {
 
         const variantTabs = create('div', '', 'preset-pills');
         [
-          ['coldEmail', 'Short Cold Email (<120w)'],
-          ['detailedEmail', 'Detailed Audit Email'],
-          ['dmMessage', 'LinkedIn / WhatsApp DM'],
-          ['loomTalkingPoints', 'Loom / Call Script']
-        ].forEach(([vKey, vLbl]) => {
+          ['coldEmail', 'Short Cold Email (<120w)', 1],
+          ['detailedEmail', 'Detailed Audit Email', 2],
+          ['dmMessage', `LinkedIn / WhatsApp DM${tierLevel < 3 ? ' [Pro+]' : ''}`, 3],
+          ['loomTalkingPoints', `Loom / Call Script${tierLevel < 3 ? ' [Pro+]' : ''}`, 3]
+        ].forEach(([vKey, vLbl, reqLvl]) => {
           const vb = create('button', vLbl, 'preset-pill' + (auditOutreachTab === vKey ? ' active' : ''));
           vb.type = 'button';
-          vb.onclick = () => { auditOutreachTab = vKey; renderBusinessPage(); };
+          vb.onclick = () => {
+            if (!requireTier(reqLvl, `Outreach Variant — ${vLbl.replace(/\s*\[.*$/, '')}`, 'Unlock LinkedIn/WhatsApp DM scripts and Loom audit call talking points on Gold (Pro) and above.')) return;
+            auditOutreachTab = vKey;
+            renderBusinessPage();
+          };
           variantTabs.append(vb);
         });
         outHead.append(variantTabs);
@@ -1721,7 +1967,9 @@ function renderBusinessPage() {
         persist();
         report(`Rebuilt 4-phase Solution Pack for ${lead.name}.`);
       }, 'btn-soft');
-      const downloadPackBtn = btnWithIcon('fileText', 'Download Solution Pack (.html)', () => {
+      const solTierLevel = getUserTierLevel();
+      const downloadPackBtn = btnWithIcon('fileText', `Download Solution Pack (.html)${solTierLevel < 4 ? ' [Agency+]' : ''}`, () => {
+        if (!requireTier(4, 'Downloadable HTML Client Solution Pack', 'Export a standalone, client-ready HTML turnaround proposal on Premium (Agency) and Diamond plans.')) return;
         const htmlDoc = buildSolutionPackHtml(pack, lead, settings);
         const url = URL.createObjectURL(new Blob([htmlDoc], { type: 'text/html;charset=utf-8' }));
         const a = create('a');
@@ -1737,40 +1985,63 @@ function renderBusinessPage() {
       solTopActs.append(progPill, regenPackBtn, downloadPackBtn);
       solHead.append(solTitleWrap, solTopActs);
 
-      // 1. 4-Phase Implementation Roadmap Grid
+      // 1. 4-Phase Implementation Roadmap Grid (Tier-Aware)
       const phasesSec = create('div', '', 'ai-section stack');
       phasesSec.append(create('h3', '1. Phased Implementation Plan (Interactive Delivery Checklist)'));
-      const phasesGrid = create('div', '', 'phases-grid');
-      for (const phase of pack.phases || []) {
-        const pCard = create('div', '', 'phase-card');
-        const pTop = create('div', '', 'heading');
-        pTop.style.margin = '0';
-        const pDone = (phase.tasks || []).filter(t => t.done).length;
-        pTop.append(create('span', phase.badge, 'pill'), create('small', `${pDone}/${(phase.tasks || []).length} done`, 'small'));
-        const pTitle = create('h3', phase.title);
-        const pGoal = create('p', phase.goal, 'small');
-        pGoal.style.margin = '0';
+      if (solTierLevel === 1) {
+        const lockBanner = create('div', '', 'pitch-banner');
+        const lockCopy = create('div', '', 'pitch-banner-copy');
+        const lockH3 = create('h3');
+        lockH3.append(iconEl('lock', 16), document.createTextNode('Client Solution Pack Unlocks on Silver (Starter) & Gold (Pro)'));
+        lockCopy.append(
+          lockH3,
+          create('p', 'Upgrade to Silver ($29/mo) for Phase 1 Quick Wins, Gold ($79/mo) for the full 4-Phase Roadmap & ROI Matrix, or Agency ($199/mo) for downloadable HTML client proposals.')
+        );
+        lockBanner.append(lockCopy, btnWithIcon('crown', 'Unlock Solution Pack', () => requireTier(2, 'Client Solution Pack & 4-Phase Roadmap')));
+        phasesSec.append(lockBanner);
+      } else {
+        const phasesGrid = create('div', '', 'phases-grid');
+        const visiblePhases = solTierLevel === 2 ? (pack.phases || []).slice(0, 1) : (pack.phases || []);
+        for (const phase of visiblePhases) {
+          const pCard = create('div', '', 'phase-card');
+          const pTop = create('div', '', 'heading');
+          pTop.style.margin = '0';
+          const pDone = (phase.tasks || []).filter(t => t.done).length;
+          pTop.append(create('span', phase.badge, 'pill'), create('small', `${pDone}/${(phase.tasks || []).length} done`, 'small'));
+          const pTitle = create('h3', phase.title);
+          const pGoal = create('p', phase.goal, 'small');
+          pGoal.style.margin = '0';
 
-        const tList = create('div', '', 'phase-task-list');
-        for (const task of phase.tasks || []) {
-          const lbl = create('label', '', 'phase-task' + (task.done ? ' done' : ''));
-          const cb = create('input');
-          cb.type = 'checkbox';
-          cb.checked = Boolean(task.done);
-          cb.onchange = () => {
-            task.done = cb.checked;
-            persist();
-          };
-          lbl.append(cb, create('span', task.text));
-          tList.append(lbl);
+          const tList = create('div', '', 'phase-task-list');
+          for (const task of phase.tasks || []) {
+            const lbl = create('label', '', 'phase-task' + (task.done ? ' done' : ''));
+            const cb = create('input');
+            cb.type = 'checkbox';
+            cb.checked = Boolean(task.done);
+            cb.onchange = () => {
+              task.done = cb.checked;
+              persist();
+            };
+            lbl.append(cb, create('span', task.text));
+            tList.append(lbl);
+          }
+
+          const deliv = create('div', '', 'phase-deliv');
+          deliv.append(create('strong', 'Deliverables: '), document.createTextNode(phase.deliverables));
+          pCard.append(pTop, pTitle, pGoal, tList, deliv);
+          phasesGrid.append(pCard);
         }
-
-        const deliv = create('div', '', 'phase-deliv');
-        deliv.append(create('strong', 'Deliverables: '), document.createTextNode(phase.deliverables));
-        pCard.append(pTop, pTitle, pGoal, tList, deliv);
-        phasesGrid.append(pCard);
+        phasesSec.append(phasesGrid);
+        if (solTierLevel === 2) {
+          const proBanner = create('div', '', 'pitch-banner');
+          const proCopy = create('div', '', 'pitch-banner-copy');
+          const proH3 = create('h3');
+          proH3.append(iconEl('crown', 16), document.createTextNode('Phases 2–4 & Full Problem-to-ROI Matrix Require Gold (Pro)'));
+          proCopy.append(proH3, create('p', 'Upgrade to Gold (Pro) to unlock Phases 2–4 (Conversion Overhaul, Local SEO Authority & Growth Automation) plus the full Problem → Solution → ROI Matrix.'));
+          proBanner.append(proCopy, btnWithIcon('crown', 'Unlock All 4 Phases', () => requireTier(3, 'Full 4-Phase Implementation Roadmap')));
+          phasesSec.append(proBanner);
+        }
       }
-      phasesSec.append(phasesGrid);
 
       // 2. Problem -> Solution -> Expected Client ROI Matrix
       const matrixSec = create('div', '', 'ai-section stack');
@@ -1993,6 +2264,9 @@ function renderBusinessPage() {
       const runAiAnalysis = async btn => {
         const userIssues = issuesField.lastChild.value.trim();
         const extraContext = extraField.lastChild.value.trim();
+        if (extraContext && !requireTier(3, 'Custom AI Instructions & Prompt Refinement', 'Add custom offers, case studies, and tone instructions to your AI outreach pitches on Gold (Pro) and above.')) {
+          return;
+        }
         lead.userSpottedIssues = userIssues;
         lead.aiExtraContext = extraContext;
         btn.disabled = true;
@@ -2120,6 +2394,7 @@ function getBroadcastAudienceLeads(type) {
 }
 
 function editTemplateModal(tpl = null) {
+  if (!requireTier(3, 'Custom Email Templates & Broadcast Campaigns', 'Create and edit custom outreach templates and send batch campaigns on Gold (Pro) and above.')) return;
   const form = create('form', '', 'stack');
   const nameInput = field('Template Name', 'name', tpl?.name || '', { required: true, maxLength: 80, placeholder: 'e.g. Initial Introduction' });
   const descInput = field('Short Description', 'desc', tpl?.desc || '', { maxLength: 140, placeholder: 'e.g. Introduce your service to a new local lead' });
@@ -2263,11 +2538,17 @@ function renderBroadcast() {
   const broadcastAtts = createAttachmentPicker();
 
   const progressText = create('p', '', 'small');
+  const activeBroadcastTier = getActiveTier();
+  const maxBatch = activeBroadcastTier.maxBroadcastRecipients;
+  const cappedLeads = maxBatch === null ? targetLeads : targetLeads.slice(0, Math.max(0, maxBatch || 50));
   const sendBtn = button(
-    broadcastSending ? 'Sending Campaign…' : `Send Campaign (${targetLeads.length} recipients)`,
+    broadcastSending
+      ? 'Sending Campaign…'
+      : `Send Campaign (${cappedLeads.length} recipient${cappedLeads.length === 1 ? '' : 's'}${activeBroadcastTier.level < 3 ? ' · Pro+' : ''})`,
     async () => {
+      if (!requireTier(3, 'Email Broadcast Campaigns', 'Send personalized multi-recipient Gmail broadcast campaigns on Gold (Pro) and above.')) return;
       if (!account.mailbox) { report('Connect your Gmail account in Settings first.', true); return; }
-      if (!targetLeads.length) { report('No eligible recipients with verified emails in this audience.', true); return; }
+      if (!cappedLeads.length) { report('No eligible recipients with verified emails in this audience.', true); return; }
       const rawSubj = subjectInput.lastChild.value.trim();
       const rawBody = bodyInput.lastChild.value.trim();
       if (!rawSubj || !rawBody) { report('Enter a campaign subject and message.', true); return; }
@@ -2278,9 +2559,9 @@ function renderBroadcast() {
       let failedCount = 0;
       const attachments = broadcastAtts.getAttachments();
 
-      for (let i = 0; i < targetLeads.length; i++) {
-        const lead = targetLeads[i];
-        progressText.textContent = `Sending ${i + 1} of ${targetLeads.length}: ${lead.name} (${lead.email})…`;
+      for (let i = 0; i < cappedLeads.length; i++) {
+        const lead = cappedLeads[i];
+        progressText.textContent = `Sending ${i + 1} of ${cappedLeads.length}: ${lead.name} (${lead.email})…`;
         const finalSubj = interpolateTemplate(currentTpl.subject, lead);
         const finalBody = interpolateTemplate(rawBody, lead)
           .replace(/\[your name\]/gi, settings.senderName || 'Team')
@@ -2544,7 +2825,8 @@ function renderInbox() {
     const sendReplyBtn = create('button', '', '');
     sendReplyBtn.type = 'submit';
     sendReplyBtn.append(iconEl('send', 14), document.createTextNode('Send Reply'));
-    const loadSolutionBtn = btnWithIcon('sparkles', 'Insert Solution Pack Proposal', () => {
+    const loadSolutionBtn = btnWithIcon('sparkles', `Insert Solution Pack Proposal${getUserTierLevel() < 4 ? ' [Agency+]' : ''}`, () => {
+      if (!requireTier(4, 'One-Click Inbox Solution Pack Insertion', 'Insert a complete 4-phase turnaround proposal directly into any client reply thread on Premium (Agency) and Diamond plans.')) return;
       if (!lead.solutionPack) lead.solutionPack = generateLeadSolutionPack(lead, settings);
       replyBox.value = lead.solutionPack.replyProposalBody;
       replyBox.focus();
@@ -2707,24 +2989,19 @@ function renderProfile() {
   const container = $('#profile-content');
   if (!container) return;
 
-  const tierList = [
-    { key: 'basic', label: 'Basic', tagline: 'Starter outreach', searches: '50', emails: '10', dailySearchLimit: 50, dailyEmailLimit: 10 },
-    { key: 'silver', label: 'Silver', tagline: 'Growing pipeline', searches: '120', emails: '30', dailySearchLimit: 120, dailyEmailLimit: 30 },
-    { key: 'gold', label: 'Gold', tagline: 'Active prospecting', searches: '300', emails: '50', dailySearchLimit: 300, dailyEmailLimit: 50 },
-    { key: 'premium', label: 'Premium', tagline: 'High-volume teams', searches: '500', emails: '100', dailySearchLimit: 500, dailyEmailLimit: 100 },
-    { key: 'diamond', label: 'Diamond', tagline: 'Unrestricted scale', searches: 'Unlimited', emails: 'Unlimited', dailySearchLimit: null, dailyEmailLimit: null }
-  ];
-
+  const tierList = TIER_CATALOG;
+  const activeTier = getActiveTier();
   const usage = currentUser?.usage || {
-    tier: currentUser?.tier || 'basic',
-    label: 'Basic',
-    dailySearchLimit: 50,
-    dailyEmailLimit: 10,
+    tier: activeTier.key,
+    label: activeTier.label,
+    dailySearchLimit: activeTier.dailySearchLimit,
+    dailyResultLimit: activeTier.dailyResultLimit,
+    dailyEmailLimit: activeTier.dailyEmailLimit,
     searchesToday: 0,
+    resultsToday: 0,
     emailsToday: 0,
     usageDate: new Date().toISOString().slice(0, 10)
   };
-  const activeTier = tierList.find(t => t.key === usage.tier) || tierList[0];
   const withEmailCount = leads.filter(l => l.email).length;
   const contactedCount = leads.filter(l => (l.threads?.length || 0) > 0).length;
   const totalEmailsSent = leads.reduce((sum, l) => sum + (l.threads?.length || 0), 0);
@@ -2897,6 +3174,7 @@ function renderProfile() {
   };
   usageCard.append(
     addMeter('Business Searches Used Today', usage.searchesToday || 0, activeTier.dailySearchLimit),
+    addMeter('Leads Discovered Today', usage.resultsToday || 0, activeTier.dailyResultLimit, 'leads'),
     addMeter('Outreach Emails Sent Today', usage.emailsToday || 0, activeTier.dailyEmailLimit),
     addMeter('Verified Email Coverage', withEmailCount, Math.max(1, leads.length), 'leads'),
     addMeter('AI Brief Enrichment Coverage', aiBriefCount, Math.max(1, leads.length), 'leads')
@@ -2953,8 +3231,11 @@ function renderProfile() {
   const pHead = create('div', '', 'heading');
   pHead.style.margin = '0';
   const pHeadCopy = create('div');
-  pHeadCopy.append(create('h2', 'Subscription Tiers & Daily Allowances'), create('p', 'Compare daily search and outreach email limits across all Jobhunta plans.', 'small'));
-  pHead.append(pHeadCopy, create('span', `Current: ${activeTier.label}`, 'pill'));
+  pHeadCopy.append(
+    create('h2', 'Subscription Tiers, Doubled Daily Quotas & Feature Unlocks'),
+    create('p', 'Compare daily search, lead discovery, outreach email allowances, and unlocked diagnostic tools across all 5 plans.', 'small')
+  );
+  pHead.append(pHeadCopy, create('span', `Current: ${activeTier.displayLabel} (${activeTier.price})`, 'pill'));
 
   const cardsGrid = create('div', '', 'plan-cards-grid');
   for (const t of tierList) {
@@ -2963,19 +3244,21 @@ function renderProfile() {
     if (isCurrent) tc.append(create('span', 'Current Plan', 'tier-card-badge'));
 
     const h3 = create('h3');
-    h3.append(document.createTextNode(t.label));
+    h3.append(document.createTextNode(`${t.displayLabel} · ${t.price}`));
     if (t.key === 'diamond') h3.append(iconEl('crown', 16));
     tc.append(h3, create('p', t.tagline, 'tier-tagline'));
 
     const statBox = create('div', '', 'tier-stat-box');
     const sRow = create('div', '', 'tier-stat-line');
     sRow.append(create('span', 'Searches / day'), create('strong', t.searches));
+    const lRow = create('div', '', 'tier-stat-line');
+    lRow.append(create('span', 'Leads / day'), create('strong', t.leads));
     const eRow = create('div', '', 'tier-stat-line');
     eRow.append(create('span', 'Emails / day'), create('strong', t.emails));
-    statBox.append(sRow, eRow);
+    statBox.append(sRow, lRow, eRow);
 
     const feats = create('ul', '', 'tier-features');
-    ['Bing Maps & Shopify Scraper', 'AI Lead Briefs & Pitches', 'Supabase Cloud Sync'].forEach(f => {
+    (t.features || []).forEach(f => {
       const li = create('li');
       li.append(iconEl('check', 14), document.createTextNode(f));
       feats.append(li);
@@ -3328,6 +3611,7 @@ function editLead(lead) {
 }
 
 function importLeads() {
+  if (!requireTier(3, 'CSV Import & Export', 'Import external Jobhunta or Bing Maps Scraper CSV files on Gold (Pro) and above.')) return;
   const form = create('form', '', 'stack');
   const label = create('label', 'Business CSV (Jobhunta or Bing Maps Scraper format)');
   const file = create('input');
@@ -3357,6 +3641,7 @@ function importLeads() {
 }
 
 function exportLeads() {
+  if (!requireTier(3, 'CSV Import & Export', 'Export your enriched business leads and audit scores to CSV on Gold (Pro) and above.')) return;
   if (!leads.length) return;
   const csv = writeBusinessCsv(leads);
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
@@ -3367,6 +3652,7 @@ function exportLeads() {
 }
 
 async function enrichMissingEmails() {
+  if (!requireTier(4, 'Bulk Website Email & Audit Combing', 'Batch-crawl all saved leads lacking email addresses in one click on Premium (Agency) and Diamond plans.')) return;
   const targets = leads.filter(lead => !lead.email && lead.website);
   if (!targets.length || enrichingAll) return;
   enrichingAll = true;
@@ -3453,7 +3739,10 @@ function createAttachmentPicker() {
   input.accept = 'image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.txt,.zip';
   input.hidden = true;
 
-  const pickBtn = btnWithIcon('paperclip', 'Attach Images / Files', () => input.click(), 'btn-soft', 14);
+  const pickBtn = btnWithIcon('paperclip', `Attach Images / Files${getUserTierLevel() < 2 ? ' [Starter+]' : ''}`, () => {
+    if (!requireTier(2, 'Email File & Image Attachments', 'Attach screenshots, audit graphics, and proposal PDFs to your outreach emails on Silver (Starter) and above.')) return;
+    input.click();
+  }, 'btn-soft', 14);
   const note = create('small', 'Max 5 files · 3 MB total (large images auto-compress)', 'small');
   bar.append(pickBtn, note, input);
 
@@ -3929,10 +4218,19 @@ $('#search').onsubmit = async event => {
   event.preventDefault();
   const form = event.currentTarget;
   const submit = form.querySelector('button');
+  const formData = new FormData(form);
+  const chosenMode = String(formData.get('rankMode') || 'all');
+  if (chosenMode === 'low' && !requireTier(2, 'Low-Ranking Business Discovery (Rank #11+)', 'Target businesses buried on Pages 2–8 of search results on Silver (Starter) and above.')) {
+    if ($('#rank-mode')) $('#rank-mode').value = 'all';
+    return;
+  }
+  if (chosenMode === 'shopify' && !requireTier(3, 'Shopify & E-Commerce Store Discovery (site:myshopify.com)', 'Scrape live Shopify stores and custom e-commerce domains on Gold (Pro) and above.')) {
+    if ($('#rank-mode')) $('#rank-mode').value = 'all';
+    return;
+  }
   if (searchController) searchController.abort();
   searchController = new AbortController();
   const generation = ++searchGeneration;
-  const formData = new FormData(form);
   activeSearchFolder = buildSearchFolderName(formData.get('industry'), formData.get('city'), formData.get('rankMode'));
   activeWorkers = 0; results = []; resultsPage = 1; streamActive = true;
   currentScrapeStep = 'Connecting to Bing Maps…';
@@ -4115,9 +4413,35 @@ $('#enrich-all').onclick = enrichMissingEmails;
 $('#close').onclick = () => dialog.close();
 $('#filter-query').oninput = () => { leadsPage = 1; renderLeads(); };
 $('#filter-status').onchange = () => { leadsPage = 1; renderLeads(); };
-if ($('#filter-opportunity')) $('#filter-opportunity').onchange = () => { leadsPage = 1; renderLeads(); };
+if ($('#filter-opportunity')) {
+  $('#filter-opportunity').onchange = e => {
+    if (e.target.value && !requireTier(2, 'Bad Ranking & Website Performance Filters', 'Filter saved leads by Rank #11+, Rank #21+, low website audit score (<75/100), missing website, or no social presence on Silver (Starter) and above.')) {
+      e.target.value = '';
+      return;
+    }
+    leadsPage = 1;
+    renderLeads();
+  };
+}
 $('#filter-platform').onchange = () => { leadsPage = 1; renderLeads(); };
-$('#filter-sort').onchange = () => { leadsPage = 1; renderLeads(); };
+$('#filter-sort').onchange = e => {
+  if ((e.target.value === 'worst-rank' || e.target.value === 'worst-audit') &&
+      !requireTier(2, 'Worst-First Ranking & Performance Sorting', 'Sort your pipeline to surface the lowest-ranked and worst-performing websites first on Silver (Starter) and above.')) {
+    e.target.value = 'recent';
+    return;
+  }
+  leadsPage = 1;
+  renderLeads();
+};
+if ($('#rank-mode')) {
+  $('#rank-mode').onchange = e => {
+    if (e.target.value === 'low' && !requireTier(2, 'Low-Ranking Business Discovery (Rank #11+)', 'Target businesses buried on Pages 2–8 of search results on Silver (Starter) and above.')) {
+      e.target.value = 'all';
+    } else if (e.target.value === 'shopify' && !requireTier(3, 'Shopify & E-Commerce Store Discovery (site:myshopify.com)', 'Scrape live Shopify stores and custom e-commerce domains on Gold (Pro) and above.')) {
+      e.target.value = 'all';
+    }
+  };
+}
 window.addEventListener('hashchange', navigate);
 $('#results').replaceChildren(empty('search', 'Start a search', 'Choose or enter an industry and enter the city you want to explore.'));
 

@@ -280,30 +280,45 @@ test('hashPassword and verifyPassword securely hash and verify user passwords', 
   assert.equal(verifyPassword('WrongPassword', hash), false);
 });
 
-test('USER_TIERS and getUserQuotaStatus enforce Basic through Diamond limits', () => {
-  assert.equal(USER_TIERS.basic.dailySearchLimit, 50);
-  assert.equal(USER_TIERS.basic.dailyResultLimit, 250);
-  assert.equal(USER_TIERS.basic.dailyEmailLimit, 10);
-  assert.equal(USER_TIERS.silver.dailySearchLimit, 20);
-  assert.equal(USER_TIERS.silver.dailyResultLimit, 500);
-  assert.equal(USER_TIERS.silver.dailyEmailLimit, 30);
-  assert.equal(USER_TIERS.gold.dailySearchLimit, 50);
-  assert.equal(USER_TIERS.gold.dailyResultLimit, 1500);
-  assert.equal(USER_TIERS.gold.dailyEmailLimit, 50);
-  assert.equal(USER_TIERS.premium.dailySearchLimit, 100);
-  assert.equal(USER_TIERS.premium.dailyResultLimit, 3000);
-  assert.equal(USER_TIERS.premium.dailyEmailLimit, 100);
+test('USER_TIERS and getUserQuotaStatus enforce Basic through Diamond limits with doubled discovery & outreach quotas', () => {
+  assert.equal(USER_TIERS.basic.dailySearchLimit, 10);
+  assert.equal(USER_TIERS.basic.dailyResultLimit, 50);
+  assert.equal(USER_TIERS.basic.dailyEmailLimit, 20);
+  assert.equal(USER_TIERS.basic.level, 1);
+
+  assert.equal(USER_TIERS.silver.dailySearchLimit, 40);
+  assert.equal(USER_TIERS.silver.dailyResultLimit, 300);
+  assert.equal(USER_TIERS.silver.dailyEmailLimit, 100);
+  assert.equal(USER_TIERS.silver.level, 2);
+
+  assert.equal(USER_TIERS.gold.dailySearchLimit, 150);
+  assert.equal(USER_TIERS.gold.dailyResultLimit, 1000);
+  assert.equal(USER_TIERS.gold.dailyEmailLimit, 400);
+  assert.equal(USER_TIERS.gold.level, 3);
+
+  assert.equal(USER_TIERS.premium.dailySearchLimit, 500);
+  assert.equal(USER_TIERS.premium.dailyResultLimit, 4000);
+  assert.equal(USER_TIERS.premium.dailyEmailLimit, 2000);
+  assert.equal(USER_TIERS.premium.level, 4);
+
   assert.equal(USER_TIERS.diamond.dailySearchLimit, null);
   assert.equal(USER_TIERS.diamond.dailyResultLimit, null);
   assert.equal(USER_TIERS.diamond.dailyEmailLimit, null);
+  assert.equal(USER_TIERS.diamond.level, 5);
 
-  const diamondStatus = getUserQuotaStatus({ tier: 'diamond', searches_today: 999, emails_today: 500 });
+  const diamondStatus = getUserQuotaStatus({ tier: 'diamond\r\n', searches_today: 999, emails_today: 500 });
   assert.equal(diamondStatus.tier, 'diamond');
+  assert.equal(diamondStatus.level, 5);
   assert.equal(diamondStatus.dailySearchLimit, null);
   assert.equal(diamondStatus.dailyEmailLimit, null);
+
+  const philipStatus = getUserQuotaStatus({ email: 'philipibitade@gmail.com', tier: 'basic' });
+  assert.equal(philipStatus.tier, 'diamond');
+  assert.equal(philipStatus.level, 5);
+
   const today = new Date().toISOString().slice(0, 10);
-  assert.equal(getUserQuotaStatus({ tier: 'basic', usage_date: today, results_today: 249 }).resultsToday, 249);
-  assert.equal(getUserQuotaStatus({ tier: 'basic', usage_date: '2020-01-01', results_today: 250 }).resultsToday, 0);
+  assert.equal(getUserQuotaStatus({ tier: 'basic', usage_date: today, results_today: 49 }).resultsToday, 49);
+  assert.equal(getUserQuotaStatus({ tier: 'basic', usage_date: '2020-01-01', results_today: 50 }).resultsToday, 0);
 });
 
 test('buildLeadIntelligence incorporates user-spotted issues into a detailed lead-generation email', () => {

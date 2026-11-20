@@ -259,20 +259,161 @@ function supabaseRowToLead(row, userId = 'default') {
   };
 }
 
-export const USER_TIERS = {
-  basic: { key: 'basic', label: 'Basic', dailySearchLimit: 50, dailyResultLimit: 250, dailyEmailLimit: 10 },
-  silver: { key: 'silver', label: 'Silver', dailySearchLimit: 20, dailyResultLimit: 500, dailyEmailLimit: 30 },
-  gold: { key: 'gold', label: 'Gold', dailySearchLimit: 50, dailyResultLimit: 1500, dailyEmailLimit: 50 },
-  premium: { key: 'premium', label: 'Premium', dailySearchLimit: 100, dailyResultLimit: 3000, dailyEmailLimit: 100 },
-  diamond: { key: 'diamond', label: 'Diamond', dailySearchLimit: null, dailyResultLimit: null, dailyEmailLimit: null }
+export const TIER_ALIASES = {
+  free: 'basic',
+  starter: 'silver',
+  pro: 'gold',
+  agency: 'premium'
 };
+
+export const USER_TIERS = {
+  basic: {
+    key: 'basic',
+    label: 'Basic',
+    displayLabel: 'Basic (Free)',
+    price: 'Free',
+    level: 1,
+    dailySearchLimit: 10,
+    dailyResultLimit: 50,
+    dailyEmailLimit: 20,
+    features: {
+      searchModes: ['all'],
+      stateExpansion: false,
+      maxFolders: 1,
+      opportunityFilter: false,
+      csvImportExport: false,
+      bulkEnrich: false,
+      auditCategories: ['score_only'],
+      aiPitch: 'basic',
+      outreachVariants: false,
+      solutionPack: 'locked',
+      inboxSolutionInsert: false,
+      attachments: false,
+      broadcast: false,
+      maxBroadcastRecipients: 0
+    }
+  },
+  silver: {
+    key: 'silver',
+    label: 'Silver',
+    displayLabel: 'Silver (Starter)',
+    price: '$29/mo',
+    level: 2,
+    dailySearchLimit: 40,
+    dailyResultLimit: 300,
+    dailyEmailLimit: 100,
+    features: {
+      searchModes: ['all', 'low'],
+      stateExpansion: false,
+      maxFolders: null,
+      opportunityFilter: true,
+      csvImportExport: false,
+      bulkEnrich: false,
+      auditCategories: ['bugs', 'seo'],
+      aiPitch: 'editable',
+      outreachVariants: false,
+      solutionPack: 'phase1',
+      inboxSolutionInsert: false,
+      attachments: true,
+      broadcast: false,
+      maxBroadcastRecipients: 0
+    }
+  },
+  gold: {
+    key: 'gold',
+    label: 'Gold',
+    displayLabel: 'Gold (Pro)',
+    price: '$79/mo',
+    level: 3,
+    dailySearchLimit: 150,
+    dailyResultLimit: 1000,
+    dailyEmailLimit: 400,
+    features: {
+      searchModes: ['all', 'low', 'shopify'],
+      stateExpansion: false,
+      maxFolders: null,
+      opportunityFilter: true,
+      csvImportExport: true,
+      bulkEnrich: false,
+      auditCategories: ['all', 'bugs', 'seo', 'performance', 'security'],
+      aiPitch: 'custom_prompt',
+      outreachVariants: true,
+      solutionPack: 'full',
+      inboxSolutionInsert: false,
+      attachments: true,
+      broadcast: true,
+      maxBroadcastRecipients: 50
+    }
+  },
+  premium: {
+    key: 'premium',
+    label: 'Premium',
+    displayLabel: 'Premium (Agency)',
+    price: '$199/mo',
+    level: 4,
+    dailySearchLimit: 500,
+    dailyResultLimit: 4000,
+    dailyEmailLimit: 2000,
+    features: {
+      searchModes: ['all', 'low', 'shopify'],
+      stateExpansion: true,
+      maxFolders: null,
+      opportunityFilter: true,
+      csvImportExport: true,
+      bulkEnrich: true,
+      auditCategories: ['all', 'bugs', 'seo', 'performance', 'security'],
+      aiPitch: 'custom_prompt',
+      outreachVariants: true,
+      solutionPack: 'downloadable',
+      inboxSolutionInsert: true,
+      attachments: true,
+      broadcast: true,
+      maxBroadcastRecipients: 250
+    }
+  },
+  diamond: {
+    key: 'diamond',
+    label: 'Diamond',
+    displayLabel: 'Diamond',
+    price: '$499/mo',
+    level: 5,
+    dailySearchLimit: null,
+    dailyResultLimit: null,
+    dailyEmailLimit: null,
+    features: {
+      searchModes: ['all', 'low', 'shopify'],
+      stateExpansion: true,
+      maxFolders: null,
+      opportunityFilter: true,
+      csvImportExport: true,
+      bulkEnrich: true,
+      auditCategories: ['all', 'bugs', 'seo', 'performance', 'security'],
+      aiPitch: 'custom_prompt',
+      outreachVariants: true,
+      solutionPack: 'downloadable',
+      inboxSolutionInsert: true,
+      attachments: true,
+      broadcast: true,
+      maxBroadcastRecipients: null
+    }
+  }
+};
+
+export function normalizeTierKey(rawTier = 'basic', email = '') {
+  if (String(email || '').trim().toLowerCase() === 'philipibitade@gmail.com') {
+    return 'diamond';
+  }
+  const cleaned = String(rawTier || 'basic').trim().toLowerCase();
+  const mapped = TIER_ALIASES[cleaned] || cleaned;
+  return Object.hasOwn(USER_TIERS, mapped) ? mapped : 'basic';
+}
 
 function todayUsageDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
 export function getUserQuotaStatus(userRecord = {}) {
-  const tierKey = String(userRecord?.tier || 'basic').toLowerCase();
+  const tierKey = normalizeTierKey(userRecord?.tier, userRecord?.email);
   const tier = USER_TIERS[tierKey] || USER_TIERS.basic;
   const today = todayUsageDate();
   const sameDay = userRecord?.usage_date === today;
@@ -282,6 +423,10 @@ export function getUserQuotaStatus(userRecord = {}) {
   return {
     tier: tier.key,
     label: tier.label,
+    displayLabel: tier.displayLabel,
+    price: tier.price,
+    level: tier.level,
+    features: tier.features,
     dailySearchLimit: tier.dailySearchLimit,
     dailyEmailLimit: tier.dailyEmailLimit,
     dailyResultLimit: tier.dailyResultLimit,
@@ -347,7 +492,7 @@ async function consumeQuota(userId, kind, refundDate = null, requested = 1) {
     const match = new URLSearchParams({
       id: 'eq.' + userId, usage_date: 'eq.' + record.usage_date,
       searches_today: 'eq.' + record.searches_today, emails_today: 'eq.' + record.emails_today,
-      results_today: 'eq.' + (record.results_today ?? 0), tier: 'eq.' + record.tier
+      results_today: 'eq.' + (record.results_today ?? 0)
     });
     const response = await fetch(supabaseUrl + '/rest/v1/jobhunta_users?' + match, {
       method: 'PATCH',
@@ -384,7 +529,7 @@ async function findUserByEmail(email) {
 async function createUserAccount({ name, email, password, senderService = '', tier = 'basic' }) {
   const normalizedEmail = String(email || '').trim().toLowerCase();
   const cleanName = String(name || '').trim();
-  const tierKey = Object.hasOwn(USER_TIERS, String(tier).toLowerCase()) ? String(tier).toLowerCase() : 'basic';
+  const tierKey = normalizeTierKey(tier, normalizedEmail);
   const userRecord = {
     id: randomUUID(),
     email: normalizedEmail,
@@ -1326,7 +1471,7 @@ async function searchOverpassFallback(cleanIndustry, city) {
   }));
 }
 
-async function streamSearch(res, industry, city, rankMode = 'all', reserveResults, onFailure) {
+async function streamSearch(res, industry, city, rankMode = 'all', reserveResults, onFailure, tierLevel = 5) {
   const cleanIndustry = (industry || '').trim();
   if (!/^[\p{L}\p{M}\p{N} .,'’&/()-]{2,50}$/u.test(cleanIndustry) ||
       !/^[\p{L}\p{M}\p{N} .,'’()-]{2,75}$/u.test(city)) {
@@ -1347,7 +1492,15 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
     }
   };
 
-  const subLocations = await resolveSearchLocations(city);
+  let subLocations = await resolveSearchLocations(city);
+  if (subLocations.length > 1 && tierLevel < 4) {
+    subLocations = [city];
+    sendEvent({
+      type: 'status',
+      totalFound: 0,
+      message: `Searching "${city}" (State-wide multi-city expansion unlocks on Premium / Agency & Diamond plans)…`
+    });
+  }
   const isStateBreakdown = subLocations.length > 1;
   const offsetConfigs = getSearchOffsets(rankMode === 'shopify' ? 'low' : rankMode, isStateBreakdown);
   const seen = new Set();
@@ -2818,15 +2971,25 @@ export async function handleRequest(req, res) {
     }
     if (req.method === 'GET' && path === '/api/search') {
       if (!session.userId) fail(401, 'Sign in to search for businesses.');
+      const userRecord = await findUserById(session.userId);
+      const quotaStatus = getUserQuotaStatus(userRecord);
+      const tierLevel = quotaStatus.level || 1;
+      const rankMode = url.searchParams.get('rankMode') || 'all';
+      if (rankMode === 'low' && tierLevel < 2) {
+        fail(403, 'Low-Ranking Business Discovery (Page 2+ / Rank #11+) requires the Silver (Starter) plan or higher.');
+      }
+      if (rankMode === 'shopify' && tierLevel < 3) {
+        fail(403, 'Shopify & E-Commerce Store Discovery (site:myshopify.com) requires the Gold (Pro) plan or higher.');
+      }
       if (url.searchParams.get('expanded') === '1') return await streamDiscovery(res, url.searchParams, session.userId);
       const city = (url.searchParams.get('city') || '').trim();
       const industry = validateSearch(url.searchParams.get('industry'), city);
       const chargedOn = await consumeQuota(session.userId, 'search');
-      const rankMode = url.searchParams.get('rankMode') || 'all';
       if (url.searchParams.get('stream') === '1') {
         return await streamSearch(res, industry, city, rankMode,
           count => consumeQuota(session.userId, 'result', null, count),
-          () => consumeQuota(session.userId, 'search', chargedOn).catch(console.error));
+          () => consumeQuota(session.userId, 'search', chargedOn).catch(console.error),
+          tierLevel);
       }
       try {
         const businesses = await search(industry, city);
@@ -2848,25 +3011,43 @@ export async function handleRequest(req, res) {
     }
     if (req.method === 'POST' && path === '/api/audit') {
       if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
+      const userRecord = await findUserById(session.userId);
+      const quotaStatus = getUserQuotaStatus(userRecord);
+      const tierLevel = quotaStatus.level || 1;
       const { website, lead = {}, extraContext = '' } = await readJson(req);
       const targetUrl = String(website || lead?.website || '').trim();
       if (!targetUrl) fail(400, 'Provide a website URL to audit.');
       const ws = getWorkspace(session.userId || 'default');
       const enriched = await fetchWebsiteEmails(targetUrl);
       const mergedLead = { ...lead, ...enriched, name: lead?.name || enriched.brandName };
-      const outreach = generateClientOutreach(enriched.auditReport, mergedLead, ws.settings, extraContext);
+      const outreach = generateClientOutreach(enriched.auditReport, mergedLead, ws.settings, tierLevel >= 3 ? extraContext : '');
+      const gatedFindings = tierLevel === 1
+        ? (enriched.auditReport.findings || []).slice(0, 1)
+        : tierLevel === 2
+          ? (enriched.auditReport.findings || []).filter(f => f.category === 'bugs' || f.category === 'seo')
+          : (enriched.auditReport.findings || []);
       return json({
         ...enriched,
         auditReport: {
           ...enriched.auditReport,
+          findings: gatedFindings,
+          totalUnlockedFindings: gatedFindings.length,
+          totalDiscoveredFindings: (enriched.auditReport.findings || []).length,
+          tierLevel,
           outreach
         }
       });
     }
     if (req.method === 'POST' && path === '/api/analyze') {
       if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
+      const userRecord = await findUserById(session.userId);
+      const quotaStatus = getUserQuotaStatus(userRecord);
+      const tierLevel = quotaStatus.level || 1;
       const { lead, userIssues, extraContext } = await readJson(req);
       if (!lead || typeof lead !== 'object') fail(400, 'Provide business details to analyze.');
+      if (String(extraContext || '').trim() && tierLevel < 3) {
+        fail(403, 'Custom AI instructions & prompt refinement require the Gold (Pro) plan or higher.');
+      }
       let enrichedLead = { ...lead };
       if (enrichedLead.website && !enrichedLead.auditReport) {
         try {
@@ -2885,7 +3066,7 @@ export async function handleRequest(req, res) {
         enrichedLead,
         ws.settings,
         userIssues ?? enrichedLead.userSpottedIssues ?? '',
-        extraContext ?? enrichedLead.aiExtraContext ?? ''
+        tierLevel >= 3 ? (extraContext ?? enrichedLead.aiExtraContext ?? '') : ''
       );
       return json({
         ...brief,
@@ -2894,7 +3075,15 @@ export async function handleRequest(req, res) {
     }
     if (req.method === 'POST' && path === '/api/send') {
       if (!session.userId) fail(401, 'Sign in to send email.');
-      return json(await send(session, await readJson(req, 15 * 1024 * 1024)));
+      const payload = await readJson(req, 15 * 1024 * 1024);
+      if (Array.isArray(payload.attachments) && payload.attachments.length > 0) {
+        const userRecord = await findUserById(session.userId);
+        const quotaStatus = getUserQuotaStatus(userRecord);
+        if ((quotaStatus.level || 1) < 2) {
+          fail(403, 'Email file & image attachments require the Silver (Starter) plan or higher.');
+        }
+      }
+      return json(await send(session, payload));
     }
     if (req.method === 'GET' && path === '/api/outreach') {
       if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
