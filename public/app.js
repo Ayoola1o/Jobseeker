@@ -3148,11 +3148,16 @@ $('#tab-login').onclick = () => setAuthMode('login');
 $('#tab-signup').onclick = () => setAuthMode('signup');
 $('#auth-switch-btn').onclick = () => setAuthMode(authMode === 'login' ? 'signup' : 'login');
 
-function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMailbox = null) {
+function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMailbox = null, { isHydration = false } = {}) {
   currentUser = user;
   account.user = user;
-  account.mailbox = serverMailbox;
+  if (serverMailbox !== undefined) account.mailbox = serverMailbox;
   document.body.classList.remove('auth-checking', 'auth-locked');
+  try {
+    localStorage.setItem('jobhunta.activeUser', JSON.stringify({
+      id: user.id, name: user.name, email: user.email, tier: user.tier, usage: user.usage, createdAt: user.createdAt || null
+    }));
+  } catch {}
 
   const sidebarUser = $('#sidebar-user');
   if (sidebarUser) sidebarUser.replaceChildren(create('i'), document.createTextNode(' ' + (user.name || user.email)));
@@ -3168,18 +3173,28 @@ function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMai
   };
   if (!Array.isArray(settings.templates) || !settings.templates.length) settings.templates = defaultTemplates;
 
-  results = []; resultsPage = 1; leadsPage = 1; activeBusinessId = null; selectedInboxKey = null; messages.clear();
-  $('#results').replaceChildren(empty('search', 'Start a search', 'Choose or enter an industry and enter the city you want to explore.'));
-  $('#save-all').hidden = true; $('#results-pagination').hidden = true; $('#results-count').textContent = '';
-
-  persist();
+  if (!isHydration) {
+    results = []; resultsPage = 1; leadsPage = 1; activeBusinessId = null; selectedInboxKey = null; messages.clear();
+    $('#results').replaceChildren(empty('search', 'Start a search', 'Choose or enter an industry and enter the city you want to explore.'));
+    $('#save-all').hidden = true; $('#results-pagination').hidden = true; $('#results-count').textContent = '';
+    persist();
+  } else {
+    updateHeaderBadges();
+    renderDashboard();
+    renderLeads();
+    renderInbox();
+    renderBroadcast();
+    renderProfile();
+    renderSettings();
+  }
   renderAccount();
   navigate();
-  refresh();
+  if (!isHydration) refresh();
 }
 
 function showAuthScreen() {
   currentUser = null; leads = []; results = []; activeBusinessId = null; selectedInboxKey = null; messages.clear();
+  try { localStorage.removeItem('jobhunta.activeUser'); } catch {}
   setAuthMode('login');
   document.body.classList.remove('auth-checking');
   document.body.classList.add('auth-locked');
@@ -3216,6 +3231,17 @@ if (oauthResult) {
   history.replaceState(null, '', location.pathname + location.hash);
 }
 
+// Instant optimistic hydration on refresh so logged-in users never see a login flash or blank delay
+try {
+  const cachedUserRaw = localStorage.getItem('jobhunta.activeUser');
+  if (cachedUserRaw && !document.body.classList.contains('auth-locked')) {
+    const cachedUser = JSON.parse(cachedUserRaw);
+    if (cachedUser?.id && cachedUser?.email) {
+      applyUserSession(cachedUser, [], {}, undefined, { isHydration: true });
+    }
+  }
+} catch {}
+
 try {
   account = await api('/api/status');
   const datalist = $('#industries');
@@ -3224,6 +3250,6 @@ try {
   else showAuthScreen();
   setInterval(() => { if (currentUser && !document.hidden) refresh(); }, 60000);
 } catch (error) {
-  showAuthScreen();
+  if (!currentUser) showAuthScreen();
   report(error.message, true);
 }

@@ -2257,7 +2257,13 @@ export async function handleRequest(req, res) {
     const path = rawPath.startsWith('/') ? rawPath : '/' + rawPath;
     if (req.method === 'GET' && Object.hasOwn(files, path)) {
       const [file, contentType] = files[path];
-      const content = await readFile(new URL('./public/' + file, import.meta.url));
+      let content = await readFile(new URL('./public/' + file, import.meta.url));
+      if (path === '/') {
+        const rawUserCookie = req.headers.cookie?.match(/(?:^|;\s*)jobhunta_user=([\w.-]+)/)?.[1] || '';
+        const cookieUser = unsealCookie(rawUserCookie);
+        const bodyClass = (cookieUser?.id && cookieUser?.email) ? '' : 'auth-locked';
+        content = Buffer.from(content.toString('utf8').replace('class="auth-checking"', bodyClass ? `class="${bodyClass}"` : ''), 'utf8');
+      }
       res.writeHead(200, { 'Content-Type': contentType });
       return res.end(content);
     }
