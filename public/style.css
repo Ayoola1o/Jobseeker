@@ -306,6 +306,25 @@ table.data-table tr:last-child td{border-bottom:0}
 .attach-chip small{color:var(--muted);flex-shrink:0}
 .attach-rm{background:transparent;border:0;color:var(--muted);padding:2px 4px;border-radius:6px}
 .attach-rm:hover{background:#fdecec;color:var(--danger)}
+/* Website Audit & Client Lead Generator UI */
+.audit-score-grid{display:grid;grid-template-columns:1.25fr repeat(4,1fr);gap:14px}
+.audit-score-card{background:white;border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;justify-content:space-between;gap:6px}
+.audit-score-card.hero{background:linear-gradient(135deg,#042e2a 0%,#08483e 100%);color:white;border-color:#0b5246}
+.audit-score-card.hero small{color:#bfe0d8}
+.audit-score-num{font-size:32px;font-weight:800;letter-spacing:-.04em;line-height:1.05}
+.audit-score-num.good{color:#059669}
+.audit-score-num.warn{color:#d97706}
+.audit-score-num.bad{color:#dc2626}
+.audit-score-card.hero .audit-score-num{color:#34d399;font-size:38px}
+.finding-list{display:grid;gap:12px}
+.finding-card{border:1px solid var(--line);border-radius:12px;padding:15px 16px;background:white;display:grid;gap:8px}
+.finding-card.sev-Critical{border-left:4px solid #dc2626}
+.finding-card.sev-Warning{border-left:4px solid #d97706}
+.finding-card.sev-Info{border-left:4px solid #2563eb}
+.finding-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.finding-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;font-size:14.5px;color:var(--ink)}
+.finding-meta{display:grid;gap:4px;font-size:13px;color:var(--muted)}
+.finding-meta strong{color:var(--ink)}
 .inline-bar{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
 
 /* Split-Pane Inbox (Figma Desktop & Mobile Inbox) */
@@ -433,7 +452,7 @@ dialog .heading{margin:0 0 16px}
 
 @media(max-width:1100px){
   .dossier-overview-grid,.profile-info-grid{grid-template-columns:1fr}
-  .plan-cards-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .plan-cards-grid,.audit-score-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 
 @media(max-width:1040px){

@@ -1,5 +1,6 @@
 import { readBusinessCsv, writeBusinessCsv } from './csv.mjs';
 import { iconEl, iconSvg } from './icons.mjs';
+import { generateClientOutreach } from './audit.mjs';
 
 const $ = selector => document.querySelector(selector);
 const dialog = $('#dialog');
@@ -62,6 +63,8 @@ let activeSearchFolder = '';
 let autoPersistTimer = null;
 let activeBusinessId = null;
 let dossierTab = 'overview';
+let auditCategoryFilter = 'all';
+let auditOutreachTab = 'coldEmail';
 let settingsTab = 'integrations';
 let selectedInboxKey = null;
 let inboxFilter = 'all';
@@ -359,6 +362,9 @@ function applyEnrichmentToItem(item, found) {
   }
   if (found.signals) {
     item.signals = { ...(item.signals || {}), ...found.signals };
+  }
+  if (found.auditReport) {
+    item.auditReport = found.auditReport;
   }
   const savedLead = duplicate(item);
   if (savedLead && savedLead !== item) {
@@ -1216,7 +1222,12 @@ function renderBusinessPage() {
   queueLeft.append(backBtn, prevBtn, nextBtn);
 
   const queueRight = create('div', '', 'actions');
-  if (lead.website) queueRight.append(btnWithIcon('refresh', 'Comb Site', event => enrichItemEmail(lead, event.currentTarget), 'btn-soft'));
+  if (lead.website) {
+    queueRight.append(
+      btnWithIcon('sparkles', 'Website Audit', () => { dossierTab = 'audit'; renderBusinessPage(); }, 'btn-soft'),
+      btnWithIcon('refresh', 'Comb Site', event => enrichItemEmail(lead, event.currentTarget), true)
+    );
+  }
   queueRight.append(
     btnWithIcon('mail', 'Draft Email', () => compose(lead)),
     button('Delete', () => deleteLead(lead), 'danger')
@@ -1261,6 +1272,7 @@ function renderBusinessPage() {
   const tabsBar = create('div', '', 'dossier-tabs');
   const tabDefs = [
     ['overview', 'Overview'],
+    ['audit', `Website Audit${lead.auditReport ? ` (${lead.auditReport.overallScore}/100)` : ''}`],
     ['tech', 'Tech Stack'],
     ['socials', 'Social Links'],
     ['insights', 'Insights & History'],
@@ -1374,7 +1386,241 @@ function renderBusinessPage() {
     contentWrap.append(ov3, pitchBanner, crmCard);
   } else {
     const tabBody = create('div', '', 'dossier-grid');
-    if (dossierTab === 'tech') {
+    if (dossierTab === 'audit') {
+      const auditCard = create('article', '', 'surface dossier-card full');
+      const topRow = create('div', '', 'heading');
+      topRow.style.margin = '0';
+      const titleBox = create('div');
+      titleBox.append(
+        create('h2', 'Passive Website Audit & Client Lead Generator'),
+        create('p', 'Non-intrusive technical, SEO, performance & security hygiene audit with tailored client outreach variants.', 'small')
+      );
+      topRow.append(titleBox);
+
+      const urlForm = create('form', '', 'inline-bar');
+      const urlInput = field('Target Website URL to Audit', 'auditUrl', lead.website || '', {
+        type: 'url',
+        required: true,
+        placeholder: 'https://example.com'
+      });
+      const runBtn = create('button', '');
+      runBtn.type = 'submit';
+      runBtn.append(iconEl('sparkles', 15), document.createTextNode(lead.auditReport ? 'Re-Run Full Audit' : 'Run Website Audit'));
+      urlForm.append(urlInput, runBtn);
+      urlForm.onsubmit = async e => {
+        e.preventDefault();
+        let targetUrl = urlInput.lastChild.value.trim();
+        if (!targetUrl) return;
+        if (!/^https?:\/\//i.test(targetUrl)) targetUrl = 'https://' + targetUrl;
+        lead.website = targetUrl;
+        runBtn.disabled = true;
+        runBtn.textContent = 'Running multi-layer audit…';
+        try {
+          const res = await api('/api/audit', { website: targetUrl, lead, extraContext: lead.aiExtraContext || '' });
+          lead.scanned = true;
+          applyEnrichmentToItem(lead, res);
+          persist();
+          pushNotification({
+            icon: 'sparkles',
+            tone: 'blue',
+            title: `Audited ${lead.name} (${res.auditReport?.overallScore ?? 0}/100)`,
+            sub: `${res.auditReport?.counts?.total || 0} findings across Bugs, SEO, Speed & Security`,
+            targetHash: '#business'
+          });
+          report(`Completed website audit for ${lead.name}: Health Score ${res.auditReport?.overallScore ?? 0}/100.`);
+        } catch (err) {
+          report(err.message, true);
+          runBtn.disabled = false;
+          runBtn.replaceChildren(iconEl('sparkles', 15), document.createTextNode('Run Website Audit'));
+        }
+      };
+      auditCard.append(topRow, urlForm);
+
+      const reportData = lead.auditReport;
+      if (!reportData) {
+        auditCard.append(empty('sparkles', 'No website audit run yet', 'Enter or confirm the business website URL above and click "Run Website Audit" to inspect Bugs, SEO, Performance, and Security Hygiene.'));
+      } else {
+        const scoreTone = s => (s >= 80 ? 'good' : s >= 55 ? 'warn' : 'bad');
+        const scoreGrid = create('div', '', 'audit-score-grid');
+
+        const heroScore = create('div', '', 'audit-score-card hero');
+        heroScore.append(
+          create('small', 'Overall Health Score'),
+          create('div', `${reportData.overallScore}/100`, 'audit-score-num'),
+          create('small', `${reportData.counts?.critical || 0} Critical · ${reportData.counts?.warning || 0} Warnings · ${reportData.ttfbMs || 0}ms TTFB`)
+        );
+        scoreGrid.append(heroScore);
+
+        const catDefs = [
+          ['bugs', 'Bugs & UX', reportData.scores?.bugs ?? 80],
+          ['seo', 'SEO & AI Readability', reportData.scores?.seo ?? 80],
+          ['performance', 'Performance & CWV', reportData.scores?.performance ?? 80],
+          ['security', 'Security Hygiene', reportData.scores?.security ?? 80]
+        ];
+        for (const [cKey, cLabel, cScore] of catDefs) {
+          const sc = create('div', '', 'audit-score-card');
+          const cCount = (reportData.findings || []).filter(f => f.category === cKey).length;
+          sc.append(
+            create('small', cLabel, 'small'),
+            create('div', `${cScore}/100`, `audit-score-num ${scoreTone(cScore)}`),
+            create('small', `${cCount} finding${cCount === 1 ? '' : 's'}`, 'small')
+          );
+          sc.style.cursor = 'pointer';
+          sc.onclick = () => { auditCategoryFilter = cKey; renderBusinessPage(); };
+          scoreGrid.append(sc);
+        }
+
+        // Detected Platform & Stack Fingerprinting Bar
+        const stackSec = create('div', '', 'ai-section stack');
+        const stHead = create('div', '', 'heading');
+        stHead.style.margin = '0';
+        stHead.append(
+          create('h3', '1. Platform & Tech Stack Fingerprinting'),
+          create('span', `Primary: ${reportData.stack?.platform || lead.platform || 'Custom Website'}`, 'pill')
+        );
+        const stBadges = create('div', '', 'actions');
+        const allTech = reportData.stack?.techStack?.length ? reportData.stack.techStack : (lead.techStack || []);
+        if (allTech.length) {
+          for (const t of allTech) stBadges.append(create('span', t, 'pill neutral'));
+        } else {
+          stBadges.append(create('span', 'Custom HTML/JS (no third-party CMS signature)', 'small'));
+        }
+        if (reportData.stack?.evidence?.length) {
+          stackSec.append(stHead, stBadges, create('small', `Fingerprints: ${reportData.stack.evidence.join(' · ')}`, 'small'));
+        } else {
+          stackSec.append(stHead, stBadges);
+        }
+
+        // Categorized Findings Explorer
+        const findSec = create('div', '', 'ai-section stack');
+        const fHead = create('div', '', 'heading');
+        fHead.style.margin = '0';
+        fHead.append(create('h3', `2. Multi-Layer Audit Findings (${reportData.findings?.length || 0})`));
+        const catTabs = create('div', '', 'preset-pills');
+        const allFindings = reportData.findings || [];
+        [
+          ['all', `All (${allFindings.length})`],
+          ['bugs', `Bugs & UX (${allFindings.filter(f => f.category === 'bugs').length})`],
+          ['seo', `SEO & AI (${allFindings.filter(f => f.category === 'seo').length})`],
+          ['performance', `Performance (${allFindings.filter(f => f.category === 'performance').length})`],
+          ['security', `Security Hygiene (${allFindings.filter(f => f.category === 'security').length})`]
+        ].forEach(([k, lbl]) => {
+          const b = create('button', lbl, 'preset-pill' + (auditCategoryFilter === k ? ' active' : ''));
+          b.type = 'button';
+          b.onclick = () => { auditCategoryFilter = k; renderBusinessPage(); };
+          catTabs.append(b);
+        });
+        fHead.append(catTabs);
+        findSec.append(fHead);
+
+        const visibleFindings = auditCategoryFilter === 'all'
+          ? allFindings
+          : allFindings.filter(f => f.category === auditCategoryFilter);
+
+        const fList = create('div', '', 'finding-list');
+        if (!visibleFindings.length) {
+          fList.append(create('p', 'No lapses detected in this category!', 'small'));
+        } else {
+          for (const f of visibleFindings) {
+            const fc = create('div', '', `finding-card sev-${f.severity}`);
+            const fh = create('div', '', 'finding-head');
+            const ft = create('div', '', 'finding-title');
+            const sevClass = f.severity === 'Critical' ? 'pill warn' : f.severity === 'Warning' ? 'pill wait' : 'pill neutral';
+            ft.append(create('span', f.severity, sevClass), create('span', f.category.toUpperCase(), 'pill neutral'), document.createTextNode(f.title));
+            const addIssueBtn = button('+ Add to AI Pitch', () => {
+              const cur = (lead.userSpottedIssues || '').trim();
+              const line = `${f.title} (${f.businessImpact})`;
+              if (!cur.includes(f.title)) {
+                lead.userSpottedIssues = cur ? `${cur}\n${line}` : line;
+                persist();
+              }
+              report(`Added "${f.title}" to your AI pitch issues.`);
+            }, 'btn-soft');
+            addIssueBtn.style.padding = '5px 10px';
+            addIssueBtn.style.fontSize = '12px';
+            fh.append(ft, addIssueBtn);
+
+            const fm = create('div', '', 'finding-meta');
+            const dRow = create('div'); dRow.append(create('strong', 'Technical Detail: '), document.createTextNode(f.detail));
+            const iRow = create('div'); iRow.append(create('strong', 'Business Impact: '), document.createTextNode(f.businessImpact));
+            const rRow = create('div'); rRow.append(create('strong', 'Fix Recommendation: '), document.createTextNode(f.recommendation));
+            fm.append(dRow, iRow, rRow);
+            fc.append(fh, fm);
+            fList.append(fc);
+          }
+        }
+        findSec.append(fList);
+
+        // Client Outreach Generator (Executive Summary + 4 Variants)
+        const outreachPkg = reportData.outreach || generateClientOutreach(reportData, lead, settings, lead.aiExtraContext || '');
+        const outSec = create('div', '', 'ai-section stack');
+        const outHead = create('div', '', 'heading');
+        outHead.style.margin = '0';
+        outHead.append(create('h3', '3. Personalized Client Outreach Generator'));
+
+        const variantTabs = create('div', '', 'preset-pills');
+        [
+          ['coldEmail', 'Short Cold Email (<120w)'],
+          ['detailedEmail', 'Detailed Audit Email'],
+          ['dmMessage', 'LinkedIn / WhatsApp DM'],
+          ['loomTalkingPoints', 'Loom / Call Script']
+        ].forEach(([vKey, vLbl]) => {
+          const vb = create('button', vLbl, 'preset-pill' + (auditOutreachTab === vKey ? ' active' : ''));
+          vb.type = 'button';
+          vb.onclick = () => { auditOutreachTab = vKey; renderBusinessPage(); };
+          variantTabs.append(vb);
+        });
+        outHead.append(variantTabs);
+
+        const execBox = create('div', '', 'sig-preview');
+        execBox.append(create('small', 'Executive Summary'), document.createTextNode(outreachPkg.executiveSummary));
+
+        const activeVariant = outreachPkg.variants?.[auditOutreachTab] || outreachPkg.variants?.coldEmail;
+        const isEmailVariant = typeof activeVariant === 'object' && activeVariant !== null;
+
+        let subjField = null;
+        if (isEmailVariant) {
+          subjField = field('Subject Line (Editable)', 'auditOutSubj', activeVariant.subject, { maxLength: 160 });
+        }
+        const bodyField = field(
+          isEmailVariant ? 'Outreach Email Body (Editable)' : 'Message / Script (Editable)',
+          'auditOutBody',
+          isEmailVariant ? activeVariant.body : String(activeVariant || ''),
+          { type: 'textarea', maxLength: 16000 }
+        );
+        bodyField.lastChild.style.minHeight = '200px';
+
+        const outActs = create('div', '', 'actions');
+        if (isEmailVariant) {
+          outActs.append(
+            btnWithIcon('mail', 'Open in Gmail Composer & Send', () => {
+              compose(lead, null, null, {
+                subject: subjField.lastChild.value.trim(),
+                body: bodyField.lastChild.value
+              });
+            })
+          );
+        }
+        outActs.append(
+          btnWithIcon('copy', 'Copy Message', async () => {
+            const textToCopy = isEmailVariant
+              ? `${subjField.lastChild.value.trim()}\n\n${bodyField.lastChild.value}`
+              : bodyField.lastChild.value;
+            try {
+              await navigator.clipboard.writeText(textToCopy);
+              report('Copied outreach message to clipboard.');
+            } catch {}
+          }, 'btn-soft')
+        );
+
+        outSec.append(outHead, execBox);
+        if (subjField) outSec.append(subjField);
+        outSec.append(bodyField, outActs);
+
+        auditCard.append(scoreGrid, stackSec, findSec, outSec);
+      }
+      tabBody.append(auditCard);
+    } else if (dossierTab === 'tech') {
       const platCard = create('article', '', 'surface dossier-card');
       platCard.append(create('h2', 'Platform & Tech Stack'));
       platCard.append(

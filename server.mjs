@@ -1,5 +1,6 @@
 import { normalizeLeadProfiles } from './public/qualification.mjs';
 import { platformDomains, searchList, googleQueries, publicWebsite, businessKeys, websiteIdentity } from './public/discovery.mjs';
+import { detectPlatform, analyzePageAudit, generateClientOutreach } from './public/audit.mjs';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, createHash, createCipheriv, createDecipheriv, scryptSync, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -522,6 +523,7 @@ const files = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/icons.mjs': ['icons.mjs', 'text/javascript; charset=utf-8'],
+  '/audit.mjs': ['audit.mjs', 'text/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
   '/lucide.mjs': ['lucide.mjs', 'text/javascript; charset=utf-8'],
   '/LUCIDE-LICENSE.txt': ['LUCIDE-LICENSE.txt', 'text/plain; charset=utf-8'],
@@ -1992,7 +1994,11 @@ async function fetchWebsiteEmails(websiteUrl) {
   const base = await assertSafePublicUrl(websiteUrl);
   const fetchHtml = async targetUrl => {
     let target = await assertSafePublicUrl(String(targetUrl));
+  let homepageMeta = { status: 200, ttfbMs: 0, headers: {} };
+  const fetchHtml = async (url, captureMeta = false) => {
+    let target = await assertSafePublicUrl(url);
     let response;
+    const t0 = Date.now();
     for (let redirects = 0; redirects <= 3; redirects++) {
       response = await fetch(target, {
         headers: {
@@ -2007,6 +2013,13 @@ async function fetchWebsiteEmails(websiteUrl) {
       if (!next || redirects === 3) return '';
       target = await assertSafePublicUrl(new URL(next, target).href);
     }
+    if (captureMeta && response) {
+      homepageMeta = {
+        status: response.status,
+        ttfbMs: Date.now() - t0,
+        headers: Object.fromEntries(response.headers.entries())
+      };
+    }
     if (!response.ok) return '';
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) return '';
@@ -2016,7 +2029,7 @@ async function fetchWebsiteEmails(websiteUrl) {
 
   let homepageHtml = '';
   try {
-    homepageHtml = await fetchHtml(base.href);
+    homepageHtml = await fetchHtml(base.href, true);
   } catch {
     fail(502, 'Could not reach the business website.');
   }
@@ -2098,6 +2111,84 @@ async function fetchWebsiteEmails(websiteUrl) {
       }
     }
   }
+
+  // Passive technical, SEO, performance & security hygiene checks (robots.txt, sitemap.xml, sample link/asset status)
+  const probeStatus = async targetHref => {
+    try {
+      const safeTarget = await assertSafePublicUrl(targetHref);
+      const r = await fetch(safeTarget, {
+        method: 'GET',
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; JobhuntaAuditor/1.1)' },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(3200)
+      });
+      return r.status;
+    } catch {
+      return 0;
+    }
+  };
+
+  let robotsTxtOk = true;
+  let sitemapXmlOk = true;
+  const brokenLinks = [];
+  const brokenAssets = [];
+
+  if (homepageHtml) {
+    const sampleLinks = [];
+    for (const m of homepageHtml.matchAll(/<a\b[^>]*href=["']([^"'#]+)["']/gi)) {
+      try {
+        const u = new URL(m[1], base.href);
+        if (u.hostname === base.hostname && ['http:', 'https:'].includes(u.protocol) && u.href !== base.href && !sampleLinks.includes(u.href)) {
+          sampleLinks.push(u.href);
+          if (sampleLinks.length >= 3) break;
+        }
+      } catch {}
+    }
+    const sampleAssets = [];
+    for (const m of homepageHtml.matchAll(/<img\b[^>]*src=["']([^"']+)["']/gi)) {
+      if (m[1].startsWith('data:')) continue;
+      try {
+        const u = new URL(m[1], base.href);
+        if (u.hostname === base.hostname && ['http:', 'https:'].includes(u.protocol) && !sampleAssets.includes(u.href)) {
+          sampleAssets.push(u.href);
+          if (sampleAssets.length >= 3) break;
+        }
+      } catch {}
+    }
+
+    const [robStatus, siteStatus, ...probeResults] = await Promise.all([
+      probeStatus(new URL('/robots.txt', base.origin).href),
+      probeStatus(new URL('/sitemap.xml', base.origin).href),
+      ...sampleLinks.map(async u => ({ kind: 'link', url: u, status: await probeStatus(u) })),
+      ...sampleAssets.map(async u => ({ kind: 'asset', url: u, status: await probeStatus(u) }))
+    ]);
+    robotsTxtOk = robStatus >= 200 && robStatus < 400;
+    sitemapXmlOk = siteStatus >= 200 && siteStatus < 400;
+    for (const p of probeResults) {
+      if (p.status >= 400) {
+        if (p.kind === 'link') brokenLinks.push({ url: p.url, status: p.status });
+        else brokenAssets.push({ url: p.url, status: p.status });
+      }
+    }
+  }
+
+  const auditReport = analyzePageAudit({
+    url: base.href,
+    status: homepageMeta.status,
+    ttfbMs: homepageMeta.ttfbMs,
+    headers: homepageMeta.headers,
+    html: homepageHtml,
+    robotsTxtOk,
+    sitemapXmlOk,
+    brokenLinks,
+    brokenAssets
+  });
+
+  const mergedTech = [...new Set([...(insights.techStack || []), ...(auditReport.stack?.techStack || [])])];
+  const detectedPlat = (insights.platform && insights.platform !== 'Custom / Website')
+    ? insights.platform
+    : (auditReport.stack?.platform || insights.platform);
+
   return {
     website: base.href,
     brandName: insights.brandName || insights.siteTitle?.split(/[|\-–—]/)[0]?.trim() || base.hostname.replace(/^www\./, ''),
@@ -2119,13 +2210,14 @@ async function fetchWebsiteEmails(websiteUrl) {
     metaDescription: insights.metaDescription,
     headings: insights.headings,
     aboutSummary: insights.aboutSummary,
-    platform: insights.platform,
-    platformEvidence: insights.platformEvidence,
+    platform: detectedPlat,
+    platformEvidence: insights.platformEvidence?.length ? insights.platformEvidence : (auditReport.stack?.evidence || []),
     platformConfidence: insights.platformConfidence,
-    techStack: insights.techStack,
-    shopifyMeta: insights.shopifyMeta,
+    techStack: mergedTech,
+    shopifyMeta: insights.shopifyMeta || auditReport.stack?.shopifyMeta || null,
     shopifyProducts,
-    signals: insights.signals
+    signals: insights.signals,
+    auditReport
   };
 }
 
@@ -2680,6 +2772,23 @@ export async function handleRequest(req, res) {
       const { website } = await readJson(req);
       if (typeof website !== 'string' || !website.trim()) fail(400, 'Provide a website URL to scan.');
       return json(await fetchWebsiteEmails(website.trim()));
+    }
+    if (req.method === 'POST' && path === '/api/audit') {
+      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
+      const { website, lead = {}, extraContext = '' } = await readJson(req);
+      const targetUrl = String(website || lead?.website || '').trim();
+      if (!targetUrl) fail(400, 'Provide a website URL to audit.');
+      const ws = getWorkspace(session.userId || 'default');
+      const enriched = await fetchWebsiteEmails(targetUrl);
+      const mergedLead = { ...lead, ...enriched, name: lead?.name || enriched.brandName };
+      const outreach = generateClientOutreach(enriched.auditReport, mergedLead, ws.settings, extraContext);
+      return json({
+        ...enriched,
+        auditReport: {
+          ...enriched.auditReport,
+          outreach
+        }
+      });
     }
     if (req.method === 'POST' && path === '/api/analyze') {
       if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');

@@ -3,6 +3,7 @@ import { assessLead, industryAngle, normalizeLeadProfiles } from '../public/qual
 import { googleQueries, businessKeys } from '../public/discovery.mjs';
 import assert from 'node:assert/strict';
 import { readBusinessCsv, writeBusinessCsv } from '../public/csv.mjs';
+import { detectPlatform, analyzePageAudit, generateClientOutreach } from '../public/audit.mjs';
 import {
   extractMessageBody,
   outreachMessageKind,
@@ -363,4 +364,50 @@ test('parseBingWebSearchHtml extracts site:myshopify.com and custom-domain store
   assert.equal(results[0].shopifyMeta?.myshopifyDomain, 'lagosglow.myshopify.com');
   assert.equal(results[1].name, 'Velvet Boutique');
   assert.equal(results[1].website, 'https://velvetboutique.com');
+});
+
+test('detectPlatform, analyzePageAudit, and generateClientOutreach perform multi-layer audit and generate outreach variants', () => {
+  const sampleHtml = `
+    <!doctype html>
+    <html>
+      <head>
+        <title>Short</title>
+        <script src="https://cdn.shopify.com/s/files/1/shop.js"></script>
+        <script src="http://insecure.example.com/jquery-1.11.3.min.js"></script>
+      </head>
+      <body>
+        <img src="/hero.jpg">
+        <form><input type="text"></form>
+      </body>
+    </html>
+  `;
+  const stack = detectPlatform(sampleHtml, 'https://demo.myshopify.com', {});
+  assert.equal(stack.platform, 'Shopify');
+  assert.ok(stack.cms.includes('Shopify'));
+
+  const audit = analyzePageAudit({
+    url: 'https://demo.myshopify.com',
+    status: 200,
+    ttfbMs: 950,
+    headers: {},
+    html: sampleHtml,
+    robotsTxtOk: false,
+    sitemapXmlOk: false,
+    brokenLinks: [{ url: 'https://demo.myshopify.com/dead', status: 404 }],
+    brokenAssets: []
+  });
+  assert.ok(audit.overallScore < 85);
+  assert.ok(audit.counts.critical >= 3);
+  assert.ok(audit.findings.some(f => f.category === 'bugs' && f.title.includes('viewport')));
+  assert.ok(audit.findings.some(f => f.category === 'bugs' && f.title.includes('broken internal')));
+  assert.ok(audit.findings.some(f => f.category === 'seo' && f.title.includes('meta name="description"')));
+  assert.ok(audit.findings.some(f => f.category === 'performance' && f.title.includes('render-blocking')));
+  assert.ok(audit.findings.some(f => f.category === 'security' && f.title.includes('mixed-content')));
+
+  const outreach = generateClientOutreach(audit, { name: 'Demo Shop', city: 'Lagos', industry: 'Fashion' }, { senderName: 'Ayoola', senderService: 'Shopify CRO' });
+  assert.ok(outreach.executiveSummary.includes('Demo Shop (Shopify)'));
+  assert.ok(outreach.variants.coldEmail.body.includes('Shopify'));
+  assert.ok(outreach.variants.detailedEmail.body.length > 250);
+  assert.ok(outreach.variants.dmMessage.includes('Demo Shop'));
+  assert.ok(outreach.variants.loomTalkingPoints.includes('Finding #1'));
 });
