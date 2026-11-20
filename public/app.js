@@ -57,6 +57,9 @@ let account = {};
 let results = [];
 let resultsPage = 1;
 let leadsPage = 1;
+let selectedLeadFolder = '';
+let activeSearchFolder = '';
+let autoPersistTimer = null;
 let activeBusinessId = null;
 let dossierTab = 'overview';
 let settingsTab = 'integrations';
@@ -884,6 +887,38 @@ function renderResults() {
 }
 
 /* ---------------- SAVED LEADS (Figma KPI Grid + Clean Table) ---------------- */
+function buildSearchFolderName(industry = '', city = '', rankMode = 'all') {
+  const base = [String(industry).trim(), String(city).trim()].filter(Boolean).join(' · ') || 'Search Results';
+  if (rankMode === 'shopify') return `${base} (Shopify)`;
+  if (rankMode === 'low') return `${base} (Low-Ranked)`;
+  return base;
+}
+
+function upsertLeadIntoFolder(item, folderName) {
+  const existing = duplicate(item);
+  if (existing) {
+    if (folderName && !existing.folder) existing.folder = folderName;
+    return false;
+  }
+  const copy = { ...item, id: item.id || crypto.randomUUID(), folder: folderName || item.folder || '', savedAt: Date.now(), threads: [] };
+  delete copy.scanning;
+  delete copy.scanned;
+  leads.unshift(copy);
+  return true;
+}
+
+function scheduleAutoPersist(immediate = false) {
+  if (autoPersistTimer) { clearTimeout(autoPersistTimer); autoPersistTimer = null; }
+  if (immediate) {
+    persist();
+    return;
+  }
+  autoPersistTimer = setTimeout(() => {
+    autoPersistTimer = null;
+    persist();
+  }, 1200);
+}
+
 function getFilteredLeads() {
   const query = norm($('#filter-query')?.value || $('#global-search')?.value);
   const statusFilter = $('#filter-status')?.value || '';
@@ -891,11 +926,13 @@ function getFilteredLeads() {
   const sortOrder = $('#filter-sort')?.value || 'recent';
 
   const filtered = leads.filter(lead => {
+    const folderLabel = (lead.folder || '').trim() || 'General / Manual';
+    if (selectedLeadFolder && folderLabel !== selectedLeadFolder) return false;
     const status = leadStatus(lead);
     if (statusFilter && status !== statusFilter) return false;
     if (platformFilter && (lead.platform || '') !== platformFilter) return false;
     if (!query) return true;
-    const haystack = [lead.name, lead.industry, lead.city, lead.email, lead.phone, lead.address, lead.about, lead.platform]
+    const haystack = [lead.name, lead.industry, lead.city, lead.email, lead.phone, lead.address, lead.about, lead.platform, lead.folder]
       .map(norm)
       .join(' ');
     return haystack.includes(query);
@@ -962,12 +999,74 @@ function renderLeads() {
     );
   }
 
+  // Render Saved Search Folders bar
+  const foldersEl = $('#leads-folders');
+  if (foldersEl) {
+    const folderMap = new Map();
+    for (const l of leads) {
+      const fName = (l.folder || '').trim() || 'General / Manual';
+      const entry = folderMap.get(fName) || { name: fName, count: 0, latest: 0 };
+      entry.count++;
+      entry.latest = Math.max(entry.latest, Number(l.savedAt) || 0);
+      folderMap.set(fName, entry);
+    }
+    const folderList = [...folderMap.values()].sort((a, b) => b.latest - a.latest);
+    if (selectedLeadFolder && !folderMap.has(selectedLeadFolder)) selectedLeadFolder = '';
+
+    if (folderList.length > 0) {
+      foldersEl.hidden = false;
+      const fHead = create('div', '', 'folders-head');
+      const fTitle = create('strong');
+      fTitle.append(iconEl('folder', 15), document.createTextNode(`Search Folders (${folderList.length})`));
+      fHead.append(fTitle, create('span', 'Every search from Find Businesses is automatically saved into its own folder.', 'small'));
+
+      const fGrid = create('div', '', 'folders-grid');
+      const allChip = create('button', '', 'folder-chip' + (!selectedLeadFolder ? ' active' : ''));
+      allChip.type = 'button';
+      allChip.append(iconEl('folder', 14), document.createTextNode('All Leads'), create('span', String(leads.length), 'folder-cnt'));
+      allChip.onclick = () => { selectedLeadFolder = ''; leadsPage = 1; renderLeads(); };
+      fGrid.append(allChip);
+
+      for (const f of folderList) {
+        const chip = create('button', '', 'folder-chip' + (selectedLeadFolder === f.name ? ' active' : ''));
+        chip.type = 'button';
+        chip.append(iconEl('folder', 14), document.createTextNode(f.name), create('span', String(f.count), 'folder-cnt'));
+        chip.onclick = () => { selectedLeadFolder = f.name; leadsPage = 1; renderLeads(); };
+        fGrid.append(chip);
+      }
+      foldersEl.replaceChildren(fHead, fGrid);
+    } else {
+      foldersEl.hidden = true;
+    }
+  }
+
   const filtered = getFilteredLeads();
   const summary = $('#lead-summary');
   if (summary) {
-    summary.textContent = leads.length
-      ? `Showing ${filtered.length} of ${leads.length} saved lead${leads.length === 1 ? '' : 's'} — click any business row to open its full dossier.`
-      : 'No saved leads yet.';
+    if (!leads.length) {
+      summary.textContent = 'No saved leads yet.';
+    } else if (selectedLeadFolder) {
+      const metaBar = create('div', '', 'table-meta-bar');
+      metaBar.append(create('span', `Folder "${selectedLeadFolder}" · Showing ${filtered.length} lead${filtered.length === 1 ? '' : 's'} — click any business row to open its full dossier.`));
+      const metaActs = create('div', '', 'actions');
+      metaActs.append(
+        button('Show All Folders', () => { selectedLeadFolder = ''; leadsPage = 1; renderLeads(); }, true),
+        button('Delete Folder', () => {
+          const toDelete = selectedLeadFolder;
+          const before = leads.length;
+          leads = leads.filter(l => ((l.folder || '').trim() || 'General / Manual') !== toDelete);
+          const removed = before - leads.length;
+          selectedLeadFolder = '';
+          leadsPage = 1;
+          persist();
+          report(`Deleted folder "${toDelete}" (${removed} lead${removed === 1 ? '' : 's'} removed).`);
+        }, 'danger')
+      );
+      metaBar.append(metaActs);
+      summary.replaceChildren(metaBar);
+    } else {
+      summary.textContent = `Showing ${filtered.length} of ${leads.length} saved lead${leads.length === 1 ? '' : 's'} — click any business row to open its full dossier.`;
+    }
   }
 
   const leadsPaginationEl = $('#leads-pagination');
@@ -1015,8 +1114,15 @@ function renderLeads() {
     }
 
     const tdPlat = create('td');
-    if (lead.platform && lead.platform !== 'Custom / Website') tdPlat.append(create('span', lead.platform, 'pill neutral'));
-    else tdPlat.append(create('span', (lead.source || '').includes('bing') ? 'Bing Maps' : 'Workspace', 'small'));
+    const platWrap = create('div', '', 'actions');
+    if (lead.platform && lead.platform !== 'Custom / Website') platWrap.append(create('span', lead.platform, 'pill neutral'));
+    else platWrap.append(create('span', (lead.source || '').includes('bing') ? 'Bing Maps' : 'Workspace', 'small'));
+    if (lead.folder && !selectedLeadFolder) {
+      const fPill = create('span', '', 'pill neutral');
+      fPill.append(iconEl('folder', 11), document.createTextNode(lead.folder));
+      platWrap.append(fPill);
+    }
+    tdPlat.append(platWrap);
 
     const tdAct = create('td');
     const actGroup = create('div', '', 'actions');
@@ -2845,6 +2951,7 @@ $('#stop-search').onclick = () => {
   if (searchController) { searchController.abort(); searchController = null; }
   streamActive = false;
   for (const item of results) { item.scanning = false; item.scanned = true; }
+  if (results.length) scheduleAutoPersist(true);
   renderResults(); updateScrapeBanner();
 };
 
@@ -2855,14 +2962,17 @@ $('#search').onsubmit = async event => {
   if (searchController) searchController.abort();
   searchController = new AbortController();
   const generation = ++searchGeneration;
+  const formData = new FormData(form);
+  activeSearchFolder = buildSearchFolderName(formData.get('industry'), formData.get('city'), formData.get('rankMode'));
   activeWorkers = 0; results = []; resultsPage = 1; streamActive = true;
   currentScrapeStep = 'Connecting to Bing Maps…';
   submit.disabled = true; report(); updateScrapeBanner();
   $('#save-all').hidden = true; $('#results-pagination').hidden = true; $('#results-count').textContent = '';
-  $('#results').replaceChildren(empty('search', 'Scraping live from Bing Maps…', 'Businesses will appear here in real time as each page is scraped.'));
+  $('#results').replaceChildren(empty('search', 'Scraping live from Bing Maps…', 'Businesses will appear here in real time and auto-save into your search folder in Saved Leads.'));
 
+  let autoSavedCount = 0;
   try {
-    const params = new URLSearchParams(new FormData(form));
+    const params = new URLSearchParams(formData);
     params.set('stream', '1');
     const response = await fetch('/api/search?' + params, { signal: searchController.signal });
     if (!response.ok) {
@@ -2886,13 +2996,20 @@ $('#search').onsubmit = async event => {
         if (msg.type === 'status') { currentScrapeStep = msg.message; updateScrapeBanner(); }
         else if (msg.type === 'business' && msg.item) {
           if (!results.some(x => x.id === msg.item.id)) {
-            results.push(msg.item); renderResults(); updateScrapeBanner(); triggerEnrichmentWorkers(generation);
+            msg.item.folder = activeSearchFolder;
+            results.push(msg.item);
+            if (upsertLeadIntoFolder(msg.item, activeSearchFolder)) autoSavedCount++;
+            scheduleAutoPersist(false);
+            renderResults(); updateScrapeBanner(); triggerEnrichmentWorkers(generation);
           }
         } else if (msg.type === 'error') throw new Error(msg.error);
       }
     }
     if (generation === searchGeneration && !results.length) {
       $('#results').replaceChildren(empty('search', 'No matching businesses', 'Try a nearby city or another industry.'));
+    } else if (generation === searchGeneration && results.length) {
+      scheduleAutoPersist(true);
+      report(`Saved ${results.length} business${results.length === 1 ? '' : 'es'} into folder "${activeSearchFolder}" in Saved Leads.`);
     }
   } catch (error) {
     if (error.name !== 'AbortError') {
@@ -2900,7 +3017,11 @@ $('#search').onsubmit = async event => {
       else report(error.message, true);
     }
   } finally {
-    if (generation === searchGeneration) { streamActive = false; searchController = null; updateScrapeBanner(); }
+    if (generation === searchGeneration) {
+      streamActive = false; searchController = null;
+      if (autoSavedCount > 0) scheduleAutoPersist(true);
+      updateScrapeBanner();
+    }
     submit.disabled = false;
   }
 };
@@ -2920,6 +3041,7 @@ $('#inspect-url').onsubmit = async event => {
     const parsedHost = new URL(enriched.website || rawUrl).hostname.replace(/^www\./, '');
     const newItem = {
       id: crypto.randomUUID(), savedAt: Date.now(),
+      folder: 'Direct URL · ' + (cityVal || 'Online'),
       name: enriched.brandName || parsedHost,
       industry: enriched.platform === 'Shopify' ? 'Shopify Store' : (enriched.platform || 'Online Business'),
       city: cityVal || 'Online', address: '', website: enriched.website || rawUrl,
