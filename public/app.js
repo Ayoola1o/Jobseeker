@@ -1476,15 +1476,46 @@ function renderBusinessPage() {
         lead.userSpottedIssues = e.target.value.trim();
         persist();
       };
-      const issuesHint = create('small', 'Tip: If you personally noticed any issues or quick wins, list them above so the AI highlights them and writes a detailed lead-generation email.', 'small');
-      issuesBox.append(issuesField, issuesHint);
+      const extraField = field(
+        'Additional Information / Instructions for AI (Optional — add extra offer, proof, or tone)',
+        'aiExtraContext',
+        lead.aiExtraContext || '',
+        {
+          type: 'textarea',
+          maxLength: 1500,
+          placeholder: 'e.g. Mention our free 2-minute video audit, add that we helped 3 other stores in Lagos grow leads by 40%, or offer a free homepage mockup…'
+        }
+      );
+      extraField.lastChild.style.minHeight = '66px';
+      extraField.lastChild.onchange = e => {
+        lead.aiExtraContext = e.target.value.trim();
+        persist();
+      };
 
-      const genBtn = btnWithIcon('sparkles', lead.aiBrief ? 'Regenerate AI Analysis & Email' : 'Generate AI Lead Brief & Email', async event => {
-        const btn = event.currentTarget;
+      const quickPrompts = create('div', '', 'preset-pills');
+      [
+        'We recorded a free 2-minute video audit for your site',
+        'We recently helped a similar business in your area double their online inquiries',
+        'Happy to build a free homepage / checkout mockup for you first'
+      ].forEach(snippet => {
+        const chip = create('button', '+ ' + snippet.slice(0, 38) + '…', 'preset-pill');
+        chip.type = 'button';
+        chip.onclick = () => {
+          const cur = extraField.lastChild.value.trim();
+          extraField.lastChild.value = cur ? `${cur}\n${snippet}` : snippet;
+          lead.aiExtraContext = extraField.lastChild.value.trim();
+          persist();
+        };
+        quickPrompts.append(chip);
+      });
+
+      const runAiAnalysis = async btn => {
         const userIssues = issuesField.lastChild.value.trim();
+        const extraContext = extraField.lastChild.value.trim();
         lead.userSpottedIssues = userIssues;
+        lead.aiExtraContext = extraContext;
         btn.disabled = true;
-        btn.textContent = 'Analyzing business…';
+        btn.textContent = 'Generating with AI…';
         try {
           if (lead.website && !lead.aboutSummary && !lead.scanned) {
             try {
@@ -1493,15 +1524,20 @@ function renderBusinessPage() {
               applyEnrichmentToItem(lead, enriched);
             } catch {}
           }
-          lead.aiBrief = await api('/api/analyze', { lead, userIssues });
+          lead.aiBrief = await api('/api/analyze', { lead, userIssues, extraContext });
           persist();
           report(`Generated detailed AI lead brief & email for ${lead.name}.`);
         } catch (error) {
           report(error.message, true);
           btn.disabled = false;
-          btn.replaceChildren(iconEl('sparkles', 15), document.createTextNode('Generate AI Lead Brief & Email'));
+          btn.replaceChildren(iconEl('sparkles', 15), document.createTextNode('Regenerate AI Email'));
         }
-      });
+      };
+
+      const issuesHint = create('small', 'Tip: Add any issues you spotted and any extra offer/instructions above — the AI will weave both into your outreach email.', 'small');
+      issuesBox.append(issuesField, extraField, quickPrompts, issuesHint);
+
+      const genBtn = btnWithIcon('sparkles', lead.aiBrief ? 'Regenerate AI Analysis & Email' : 'Generate AI Lead Brief & Email', event => runAiAnalysis(event.currentTarget));
       aiHeader.append(create('h2', 'AI Lead Intelligence & Professional Pitch'), genBtn);
       aiCard.append(aiHeader, issuesBox);
 
@@ -1515,16 +1551,69 @@ function renderBusinessPage() {
         gapsSec.append(ul);
         const angSec = create('div', '', 'ai-section');
         angSec.append(create('h3', 'Recommended Strategy'), create('p', lead.aiBrief.angle));
+
         const pitchSec = create('div', '', 'ai-section stack');
-        pitchSec.append(
-          create('h3', 'Detailed Lead-Generation Email Preview'),
-          create('strong', 'Subject: ' + lead.aiBrief.pitchSubject),
-          create('div', lead.aiBrief.pitchBody, 'pitch-preview'),
-          btnWithIcon('mail', 'Use this email & Attach Files / Send', () => compose(lead, null, null, { subject: lead.aiBrief.pitchSubject, body: lead.aiBrief.pitchBody }))
+        const pitchHead = create('div', '', 'heading');
+        pitchHead.style.margin = '0';
+        const autoPill = create('span', '', 'pill');
+        autoPill.append(iconEl('check', 12), document.createTextNode('Editable · Auto-saves'));
+        pitchHead.append(create('h3', 'Editable AI Outreach Email'), autoPill);
+
+        const editSubj = field('Email Subject (Editable)', 'aiPitchSubj', lead.aiBrief.pitchSubject, { maxLength: 160 });
+        const editBody = field('Email Message Body (Editable — tweak any line before sending)', 'aiPitchBody', lead.aiBrief.pitchBody, { type: 'textarea', maxLength: 16000 });
+        editBody.lastChild.style.minHeight = '240px';
+        editBody.lastChild.style.lineHeight = '1.6';
+
+        const savePitchEdits = () => {
+          lead.aiBrief.pitchSubject = editSubj.lastChild.value.trim();
+          lead.aiBrief.pitchBody = editBody.lastChild.value;
+          if (currentUser?.id) {
+            localStorage.setItem(userLeadsKey(currentUser.id), JSON.stringify(leads));
+            syncWorkspaceToServer();
+          }
+          autoPill.replaceChildren(iconEl('check', 12), document.createTextNode('Saved edits'));
+        };
+        editSubj.lastChild.onchange = savePitchEdits;
+        editBody.lastChild.onchange = savePitchEdits;
+
+        // Inline AI Refinement Bar right below the editable email
+        const refineBar = create('div', '', 'inline-bar');
+        const refineInput = field(
+          'Want AI to add something else to this email?',
+          'quickRefine',
+          '',
+          { placeholder: 'Type extra info to add (e.g. Mention our 10% discount this week or add a PS about mobile speed)…' }
         );
+        const refineBtn = btnWithIcon('sparkles', 'Add & Regenerate Email', async e => {
+          const extra = refineInput.lastChild.value.trim();
+          if (extra) {
+            const existing = extraField.lastChild.value.trim();
+            extraField.lastChild.value = existing ? `${existing}\n${extra}` : extra;
+          }
+          await runAiAnalysis(e.currentTarget);
+        }, 'btn-soft');
+        refineBar.append(refineInput, refineBtn);
+
+        const pitchActions = create('div', '', 'actions');
+        pitchActions.append(
+          btnWithIcon('mail', 'Use this email & Attach Files / Send', () => {
+            savePitchEdits();
+            compose(lead, null, null, { subject: lead.aiBrief.pitchSubject, body: lead.aiBrief.pitchBody });
+          }),
+          btnWithIcon('copy', 'Copy Edited Email', async () => {
+            savePitchEdits();
+            try {
+              await navigator.clipboard.writeText(`${lead.aiBrief.pitchSubject}\n\n${lead.aiBrief.pitchBody}`);
+              report('Copied edited AI email to clipboard.');
+            } catch {}
+          }, 'btn-soft'),
+          btnWithIcon('refresh', 'Regenerate', e => runAiAnalysis(e.currentTarget), true)
+        );
+
+        pitchSec.append(pitchHead, editSubj, editBody, refineBar, pitchActions);
         aiCard.append(ovSec, gapsSec, angSec, pitchSec);
       } else {
-        aiCard.append(empty('sparkles', 'Ready to analyze ' + lead.name, 'Optionally list any issues you spotted above, then click "Generate AI Lead Brief & Email" to craft a detailed outreach email.'));
+        aiCard.append(empty('sparkles', 'Ready to analyze ' + lead.name, 'Optionally list any issues you spotted or extra instructions above, then click "Generate AI Lead Brief & Email".'));
       }
       tabBody.append(aiCard);
     }

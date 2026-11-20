@@ -2129,7 +2129,7 @@ async function fetchWebsiteEmails(websiteUrl) {
   };
 }
 
-export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues = '') {
+export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues = '', extraContext = '') {
   const name = lead.name || 'this business';
   const industry = lead.industry || 'local business';
   const city = lead.city || 'their area';
@@ -2139,6 +2139,7 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
     .map(s => s.replace(/^[\s•\-*]+/, '').trim())
     .filter(Boolean)
     .slice(0, 6);
+  const cleanExtra = String(extraContext || '').trim().slice(0, 1500);
 
   const socialChannels = [
     lead.facebook && 'Facebook',
@@ -2246,6 +2247,9 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
 
   const topFindings = combinedGaps.slice(0, 4);
   const bulletLines = topFindings.map(item => `• ${item}`).join('\n');
+  const extraParagraph = cleanExtra
+    ? `${/[.!?]$/.test(cleanExtra) ? cleanExtra : cleanExtra + '.'}\n\n`
+    : '';
 
   const pitchSubject = `A few quick ideas to bring more leads to ${name} in ${city}`.slice(0, 88);
   const pitchBody =
@@ -2254,6 +2258,7 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
     `I’m ${senderName}, and I specialize in helping ${industry.toLowerCase()} businesses generate more consistent leads and paying customers through ${senderService}. While looking closely at your online presence, I spotted a few specific issues that are likely costing you inquiries every week:\n\n` +
     `${bulletLines}\n\n` +
     `Fixing even one or two of these gaps can make a noticeable difference—helping more local searchers find ${name}, trust your brand faster, and reach out or book directly instead of clicking away to a competitor.\n\n` +
+    extraParagraph +
     `I’d be happy to send over a quick 2-minute breakdown (or screenshots) showing exactly how to fix these and capture more leads for ${name}—no strings attached.\n\n` +
     `Would you be open to me sending that over, or hopping on a brief 10-minute chat this week?\n\n` +
     `Best regards,\n${senderName}`;
@@ -2265,12 +2270,13 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
     pitchSubject,
     pitchBody,
     userIssues: spottedList,
+    extraContext: cleanExtra,
     generatedAt: new Date().toISOString()
   };
 }
 
-async function analyzeLeadWithAi(lead, senderSettings, userIssues = '') {
-  const baseline = buildLeadIntelligence(lead, senderSettings, userIssues);
+async function analyzeLeadWithAi(lead, senderSettings, userIssues = '', extraContext = '') {
+  const baseline = buildLeadIntelligence(lead, senderSettings, userIssues, extraContext);
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) return baseline;
 
@@ -2278,13 +2284,16 @@ async function analyzeLeadWithAi(lead, senderSettings, userIssues = '') {
     const userIssuesNote = baseline.userIssues.length
       ? `\n\nIMPORTANT — Specific issues personally spotted by the user (MUST be highlighted prominently in both "gaps" and the "pitchBody" email):\n${baseline.userIssues.map(i => '- ' + i).join('\n')}`
       : '';
+    const extraContextNote = baseline.extraContext
+      ? `\n\nIMPORTANT — Additional information, offer, or instructions provided by the user (MUST be woven naturally into the regenerated "pitchBody" email):\n${baseline.extraContext}`
+      : '';
 
     const prompt = `You are a senior B2B lead-generation & conversion strategist. Analyze this business and return a JSON object with keys:
 - "overview" (string: 2-3 sentence positioning summary)
 - "gaps" (array of 4-5 specific, actionable issues found on their website/listing)
 - "angle" (string: recommended outreach strategy)
 - "pitchSubject" (string under 85 chars, compelling & personalized)
-- "pitchBody" (string: a detailed, persuasive cold outreach email of 180-260 words with NO unreplaced brackets. Structure it with: (1) a personalized opener referencing their business/city, (2) a clear bulleted list using "• " highlighting 3-4 specific issues found including any user-spotted issues, (3) a short paragraph explaining how fixing these issues will bring them more qualified leads & customers, and (4) a friendly low-friction CTA + sign-off using the sender name).${userIssuesNote}
+- "pitchBody" (string: a detailed, persuasive cold outreach email of 180-260 words with NO unreplaced brackets. Structure it with: (1) a personalized opener referencing their business/city, (2) a clear bulleted list using "• " highlighting 3-4 specific issues found including any user-spotted issues, (3) a short paragraph explaining how fixing these issues will bring them more qualified leads & customers, plus any additional user context/offer provided, and (4) a friendly low-friction CTA + sign-off using the sender name).${userIssuesNote}${extraContextNote}
 
 Business data:
 ${JSON.stringify({
@@ -2674,10 +2683,15 @@ export async function handleRequest(req, res) {
     }
     if (req.method === 'POST' && path === '/api/analyze') {
       if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
-      const { lead, userIssues } = await readJson(req);
+      const { lead, userIssues, extraContext } = await readJson(req);
       if (!lead || typeof lead !== 'object') fail(400, 'Provide business details to analyze.');
       const ws = getWorkspace(session.userId || 'default');
-      return json(await analyzeLeadWithAi(lead, ws.settings, userIssues || lead.userSpottedIssues || ''));
+      return json(await analyzeLeadWithAi(
+        lead,
+        ws.settings,
+        userIssues ?? lead.userSpottedIssues ?? '',
+        extraContext ?? lead.aiExtraContext ?? ''
+      ));
     }
     if (req.method === 'POST' && path === '/api/send') {
       if (!session.userId) fail(401, 'Sign in to send email.');

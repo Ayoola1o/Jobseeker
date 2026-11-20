@@ -309,12 +309,14 @@ test('buildLeadIntelligence incorporates user-spotted issues into a detailed lea
   const brief = buildLeadIntelligence(
     { name: 'Glow Skincare', industry: 'Cosmetics & Skincare', city: 'Lagos', website: 'https://glow.example.com', signals: { https: true, hasBookingOrForm: false } },
     { senderName: 'Ayoola', senderService: 'Shopify CRO & lead generation' },
-    'Mobile checkout button is cut off\nHomepage hero image loads slowly'
+    'Mobile checkout button is cut off\nHomepage hero image loads slowly',
+    'We also recorded a free 2-minute video audit walking through your mobile checkout'
   );
   assert.equal(brief.gaps[0], 'Mobile checkout button is cut off');
   assert.equal(brief.gaps[1], 'Homepage hero image loads slowly');
   assert.ok(brief.pitchBody.includes('• Mobile checkout button is cut off'));
   assert.ok(brief.pitchBody.includes('• Homepage hero image loads slowly'));
+  assert.ok(brief.pitchBody.includes('We also recorded a free 2-minute video audit walking through your mobile checkout.'));
   assert.ok(brief.pitchBody.length > 400, 'Expected detailed multi-paragraph outreach email');
 });
 
