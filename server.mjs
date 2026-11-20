@@ -812,19 +812,19 @@ export function buildRawMimeMessage({ from, to, encodedSubject, extraHeaders = [
 }
 
 async function send(session, data) {
-  const { to, body, threadId, requestId, attachments = [] } = data;
+  const { to, body, threadId, requestId, attachments = [], direct = false } = data;
   let { subject } = data;
   if (!validEmail(to) || typeof body !== 'string' || !body.trim() || body.length > 16000 ||
       typeof subject !== 'string' || !subject.trim() || /[\r\n]/.test(subject) || subject.length > 160 ||
       !/^[a-z0-9-]{16,64}$/i.test(requestId || '')) fail(400, 'Enter a valid recipient, subject and message.');
   if (!session.mailbox) fail(401, 'Connect Gmail first.');
-  if (!threadId && (typeof data.leadId !== 'string' || !data.leadId || data.leadId.length > 512)) {
+  if (!threadId && !direct && (typeof data.leadId !== 'string' || !data.leadId || data.leadId.length > 512)) {
     fail(400, 'Select a saved lead before sending outreach.');
   }
   const key = session.mailbox + ':' + requestId;
   if (session.sends.has(key)) return session.sends.get(key);
   const operation = (async () => {
-    if (!threadId && !await savedOutreachLead(session.userId, data.leadId)) {
+    if (!threadId && !direct && !await savedOutreachLead(session.userId, data.leadId)) {
       fail(404, 'Save this lead before sending outreach.');
     }
     const extraHeaders = [];
@@ -878,8 +878,8 @@ async function send(session, data) {
     }
     if (!threadId || threadId !== result.threadId) {
       const registration = {
-        leadId: data.leadId, recipient: to, mailbox: session.mailbox, subject, time: Date.now(),
-        messageId: result.id, templateName: String(data.templateName || '').slice(0, 80)
+        leadId: data.leadId || ('direct:' + to.toLowerCase()), recipient: to, mailbox: session.mailbox, subject, time: Date.now(),
+        messageId: result.id, templateName: String(data.templateName || (direct ? 'Direct / Test Email' : '')).slice(0, 80)
       };
       try {
         await registerOutreach(session.userId, result.threadId, registration);

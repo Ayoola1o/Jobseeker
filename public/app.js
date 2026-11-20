@@ -1761,7 +1761,15 @@ function renderInbox() {
   titleRow.append(create('h1', 'Outreach Inbox'), statusPill);
   titleWrap.append(titleRow);
   const topActions = create('div', '', 'actions');
-  topActions.append(btnWithIcon('refresh', refreshing ? 'Refreshing…' : 'Refresh Inbox', () => refresh(true), 'btn-soft'));
+  topActions.append(
+    btnWithIcon('mail', 'Send Test Email', () => composeDirectEmail({
+      defaultTo: account.mailbox || currentUser?.email || '',
+      defaultSubject: 'Test email from Jobhunta',
+      defaultBody: `Hi ${currentUser?.name || 'there'},\n\nThis is a test email sent from your Jobhunta outreach workspace to verify that Gmail sending and attachments are working properly.\n\nBest regards,\n${settings.senderName || currentUser?.name || 'Jobhunta'}`
+    }), 'btn-soft'),
+    btnWithIcon('plus', 'Compose Email', () => composeDirectEmail()),
+    btnWithIcon('refresh', refreshing ? 'Refreshing…' : 'Refresh Inbox', () => refresh(true), true)
+  );
   top.append(titleWrap, topActions);
 
   if (!account.mailbox) {
@@ -2335,9 +2343,14 @@ function renderSettings() {
       gmailCard.append(
         kvItem('Connected Mailbox', account.mailbox),
         actionRow(
-          'Inbox Sync & Connection',
-          'Refresh Gmail threads or disconnect this mailbox from your workspace.',
-          btnWithIcon('refresh', 'Sync Inbox', () => { location.hash = '#inbox'; refresh(true); }, 'btn-soft'),
+          'Inbox Sync & Test Email',
+          'Send yourself a test email to verify Gmail delivery, refresh threads, or disconnect.',
+          btnWithIcon('send', 'Send Test Email', () => composeDirectEmail({
+            defaultTo: account.mailbox || currentUser?.email || '',
+            defaultSubject: 'Test email from Jobhunta',
+            defaultBody: `Hi ${currentUser?.name || 'there'},\n\nThis is a test email sent from your Jobhunta outreach workspace to confirm Gmail delivery is working.\n\nBest regards,\n${settings.senderName || currentUser?.name || 'Jobhunta'}`
+          }), 'btn-soft'),
+          btnWithIcon('refresh', 'Sync Inbox', () => { location.hash = '#inbox'; refresh(true); }, true),
           button('Disconnect Gmail', async () => {
             try { await api('/api/disconnect', {}); account.mailbox = null; messages.clear(); renderAccount(); report('Disconnected Gmail.'); }
             catch (e) { report(e.message, true); }
@@ -2731,6 +2744,50 @@ function createAttachmentPicker() {
     getAttachments: () => attached.map(({ filename, mimeType, dataBase64 }) => ({ filename, mimeType, dataBase64 })),
     clear: () => { attached.length = 0; renderChips(); }
   };
+}
+
+function composeDirectEmail({ defaultTo = '', defaultSubject = '', defaultBody = '' } = {}) {
+  const form = create('form', '', 'stack');
+  const to = field('To (any email address)', 'to', defaultTo, { type: 'email', required: true, maxLength: 254, placeholder: 'you@example.com' });
+  const subject = field('Subject', 'subject', defaultSubject, { required: true, maxLength: 160, placeholder: 'e.g. Test email from Jobhunta' });
+  const body = field('Message', 'body', defaultBody, { type: 'textarea', required: true, maxLength: 16000, placeholder: 'Write your message here…' });
+  body.lastChild.style.minHeight = '160px';
+  const picker = createAttachmentPicker();
+  const feedback = create('div', '', 'small');
+  const submit = create('button', 'Send via Gmail');
+  submit.disabled = !account.mailbox;
+  const requestId = crypto.randomUUID();
+  if (!account.mailbox) feedback.textContent = 'Connect your Gmail account in Settings → Integrations before sending.';
+
+  form.append(to, subject, body, picker.el, feedback, submit);
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form));
+    if (!values.to.trim() || !values.subject.trim() || !values.body.trim()) {
+      feedback.textContent = 'Enter a recipient email, subject, and message.';
+      return;
+    }
+    submit.disabled = true;
+    feedback.textContent = 'Sending…';
+    try {
+      await api('/api/send', {
+        to: values.to.trim(),
+        subject: values.subject.trim(),
+        body: values.body.trim(),
+        attachments: picker.getAttachments(),
+        direct: true,
+        requestId
+      });
+      if (currentUser?.usage) currentUser.usage.emailsToday = (currentUser.usage.emailsToday || 0) + 1;
+      persist();
+      dialog.close();
+      report(`Email sent to ${values.to.trim()}! Check the inbox to verify delivery.`);
+    } catch (e) {
+      feedback.textContent = e.message;
+      submit.disabled = false;
+    }
+  };
+  show(defaultTo ? 'Send Test Email' : 'Compose Direct Email', form);
 }
 
 function compose(lead, conversation, parent, customPitch = null) {
