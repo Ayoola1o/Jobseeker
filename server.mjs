@@ -1114,6 +1114,124 @@ function getSearchOffsets(rankMode = 'all', isMultiCity = false) {
   ];
 }
 
+const ignoredWebHosts = /(?:^|\.)(?:bing\.com|microsoft\.com|google\.com|facebook\.com|instagram\.com|linkedin\.com|youtube\.com|tiktok\.com|pinterest\.com|twitter\.com|x\.com|amazon\.com|ebay\.com|etsy\.com|yelp\.com|tripadvisor\.com|yellowpages\.com|wikipedia\.org|reddit\.com|shopify\.com|apps\.shopify\.com|community\.shopify\.com|help\.shopify\.com)$/i;
+
+function decodeBingRedirectUrl(rawHref = '') {
+  const cleanHref = decodeHtmlEntities(rawHref).trim();
+  try {
+    const parsed = new URL(cleanHref);
+    if (/bing\.com$/i.test(parsed.hostname) && parsed.pathname.startsWith('/ck/a')) {
+      const uParam = parsed.searchParams.get('u') || '';
+      if (uParam.startsWith('a1')) {
+        const decoded = Buffer.from(uParam.slice(2), 'base64url').toString('utf8');
+        if (/^https?:\/\//i.test(decoded)) return decoded;
+      }
+    }
+    return parsed.href;
+  } catch {
+    return '';
+  }
+}
+
+export function parseBingWebSearchHtml(html = '', industry = '', city = '', firstOffset = 1, pageNumber = 1, query = '') {
+  const items = [];
+  const seenHosts = new Set();
+  const blockRegex = /<li\b[^>]*class="[^"]*\bb_algo\b[^"]*"[^>]*>([\s\S]*?)<\/li>/gi;
+  let match;
+  while ((match = blockRegex.exec(html)) !== null) {
+    const block = match[1];
+    const linkMatch = block.match(/<h2[^>]*>\s*<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i)
+      || block.match(/<a\b[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!linkMatch) continue;
+    const resolvedHref = decodeBingRedirectUrl(linkMatch[1]);
+    const url = publicWebsite(resolvedHref);
+    if (!url) continue;
+    const host = url.hostname.replace(/^www\./i, '').toLowerCase();
+    if (!host || ignoredWebHosts.test(host) || seenHosts.has(host)) continue;
+    seenHosts.add(host);
+
+    const rawTitle = decodeHtmlEntities(linkMatch[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    const cleanName = (rawTitle.split(/\s+[|\-–—:]\s+/)[0] || host).trim().slice(0, 110);
+    const snippetMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+    const snippet = snippetMatch
+      ? decodeHtmlEntities(snippetMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 260)
+      : '';
+    const isMyshopify = host.endsWith('.myshopify.com');
+    const rank = firstOffset + items.length;
+
+    items.push({
+      id: `web-${host}`,
+      name: cleanName || host,
+      industry,
+      city,
+      address: city,
+      website: url.origin,
+      phone: '',
+      email: '',
+      platform: isMyshopify ? 'Shopify' : '',
+      shopifyMeta: isMyshopify ? { myshopifyDomain: host } : null,
+      about: snippet,
+      searchRank: rank,
+      searchPage: pageNumber,
+      discoveryQuery: query,
+      source: url.origin
+    });
+  }
+  return items;
+}
+
+async function searchShopifySiteWeb(cleanIndustry, subCity) {
+  const siteQueries = [
+    ...googleQueries(cleanIndustry, subCity, 'Shopify', 'online'),
+    `site:myshopify.com ${cleanIndustry} ${subCity}`
+  ];
+  const uniqueQueries = [...new Set(siteQueries)];
+  const discovered = [];
+
+  for (const q of uniqueQueries) {
+    // Use Tavily or Serper if configured, plus direct Bing Web Search for site:myshopify.com
+    if (process.env.TAVILY_API_KEY?.trim()) {
+      try {
+        const tItems = await tavilyDiscovery(q, cleanIndustry, subCity);
+        for (const it of tItems) {
+          if (it.website?.includes('.myshopify.com')) it.platform = 'Shopify';
+          discovered.push(it);
+        }
+      } catch {}
+    } else if (process.env.SERPER_API_KEY?.trim()) {
+      try {
+        const gItems = await googleDiscovery(q, cleanIndustry, subCity);
+        for (const it of gItems) {
+          if (it.website?.includes('.myshopify.com')) it.platform = 'Shopify';
+          discovered.push(it);
+        }
+      } catch {}
+    }
+
+    for (const { first, page } of [{ first: 1, page: 1 }, { first: 11, page: 2 }, { first: 21, page: 3 }]) {
+      try {
+        const webUrl = `https://www.bing.com/search?q=${encodeURIComponent(q)}&first=${first}&count=10`;
+        const response = await fetch(webUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9'
+          },
+          signal: AbortSignal.timeout(8000)
+        });
+        if (!response.ok) break;
+        const html = await response.text();
+        const parsed = parseBingWebSearchHtml(html, cleanIndustry, subCity, first, page, q);
+        discovered.push(...parsed);
+        if (!parsed.length) break;
+      } catch {
+        break;
+      }
+    }
+  }
+  return discovered;
+}
+
 async function searchBingMaps(cleanIndustry, city, rankMode = 'all') {
   const query = rankMode === 'shopify'
     ? `${cleanIndustry} shop store in ${city}`
@@ -1266,6 +1384,22 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
   for (let locIndex = 0; locIndex < subLocations.length; locIndex++) {
     if (closed || stopped) break;
     const subCity = subLocations[locIndex];
+
+    // When searching for Shopify stores, first run site:myshopify.com & e-commerce web discovery
+    if (rankMode === 'shopify' && !closed && !stopped) {
+      sendEvent({
+        type: 'status',
+        page: 1,
+        totalPages: offsetConfigs.length,
+        totalFound: seen.size,
+        message: `Scraping Shopify stores via site:myshopify.com & web search in ${subCity}…`
+      });
+      try {
+        const siteItems = await searchShopifySiteWeb(cleanIndustry, subCity);
+        if (siteItems.length) await emitBusinesses(siteItems);
+      } catch {}
+    }
+
     const queries = rankMode === 'shopify'
       ? [`${cleanIndustry} store in ${subCity}`, `${cleanIndustry} boutique shop in ${subCity}`]
       : [`${cleanIndustry} in ${subCity}`];

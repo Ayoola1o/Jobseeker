@@ -13,6 +13,7 @@ import {
   buildLeadIntelligence,
   buildRawMimeMessage,
   parseBingMapsHtml,
+  parseBingWebSearchHtml,
   resolveSearchLocations,
   hashPassword,
   verifyPassword,
@@ -337,4 +338,27 @@ test('buildRawMimeMessage creates multipart/mixed MIME email with image and file
   assert.ok(decoded.includes('Content-Type: application/pdf; name="proposal.pdf"'));
   assert.ok(decoded.includes(pngB64));
   assert.ok(decoded.includes(pdfB64));
+});
+
+test('parseBingWebSearchHtml extracts site:myshopify.com and custom-domain stores from Bing web results', () => {
+  const sampleHtml = `
+    <ol id="b_results">
+      <li class="b_algo">
+        <h2><a href="https://lagosglow.myshopify.com/collections/all">Lagos Glow Skincare | Official Store</a></h2>
+        <div class="b_caption"><p>Natural organic skincare products shipped across Lagos and Nigeria.</p></div>
+      </li>
+      <li class="b_algo">
+        <h2><a href="https://www.bing.com/ck/a?!&&p=123&u=a1aHR0cHM6Ly92ZWx2ZXRib3V0aXF1ZS5jb20v">Velvet Boutique - Fashion &amp; Apparel</a></h2>
+        <div class="b_caption"><p>Add to cart and shop our latest dresses.</p></div>
+      </li>
+    </ol>
+  `;
+  const results = parseBingWebSearchHtml(sampleHtml, 'Cosmetics & Skincare', 'Lagos', 1, 1, 'site:myshopify.com "Cosmetics & Skincare" "Lagos"');
+  assert.equal(results.length, 2);
+  assert.equal(results[0].name, 'Lagos Glow Skincare');
+  assert.equal(results[0].website, 'https://lagosglow.myshopify.com');
+  assert.equal(results[0].platform, 'Shopify');
+  assert.equal(results[0].shopifyMeta?.myshopifyDomain, 'lagosglow.myshopify.com');
+  assert.equal(results[1].name, 'Velvet Boutique');
+  assert.equal(results[1].website, 'https://velvetboutique.com');
 });
