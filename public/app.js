@@ -1808,21 +1808,31 @@ function renderInbox() {
   if (filteredItems.length) {
     for (const { lead, conversation } of filteredItems) {
       const k = threadKey(conversation);
+      const threadMsgs = messages.get(k) || [];
+      const hasReply = threadMsgs.some(m => !m.sent) || lead.replied;
       const rowEl = create('div', '', 'inbox-item' + (k === selectedInboxKey ? ' active' : ''));
       const body = create('div', '', 'inbox-item-body');
       const rTop = create('div', '', 'inbox-item-top');
       rTop.append(create('strong', lead.name), create('small', new Date(conversation.time || Date.now()).toLocaleDateString()));
-      body.append(rTop, create('div', conversation.subject, 'inbox-item-sub'));
+      const rSub = create('div', conversation.subject, 'inbox-item-sub');
+      const rBadges = create('div', '', 'actions');
+      rBadges.style.marginTop = '4px';
+      if (conversation.unread) rBadges.append(create('span', 'New Reply', 'pill'));
+      else if (hasReply) rBadges.append(create('span', 'Replied', 'pill'));
+      else rBadges.append(create('span', `${Math.max(1, threadMsgs.length)} sent`, 'pill neutral'));
+      if (lead.due) rBadges.append(create('span', `Follow-up: ${lead.due}`, 'pill wait'));
+      body.append(rTop, rSub, rBadges);
       rowEl.append(makeAvatar(lead.name), body);
       rowEl.onclick = async () => {
         selectedInboxKey = k;
+        if (conversation.unread) { conversation.unread = false; persist(); }
         renderInbox();
         try { await syncThread(lead, conversation); renderInbox(); } catch {}
       };
       itemsWrap.append(rowEl);
     }
   } else {
-    itemsWrap.append(empty('mail', 'No conversations', 'Send an email to a lead to start a thread.'));
+    itemsWrap.append(empty('mail', 'No conversations', 'Send an email to a lead or click "Send Test Email" above to start a thread.'));
   }
   listPane.append(tabsRow, itemsWrap);
 
@@ -1836,7 +1846,19 @@ function renderInbox() {
     const threadHead = create('div', '', 'heading');
     threadHead.style.margin = '0';
     const headRight = create('div', '', 'actions');
+    const dueInput = create('input');
+    dueInput.type = 'date';
+    dueInput.value = lead.due || '';
+    dueInput.title = 'Schedule follow-up reminder';
+    dueInput.setAttribute('aria-label', 'Follow-up date');
+    dueInput.style.cssText = 'width:auto;padding:6px 10px;font-size:12.5px';
+    dueInput.onchange = () => {
+      lead.due = dueInput.value;
+      persist();
+      report(lead.due ? `Follow-up scheduled for ${lead.name} on ${lead.due}.` : `Cleared follow-up reminder for ${lead.name}.`);
+    };
     headRight.append(
+      dueInput,
       classify(lead, conversation),
       btnWithIcon('plus', 'Compose', () => compose(lead))
     );
@@ -1941,7 +1963,12 @@ async function syncThread(lead, conversation) {
     lead.replied = true;
     lead.due = '';
     conversation.seen = incoming.map(message => message.id);
+    if (selectedInboxKey !== key || location.hash !== '#inbox') {
+      conversation.unread = true;
+    }
+    dismissedNotifs.delete('replied');
     persist();
+    report(`New reply received from ${lead.name}! Open Inbox to read and follow up.`);
   }
   return thread;
 }
@@ -2807,18 +2834,38 @@ function composeDirectEmail({ defaultTo = '', defaultSubject = '', defaultBody =
     submit.disabled = true;
     feedback.textContent = 'Sending…';
     try {
-      await api('/api/send', {
-        to: values.to.trim(),
-        subject: values.subject.trim(),
+      const toAddr = values.to.trim();
+      const subj = values.subject.trim();
+      const sent = await api('/api/send', {
+        to: toAddr,
+        subject: subj,
         body: values.body.trim(),
         attachments: picker.getAttachments(),
         direct: true,
         requestId
       });
+      let targetLead = leads.find(l => norm(l.email) === norm(toAddr));
+      if (!targetLead) {
+        targetLead = {
+          id: crypto.randomUUID(),
+          name: toAddr.split('@')[0],
+          email: toAddr,
+          folder: 'Direct Emails',
+          savedAt: Date.now(),
+          threads: []
+        };
+        leads.unshift(targetLead);
+      }
+      if (!targetLead.threads) targetLead.threads = [];
+      const conv = { id: sent.threadId, mailbox: account.mailbox, subject: subj, time: Date.now(), to: toAddr };
+      if (!targetLead.threads.some(t => t.id === sent.threadId)) targetLead.threads.push(conv);
+      if (!targetLead.due && settings.defaultFollowUpDays > 0) targetLead.due = futureDateString(settings.defaultFollowUpDays);
+      selectedInboxKey = threadKey(conv);
       if (currentUser?.usage) currentUser.usage.emailsToday = (currentUser.usage.emailsToday || 0) + 1;
       persist();
       dialog.close();
-      report(`Email sent to ${values.to.trim()}! Check the inbox to verify delivery.`);
+      report(`Email sent to ${toAddr}! It is now tracked in your Inbox for replies and follow-ups.`);
+      syncThread(targetLead, conv).then(() => renderInbox()).catch(() => {});
     } catch (e) {
       feedback.textContent = e.message;
       submit.disabled = false;
@@ -3342,7 +3389,7 @@ try {
   datalist.replaceChildren(...account.industries.map(industry => new Option(industry, industry)));
   if (account.user) applyUserSession(account.user, account.leads, account.settings, account.mailbox);
   else showAuthScreen();
-  setInterval(() => { if (currentUser && !document.hidden) refresh(); }, 60000);
+  setInterval(() => { if (currentUser && !document.hidden) refresh(); }, 30000);
 } catch (error) {
   if (!currentUser) showAuthScreen();
   report(error.message, true);
