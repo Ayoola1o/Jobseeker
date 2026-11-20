@@ -3152,7 +3152,7 @@ function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMai
   currentUser = user;
   account.user = user;
   account.mailbox = serverMailbox;
-  document.body.classList.remove('auth-locked');
+  document.body.classList.remove('auth-checking', 'auth-locked');
 
   const sidebarUser = $('#sidebar-user');
   if (sidebarUser) sidebarUser.replaceChildren(create('i'), document.createTextNode(' ' + (user.name || user.email)));
@@ -3181,6 +3181,7 @@ function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMai
 function showAuthScreen() {
   currentUser = null; leads = []; results = []; activeBusinessId = null; selectedInboxKey = null; messages.clear();
   setAuthMode('login');
+  document.body.classList.remove('auth-checking');
   document.body.classList.add('auth-locked');
   setMobileNav(false);
 }
@@ -3222,4 +3223,7 @@ try {
   if (account.user) applyUserSession(account.user, account.leads, account.settings, account.mailbox);
   else showAuthScreen();
   setInterval(() => { if (currentUser && !document.hidden) refresh(); }, 60000);
-} catch (error) { report(error.message, true); }
+} catch (error) {
+  showAuthScreen();
+  report(error.message, true);
+}

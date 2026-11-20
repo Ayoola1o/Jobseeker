@@ -41,9 +41,15 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .brand-mark{width:40px;height:40px;border-radius:12px;background:rgba(5,150,105,.18);color:#10b981;display:inline-grid;place-items:center;flex-shrink:0}
 .brand-mark.sm{width:34px;height:34px;border-radius:10px}
 
+/* Auth Checking Splash (prevents brief login flash on refresh) */
+.auth-splash{display:none;min-height:100dvh;place-content:center;place-items:center;gap:12px;font-size:22px;font-weight:800;letter-spacing:-.04em;color:#052e2b;background:var(--bg)}
+body.auth-checking{display:block;background:var(--bg)}
+body.auth-checking .auth-splash{display:grid;grid-auto-flow:column;align-items:center}
+body.auth-checking .auth-screen,body.auth-checking aside,body.auth-checking main,body.auth-checking .sidebar-backdrop,body.auth-checking .mobile-bottom-nav{display:none !important}
+
 /* Auth Screen (Figma Desktop & Mobile Sign In) */
 body.auth-locked{display:block;background:radial-gradient(circle at 25% 18%,#0b5247 0%,#042824 62%,#031d1a 100%)}
-body.auth-locked aside,body.auth-locked main,body.auth-locked .sidebar-backdrop,body.auth-locked .mobile-bottom-nav{display:none !important}
+body.auth-locked aside,body.auth-locked main,body.auth-locked .sidebar-backdrop,body.auth-locked .mobile-bottom-nav,body.auth-locked .auth-splash{display:none !important}
 .auth-screen{display:none;min-height:100dvh;padding:24px 16px;place-items:center}
 body.auth-locked .auth-screen{display:grid}
 .auth-shell{width:min(440px,100%);display:grid;gap:22px}
