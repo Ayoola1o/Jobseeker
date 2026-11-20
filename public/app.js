@@ -181,6 +181,9 @@ async function api(path, payload) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
   });
   const text = await response.text();
+  if (response.status === 413) {
+    throw new Error('Attachment is too large for the server (max 3 MB total). Try a smaller file or image.');
+  }
   let data = {};
   try {
     data = text ? JSON.parse(text) : {};
@@ -2670,7 +2673,41 @@ function formatBytes(bytes = 0) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
+async function compressImageIfNeeded(file, dataUrl) {
+  if (!file.type.startsWith('image/') || file.type === 'image/gif' || file.size <= 600 * 1024) {
+    return { dataUrl, mimeType: file.type || 'application/octet-stream', size: file.size, filename: file.name };
+  }
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = dataUrl;
+    });
+    const maxDim = 1600;
+    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    const compressedUrl = canvas.toDataURL('image/jpeg', 0.82);
+    const b64Len = compressedUrl.length - compressedUrl.indexOf(',') - 1;
+    const approxBytes = Math.floor((b64Len * 3) / 4);
+    if (approxBytes < file.size) {
+      const baseName = file.name.replace(/\.[^.]+$/, '') || 'image';
+      return { dataUrl: compressedUrl, mimeType: 'image/jpeg', size: approxBytes, filename: `${baseName}.jpg` };
+    }
+  } catch {}
+  return { dataUrl, mimeType: file.type || 'application/octet-stream', size: file.size, filename: file.name };
+}
+
 function createAttachmentPicker() {
+  const MAX_TOTAL_BYTES = 3 * 1024 * 1024; // Keeps base64 + JSON safely under Vercel's 4.5 MB limit
   const attached = [];
   const box = create('div', '', 'attach-box');
   const bar = create('div', '', 'attach-bar');
@@ -2681,7 +2718,7 @@ function createAttachmentPicker() {
   input.hidden = true;
 
   const pickBtn = btnWithIcon('paperclip', 'Attach Images / Files', () => input.click(), 'btn-soft', 14);
-  const note = create('small', 'Max 5 files · 10 MB total (images, PDF, docs)', 'small');
+  const note = create('small', 'Max 5 files · 3 MB total (large images auto-compress)', 'small');
   bar.append(pickBtn, note, input);
 
   const chips = create('div', '', 'attach-chips');
@@ -2713,26 +2750,26 @@ function createAttachmentPicker() {
     input.value = '';
     for (const file of files) {
       if (attached.length >= 5) { report('You can attach up to 5 files per email.', true); break; }
-      const currentTotal = attached.reduce((s, a) => s + a.size, 0);
-      if (currentTotal + file.size > 10 * 1024 * 1024) {
-        report('Total attachment size cannot exceed 10 MB.', true);
-        break;
-      }
-      const dataUrl = await new Promise((resolve, reject) => {
+      const rawDataUrl = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result || ''));
         reader.onerror = () => reject(new Error('Could not read file.'));
         reader.readAsDataURL(file);
       });
-      const commaIdx = dataUrl.indexOf(',');
-      const dataBase64 = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : '';
-      const mimeType = file.type || 'application/octet-stream';
+      const processed = await compressImageIfNeeded(file, rawDataUrl);
+      const currentTotal = attached.reduce((s, a) => s + a.size, 0);
+      if (currentTotal + processed.size > MAX_TOTAL_BYTES) {
+        report(`"${processed.filename}" exceeds the 3 MB total attachment limit (${formatBytes(processed.size)}). Try a smaller file.`, true);
+        continue;
+      }
+      const commaIdx = processed.dataUrl.indexOf(',');
+      const dataBase64 = commaIdx !== -1 ? processed.dataUrl.slice(commaIdx + 1) : '';
       attached.push({
-        filename: file.name,
-        mimeType,
-        size: file.size,
+        filename: processed.filename,
+        mimeType: processed.mimeType,
+        size: processed.size,
         dataBase64,
-        previewUrl: mimeType.startsWith('image/') ? dataUrl : ''
+        previewUrl: processed.mimeType.startsWith('image/') ? processed.dataUrl : ''
       });
     }
     renderChips();
