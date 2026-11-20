@@ -281,6 +281,16 @@
             <option value="Unsubscribed">Unsubscribed</option>
             <option value="Bounced">Bounced</option>
           </select>
+          <select id="filter-opportunity" aria-label="Filter by ranking and performance">
+            <option value="">All Ranking &amp; Performance</option>
+            <option value="bad-rank">Bad Search Ranking (Rank #11+)</option>
+            <option value="very-low-rank">Very Low Ranking (Rank #21+ / Page 3+)</option>
+            <option value="bad-performance">Bad Website Performance / Audit (&lt;75/100)</option>
+            <option value="no-website">No Official Website</option>
+            <option value="no-socials">No Social Media Presence</option>
+            <option value="no-lead-capture">Missing Lead Form / Live Chat</option>
+            <option value="low-rating">Low or No Map Rating (&lt;4.2★)</option>
+          </select>
           <select id="filter-platform" aria-label="Filter by platform">
             <option value="">All Platforms</option>
             <option value="Shopify">Shopify</option>
@@ -292,6 +302,8 @@
           </select>
           <select id="filter-sort" aria-label="Sort leads">
             <option value="recent">Sort: Newest</option>
+            <option value="worst-rank">Sort: Worst Search Rank First</option>
+            <option value="worst-audit">Sort: Worst Website Performance First</option>
             <option value="due">Follow-up date</option>
             <option value="name">Business name (A–Z)</option>
           </select>

@@ -945,9 +945,55 @@ function scheduleAutoPersist(immediate = false) {
   }, 1200);
 }
 
+function hasLinkedSocials(lead = {}) {
+  return Boolean(lead.facebook || lead.instagram || lead.twitter || lead.linkedin || lead.youtube || lead.tiktok);
+}
+
+function getLeadPerformanceScore(lead = {}) {
+  if (lead.auditReport?.overallScore !== undefined) return Number(lead.auditReport.overallScore);
+  // Estimate baseline health score from signals if full audit hasn't been run yet
+  if (!lead.website) return 25;
+  const sig = lead.signals || {};
+  let score = 85;
+  if (sig.https === false) score -= 20;
+  if (sig.hasMetaDescription === false) score -= 12;
+  if (sig.hasBookingOrForm === false) score -= 12;
+  if (sig.hasChatWidget === false) score -= 8;
+  if (sig.hasAnalytics === false) score -= 8;
+  if (!hasLinkedSocials(lead)) score -= 10;
+  return Math.max(20, score);
+}
+
+function matchesOpportunityFilter(lead, mode) {
+  if (!mode) return true;
+  const rank = Number(lead.searchRank) || 0;
+  const perfScore = getLeadPerformanceScore(lead);
+  const ttfb = Number(lead.auditReport?.ttfbMs) || 0;
+  const sig = lead.signals || {};
+  const ratingNum = parseFloat(lead.rating);
+
+  if (mode === 'bad-rank') return rank >= 11;
+  if (mode === 'very-low-rank') return rank >= 21;
+  if (mode === 'bad-performance') {
+    return !lead.website
+      || perfScore < 75
+      || ttfb > 750
+      || (lead.auditReport?.scores?.performance !== undefined && lead.auditReport.scores.performance < 75)
+      || (lead.auditReport?.counts?.critical || 0) >= 1
+      || sig.https === false
+      || sig.hasMetaDescription === false;
+  }
+  if (mode === 'no-website') return !lead.website;
+  if (mode === 'no-socials') return !hasLinkedSocials(lead);
+  if (mode === 'no-lead-capture') return !lead.website || sig.hasBookingOrForm === false || sig.hasChatWidget === false;
+  if (mode === 'low-rating') return !lead.rating || (!Number.isNaN(ratingNum) && ratingNum < 4.2);
+  return true;
+}
+
 function getFilteredLeads() {
   const query = norm($('#filter-query')?.value || $('#global-search')?.value);
   const statusFilter = $('#filter-status')?.value || '';
+  const oppFilter = $('#filter-opportunity')?.value || '';
   const platformFilter = $('#filter-platform')?.value || '';
   const sortOrder = $('#filter-sort')?.value || 'recent';
 
@@ -956,6 +1002,7 @@ function getFilteredLeads() {
     if (selectedLeadFolder && folderLabel !== selectedLeadFolder) return false;
     const status = leadStatus(lead);
     if (statusFilter && status !== statusFilter) return false;
+    if (!matchesOpportunityFilter(lead, oppFilter)) return false;
     if (platformFilter && (lead.platform || '') !== platformFilter) return false;
     if (!query) return true;
     const haystack = [lead.name, lead.industry, lead.city, lead.email, lead.phone, lead.address, lead.about, lead.platform, lead.folder]
@@ -966,6 +1013,10 @@ function getFilteredLeads() {
 
   if (sortOrder === 'name') {
     filtered.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  } else if (sortOrder === 'worst-rank') {
+    filtered.sort((a, b) => (Number(b.searchRank) || 0) - (Number(a.searchRank) || 0));
+  } else if (sortOrder === 'worst-audit') {
+    filtered.sort((a, b) => getLeadPerformanceScore(a) - getLeadPerformanceScore(b));
   } else if (sortOrder === 'due') {
     filtered.sort((a, b) => {
       if (!a.due && !b.due) return 0;
@@ -1111,7 +1162,7 @@ function renderLeads() {
   const wrap = create('div', '', 'data-table-wrap');
   const table = create('table', '', 'data-table');
   const thead = create('thead');
-  thead.innerHTML = '<tr><th>Business</th><th>Industry</th><th>Status</th><th>Platform / Source</th><th>Actions</th></tr>';
+  thead.innerHTML = '<tr><th>Business</th><th>Industry &amp; Ranking</th><th>Status</th><th>Performance &amp; Platform</th><th>Actions</th></tr>';
   const tbody = create('tbody');
 
   for (const lead of pageLeads) {
@@ -1129,7 +1180,19 @@ function renderLeads() {
     bizBox.append(makeAvatar(lead.name), bizText);
     tdBiz.append(bizBox);
 
-    const tdInd = create('td', lead.industry || '—');
+    const tdInd = create('td');
+    tdInd.append(create('div', lead.industry || '—'));
+    const rankRow = create('div', '', 'actions');
+    rankRow.style.marginTop = '4px';
+    if (lead.searchRank) {
+      const rankTone = lead.searchRank >= 21 ? 'pill warn' : lead.searchRank >= 11 ? 'pill wait' : 'pill neutral';
+      rankRow.append(create('span', `Rank #${lead.searchRank}`, rankTone));
+    }
+    if (lead.rating) {
+      const rNum = parseFloat(lead.rating);
+      rankRow.append(create('span', `★ ${lead.rating}`, (!Number.isNaN(rNum) && rNum < 4.2) ? 'pill wait' : 'pill neutral'));
+    }
+    if (rankRow.childNodes.length) tdInd.append(rankRow);
 
     const tdStatus = create('td');
     tdStatus.append(create('span', status, statusPillClass(status)));
@@ -1142,7 +1205,21 @@ function renderLeads() {
     const tdPlat = create('td');
     const platWrap = create('div', '', 'actions');
     if (lead.platform && lead.platform !== 'Custom / Website') platWrap.append(create('span', lead.platform, 'pill neutral'));
-    else platWrap.append(create('span', (lead.source || '').includes('bing') ? 'Bing Maps' : 'Workspace', 'small'));
+    else if (!lead.website) platWrap.append(create('span', 'No Website', 'pill warn'));
+    else platWrap.append(create('span', (lead.source || '').includes('bing') ? 'Bing Maps' : 'Website', 'small'));
+
+    if (lead.website) {
+      const perfScore = getLeadPerformanceScore(lead);
+      const scoreClass = perfScore < 60 ? 'pill warn' : perfScore < 78 ? 'pill wait' : 'pill';
+      const labelPrefix = lead.auditReport ? 'Audit' : 'Est.';
+      platWrap.append(create('span', `${labelPrefix} ${perfScore}/100`, scoreClass));
+      if (lead.auditReport?.ttfbMs > 800) {
+        platWrap.append(create('span', `Slow ${lead.auditReport.ttfbMs}ms`, 'pill warn'));
+      }
+    }
+    if (!hasLinkedSocials(lead)) {
+      platWrap.append(create('span', 'No Socials', 'pill wait'));
+    }
     if (lead.folder && !selectedLeadFolder) {
       const fPill = create('span', '', 'pill neutral');
       fPill.append(iconEl('folder', 11), document.createTextNode(lead.folder));
@@ -4038,6 +4115,7 @@ $('#enrich-all').onclick = enrichMissingEmails;
 $('#close').onclick = () => dialog.close();
 $('#filter-query').oninput = () => { leadsPage = 1; renderLeads(); };
 $('#filter-status').onchange = () => { leadsPage = 1; renderLeads(); };
+if ($('#filter-opportunity')) $('#filter-opportunity').onchange = () => { leadsPage = 1; renderLeads(); };
 $('#filter-platform').onchange = () => { leadsPage = 1; renderLeads(); };
 $('#filter-sort').onchange = () => { leadsPage = 1; renderLeads(); };
 window.addEventListener('hashchange', navigate);
