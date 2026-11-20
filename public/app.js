@@ -1351,8 +1351,29 @@ function renderBusinessPage() {
       const aiCard = create('article', '', 'surface dossier-card full ai-panel');
       const aiHeader = create('div', '', 'heading');
       aiHeader.style.margin = '0';
-      const genBtn = btnWithIcon('sparkles', lead.aiBrief ? 'Regenerate AI Analysis' : 'Generate AI Lead Brief & Pitch', async event => {
+
+      const issuesBox = create('div', '', 'issues-prompt-box');
+      const issuesField = field(
+        'Issues You Spotted on Their Site / Listing (Optional — included in AI email)',
+        'userSpottedIssues',
+        lead.userSpottedIssues || '',
+        {
+          type: 'textarea',
+          maxLength: 2000,
+          placeholder: 'e.g. Slow mobile checkout, broken contact form, outdated homepage banner, no Google review replies… (one per line)'
+        }
+      );
+      issuesField.lastChild.onchange = e => {
+        lead.userSpottedIssues = e.target.value.trim();
+        persist();
+      };
+      const issuesHint = create('small', 'Tip: If you personally noticed any issues or quick wins, list them above so the AI highlights them and writes a detailed lead-generation email.', 'small');
+      issuesBox.append(issuesField, issuesHint);
+
+      const genBtn = btnWithIcon('sparkles', lead.aiBrief ? 'Regenerate AI Analysis & Email' : 'Generate AI Lead Brief & Email', async event => {
         const btn = event.currentTarget;
+        const userIssues = issuesField.lastChild.value.trim();
+        lead.userSpottedIssues = userIssues;
         btn.disabled = true;
         btn.textContent = 'Analyzing business…';
         try {
@@ -1363,23 +1384,23 @@ function renderBusinessPage() {
               applyEnrichmentToItem(lead, enriched);
             } catch {}
           }
-          lead.aiBrief = await api('/api/analyze', { lead });
+          lead.aiBrief = await api('/api/analyze', { lead, userIssues });
           persist();
-          report(`Generated AI lead brief for ${lead.name}.`);
+          report(`Generated detailed AI lead brief & email for ${lead.name}.`);
         } catch (error) {
           report(error.message, true);
           btn.disabled = false;
-          btn.textContent = 'Generate AI Lead Brief & Pitch';
+          btn.replaceChildren(iconEl('sparkles', 15), document.createTextNode('Generate AI Lead Brief & Email'));
         }
       });
       aiHeader.append(create('h2', 'AI Lead Intelligence & Professional Pitch'), genBtn);
-      aiCard.append(aiHeader);
+      aiCard.append(aiHeader, issuesBox);
 
       if (lead.aiBrief) {
         const ovSec = create('div', '', 'ai-section');
         ovSec.append(create('h3', 'Business Positioning & Overview'), create('p', lead.aiBrief.overview));
         const gapsSec = create('div', '', 'ai-section');
-        gapsSec.append(create('h3', 'What They Are Missing (Opportunities)'));
+        gapsSec.append(create('h3', 'Issues Found & Growth Opportunities'));
         const ul = create('ul');
         for (const g of lead.aiBrief.gaps || []) ul.append(create('li', g));
         gapsSec.append(ul);
@@ -1387,14 +1408,14 @@ function renderBusinessPage() {
         angSec.append(create('h3', 'Recommended Strategy'), create('p', lead.aiBrief.angle));
         const pitchSec = create('div', '', 'ai-section stack');
         pitchSec.append(
-          create('h3', 'Outreach Pitch Preview'),
+          create('h3', 'Detailed Lead-Generation Email Preview'),
           create('strong', 'Subject: ' + lead.aiBrief.pitchSubject),
           create('div', lead.aiBrief.pitchBody, 'pitch-preview'),
-          btnWithIcon('mail', 'Use this pitch & Draft Email', () => compose(lead, null, null, { subject: lead.aiBrief.pitchSubject, body: lead.aiBrief.pitchBody }))
+          btnWithIcon('mail', 'Use this email & Attach Files / Send', () => compose(lead, null, null, { subject: lead.aiBrief.pitchSubject, body: lead.aiBrief.pitchBody }))
         );
         aiCard.append(ovSec, gapsSec, angSec, pitchSec);
       } else {
-        aiCard.append(empty('sparkles', 'Ready to analyze ' + lead.name, 'Click "Generate AI Lead Brief & Pitch" to evaluate digital gaps and generate a tailored email.'));
+        aiCard.append(empty('sparkles', 'Ready to analyze ' + lead.name, 'Optionally list any issues you spotted above, then click "Generate AI Lead Brief & Email" to craft a detailed outreach email.'));
       }
       tabBody.append(aiCard);
     }
@@ -1553,6 +1574,7 @@ function renderBroadcast() {
   const subjectInput = field('Subject Preview', 'subj', interpolateTemplate(currentTpl.subject, sampleLead));
   const bodyInput = field('Message Template', 'body', interpolateTemplate(currentTpl.body, { name: '{{business_name}}', city: '{{city}}', industry: '{{industry}}' }), { type: 'textarea' });
   bodyInput.lastChild.style.minHeight = '140px';
+  const broadcastAtts = createAttachmentPicker();
 
   const progressText = create('p', '', 'small');
   const sendBtn = button(
@@ -1568,6 +1590,7 @@ function renderBroadcast() {
       sendBtn.disabled = true;
       let sentCount = 0;
       let failedCount = 0;
+      const attachments = broadcastAtts.getAttachments();
 
       for (let i = 0; i < targetLeads.length; i++) {
         const lead = targetLeads[i];
@@ -1579,9 +1602,12 @@ function renderBroadcast() {
           .replace(/\[specific opportunity\]/gi, 'growing your online presence');
         try {
           const sent = await api('/api/send', {
+            leadId: lead.id,
             to: lead.email,
             subject: finalSubj,
             body: finalBody,
+            attachments,
+            templateName: currentTpl.name,
             requestId: crypto.randomUUID()
           });
           if (!lead.threads) lead.threads = [];
@@ -1598,6 +1624,7 @@ function renderBroadcast() {
         }
       }
       broadcastSending = false;
+      broadcastAtts.clear();
       persist();
       report(`Campaign finished: ${sentCount} sent, ${failedCount} failed.`);
     }
@@ -1607,7 +1634,7 @@ function renderBroadcast() {
     progressText.textContent = 'Connect your Gmail account in Settings to send campaigns.';
   }
 
-  rightCard.append(tplSelect, audSelect, subjectInput, bodyInput, progressText, sendBtn);
+  rightCard.append(tplSelect, audSelect, subjectInput, bodyInput, broadcastAtts.el, progressText, sendBtn);
   grid.append(leftCard, rightCard);
   container.replaceChildren(top, grid);
 }
@@ -1724,12 +1751,13 @@ function renderInbox() {
     const replyBox = create('textarea');
     replyBox.placeholder = `Write a reply to ${lead.name}…`;
     replyBox.required = true;
+    const replyAtts = createAttachmentPicker();
     const replyActions = create('div', '', 'actions');
     const sendReplyBtn = create('button', '', '');
     sendReplyBtn.type = 'submit';
     sendReplyBtn.append(iconEl('send', 14), document.createTextNode('Send Reply'));
     replyActions.append(sendReplyBtn, button('View Dossier', () => openBusinessPage(lead), 'btn-soft'));
-    replyForm.append(replyBox, replyActions);
+    replyForm.append(replyBox, replyAtts.el, replyActions);
     replyForm.onsubmit = async event => {
       event.preventDefault();
       const text = replyBox.value.trim();
@@ -1743,11 +1771,13 @@ function renderInbox() {
           to: conversation.to || lead.email,
           subject: conversation.subject,
           body: text,
+          attachments: replyAtts.getAttachments(),
           requestId: crypto.randomUUID(),
           threadId: conversation.id,
           parentId: replyTarget?.id
         });
         replyBox.value = '';
+        replyAtts.clear();
         await syncThread(lead, conversation);
         if (currentUser?.usage) currentUser.usage.emailsToday = (currentUser.usage.emailsToday || 0) + 1;
         persist();
@@ -2515,6 +2545,88 @@ function futureDateString(days) {
   return date.toLocaleDateString('en-CA');
 }
 
+function formatBytes(bytes = 0) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function createAttachmentPicker() {
+  const attached = [];
+  const box = create('div', '', 'attach-box');
+  const bar = create('div', '', 'attach-bar');
+  const input = create('input');
+  input.type = 'file';
+  input.multiple = true;
+  input.accept = 'image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.txt,.zip';
+  input.hidden = true;
+
+  const pickBtn = btnWithIcon('paperclip', 'Attach Images / Files', () => input.click(), 'btn-soft', 14);
+  const note = create('small', 'Max 5 files · 10 MB total (images, PDF, docs)', 'small');
+  bar.append(pickBtn, note, input);
+
+  const chips = create('div', '', 'attach-chips');
+  const renderChips = () => {
+    chips.replaceChildren();
+    attached.forEach((item, idx) => {
+      const chip = create('div', '', 'attach-chip');
+      if (item.previewUrl) {
+        const img = create('img', '', 'attach-thumb');
+        img.src = item.previewUrl;
+        img.alt = item.filename;
+        chip.append(img);
+      } else {
+        chip.append(iconEl('fileText', 15));
+      }
+      chip.append(create('span', item.filename), create('small', formatBytes(item.size)));
+      const rm = create('button', '', 'attach-rm');
+      rm.type = 'button';
+      rm.setAttribute('aria-label', `Remove ${item.filename}`);
+      rm.append(iconEl('x', 13));
+      rm.onclick = () => { attached.splice(idx, 1); renderChips(); };
+      chip.append(rm);
+      chips.append(chip);
+    });
+  };
+
+  input.onchange = async () => {
+    const files = [...(input.files || [])];
+    input.value = '';
+    for (const file of files) {
+      if (attached.length >= 5) { report('You can attach up to 5 files per email.', true); break; }
+      const currentTotal = attached.reduce((s, a) => s + a.size, 0);
+      if (currentTotal + file.size > 10 * 1024 * 1024) {
+        report('Total attachment size cannot exceed 10 MB.', true);
+        break;
+      }
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Could not read file.'));
+        reader.readAsDataURL(file);
+      });
+      const commaIdx = dataUrl.indexOf(',');
+      const dataBase64 = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : '';
+      const mimeType = file.type || 'application/octet-stream';
+      attached.push({
+        filename: file.name,
+        mimeType,
+        size: file.size,
+        dataBase64,
+        previewUrl: mimeType.startsWith('image/') ? dataUrl : ''
+      });
+    }
+    renderChips();
+  };
+
+  box.append(bar, chips);
+  return {
+    el: box,
+    getAttachments: () => attached.map(({ filename, mimeType, dataBase64 }) => ({ filename, mimeType, dataBase64 })),
+    clear: () => { attached.length = 0; renderChips(); }
+  };
+}
+
 function compose(lead, conversation, parent, customPitch = null) {
   const form = create('form', '', 'stack');
   const recipient = parent
@@ -2533,6 +2645,8 @@ function compose(lead, conversation, parent, customPitch = null) {
   const to = field('To', 'to', recipient, { type: 'email', required: true, maxLength: 254 });
   const subject = field('Subject', 'subject', customPitch?.subject || interpolateTemplate(defaultTpl?.subject || 'Quick introduction to {{business_name}}', lead), { required: true });
   const body = field('Message', 'body', customPitch?.body || interpolateTemplate(defaultTpl?.body || '', lead), { type: 'textarea', required: true, maxLength: 16000 });
+  body.lastChild.style.minHeight = '190px';
+  const picker = createAttachmentPicker();
   tplSelect.onchange = () => {
     const chosen = settings.templates.find(t => t.id === tplSelect.value);
     if (!chosen) return;
@@ -2544,7 +2658,7 @@ function compose(lead, conversation, parent, customPitch = null) {
   submit.disabled = !account.mailbox;
   const requestId = crypto.randomUUID();
   if (!account.mailbox) feedback.textContent = 'Connect Gmail in Settings before sending.';
-  form.append(tplWrapper, to, subject, body, feedback, submit);
+  form.append(tplWrapper, to, subject, body, picker.el, feedback, submit);
   form.onsubmit = async event => {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(form));
@@ -2554,7 +2668,14 @@ function compose(lead, conversation, parent, customPitch = null) {
     if (blocked(values.to)) { feedback.textContent = 'Address is unsubscribed or bounced.'; return; }
     submit.disabled = true; feedback.textContent = 'Sending…';
     try {
-      const sent = await api('/api/send', { ...values, requestId, threadId: conversation?.id, parentId: parent?.id });
+      const sent = await api('/api/send', {
+        ...values,
+        leadId: lead.id,
+        attachments: picker.getAttachments(),
+        requestId,
+        threadId: conversation?.id,
+        parentId: parent?.id
+      });
       if (!conversation && !lead.threads.some(i => i.id === sent.threadId)) {
         lead.threads.push({ id: sent.threadId, mailbox: account.mailbox, subject: values.subject, time: Date.now(), to: values.to });
       }

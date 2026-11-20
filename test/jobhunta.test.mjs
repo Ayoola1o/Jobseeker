@@ -11,6 +11,7 @@ import {
   extractWebsiteInsights,
   detectPlatformAndTech,
   buildLeadIntelligence,
+  buildRawMimeMessage,
   parseBingMapsHtml,
   resolveSearchLocations,
   hashPassword,
@@ -301,4 +302,39 @@ test('USER_TIERS and getUserQuotaStatus enforce Basic through Diamond limits', (
   const today = new Date().toISOString().slice(0, 10);
   assert.equal(getUserQuotaStatus({ tier: 'basic', usage_date: today, results_today: 249 }).resultsToday, 249);
   assert.equal(getUserQuotaStatus({ tier: 'basic', usage_date: '2020-01-01', results_today: 250 }).resultsToday, 0);
+});
+
+test('buildLeadIntelligence incorporates user-spotted issues into a detailed lead-generation email', () => {
+  const brief = buildLeadIntelligence(
+    { name: 'Glow Skincare', industry: 'Cosmetics & Skincare', city: 'Lagos', website: 'https://glow.example.com', signals: { https: true, hasBookingOrForm: false } },
+    { senderName: 'Ayoola', senderService: 'Shopify CRO & lead generation' },
+    'Mobile checkout button is cut off\nHomepage hero image loads slowly'
+  );
+  assert.equal(brief.gaps[0], 'Mobile checkout button is cut off');
+  assert.equal(brief.gaps[1], 'Homepage hero image loads slowly');
+  assert.ok(brief.pitchBody.includes('• Mobile checkout button is cut off'));
+  assert.ok(brief.pitchBody.includes('• Homepage hero image loads slowly'));
+  assert.ok(brief.pitchBody.length > 400, 'Expected detailed multi-paragraph outreach email');
+});
+
+test('buildRawMimeMessage creates multipart/mixed MIME email with image and file attachments', () => {
+  const pngB64 = Buffer.from('fake-png-bytes').toString('base64');
+  const pdfB64 = Buffer.from('fake-pdf-bytes').toString('base64');
+  const rawB64Url = buildRawMimeMessage({
+    from: 'sender@example.com',
+    to: 'lead@example.com',
+    encodedSubject: '=?UTF-8?B?VGVzdA==?=',
+    body: 'Hello with attachments!',
+    attachments: [
+      { filename: 'audit.png', mimeType: 'image/png', dataBase64: pngB64 },
+      { filename: 'proposal.pdf', mimeType: 'application/pdf', dataBase64: pdfB64 }
+    ]
+  });
+  const decoded = Buffer.from(rawB64Url, 'base64url').toString('utf8');
+  assert.ok(decoded.includes('Content-Type: multipart/mixed; boundary="jobhunta_'));
+  assert.ok(decoded.includes('Content-Type: image/png; name="audit.png"'));
+  assert.ok(decoded.includes('Content-Disposition: attachment; filename="audit.png"'));
+  assert.ok(decoded.includes('Content-Type: application/pdf; name="proposal.pdf"'));
+  assert.ok(decoded.includes(pngB64));
+  assert.ok(decoded.includes(pdfB64));
 });

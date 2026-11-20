@@ -770,8 +770,49 @@ async function savedOutreachLead(userId, id) {
   }
 }
 
+export function buildRawMimeMessage({ from, to, encodedSubject, extraHeaders = [], body, attachments = [] }) {
+  const safeAttachments = Array.isArray(attachments) ? attachments : [];
+  if (safeAttachments.length > 5) fail(400, 'Attach up to 5 files per email.');
+  let totalDecodedBytes = 0;
+  const normalizedAtts = safeAttachments.map(att => {
+    const rawName = String(att?.filename || 'attachment').replace(/[\r\n"\\]/g, '_').trim().slice(0, 120) || 'attachment';
+    const mimeType = String(att?.mimeType || 'application/octet-stream').replace(/[\r\n;]/g, '').trim() || 'application/octet-stream';
+    const b64 = String(att?.dataBase64 || '').replace(/\s+/g, '');
+    if (!b64 || !/^[A-Za-z0-9+/=]+$/.test(b64)) fail(400, `Invalid attachment data for "${rawName}".`);
+    const byteLen = Math.floor((b64.length * 3) / 4);
+    totalDecodedBytes += byteLen;
+    if (totalDecodedBytes > 10 * 1024 * 1024) fail(400, 'Total attachment size must be 10 MB or less.');
+    return { filename: rawName, mimeType, b64 };
+  });
+
+  const headers = ['From: ' + from, 'To: ' + to, ...extraHeaders, 'Subject: ' + encodedSubject, 'MIME-Version: 1.0'];
+  const encodedBody = (Buffer.from(body).toString('base64').match(/.{1,76}/g) || ['']).join('\r\n');
+
+  if (!normalizedAtts.length) {
+    headers.push('Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64');
+    return Buffer.from(headers.join('\r\n') + '\r\n\r\n' + encodedBody).toString('base64url');
+  }
+
+  const boundary = 'jobhunta_' + randomBytes(12).toString('hex');
+  headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+  const parts = [
+    `--${boundary}\r\nContent-Type: text/plain; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${encodedBody}`
+  ];
+  for (const att of normalizedAtts) {
+    const wrapped = (att.b64.match(/.{1,76}/g) || ['']).join('\r\n');
+    parts.push(
+      `--${boundary}\r\n` +
+      `Content-Type: ${att.mimeType}; name="${att.filename}"\r\n` +
+      `Content-Disposition: attachment; filename="${att.filename}"\r\n` +
+      `Content-Transfer-Encoding: base64\r\n\r\n${wrapped}`
+    );
+  }
+  parts.push(`--${boundary}--`);
+  return Buffer.from(headers.join('\r\n') + '\r\n\r\n' + parts.join('\r\n')).toString('base64url');
+}
+
 async function send(session, data) {
-  const { to, body, threadId, requestId } = data;
+  const { to, body, threadId, requestId, attachments = [] } = data;
   let { subject } = data;
   if (!validEmail(to) || typeof body !== 'string' || !body.trim() || body.length > 16000 ||
       typeof subject !== 'string' || !subject.trim() || /[\r\n]/.test(subject) || subject.length > 160 ||
@@ -786,7 +827,7 @@ async function send(session, data) {
     if (!threadId && !await savedOutreachLead(session.userId, data.leadId)) {
       fail(404, 'Save this lead before sending outreach.');
     }
-    const headers = ['From: ' + session.mailbox, 'To: ' + to];
+    const extraHeaders = [];
     if (threadId) {
       const messages = await thread(session, threadId);
       const parent = data.parentId
@@ -805,7 +846,7 @@ async function send(session, data) {
       if (!/^re:/i.test(subject)) subject = 'Re: ' + subject;
       if (/[\r\n]/.test(subject)) fail(400, 'Invalid thread subject.');
       const references = parent.references.match(/<[^<>\s]+>/g) || [];
-      headers.push('In-Reply-To: ' + parent.messageId, 'References: ' + [...references.slice(-15), parent.messageId].join(' '));
+      extraHeaders.push('In-Reply-To: ' + parent.messageId, 'References: ' + [...references.slice(-15), parent.messageId].join(' '));
     }
     const subjectParts = [];
     let subjectPart = '';
@@ -818,10 +859,14 @@ async function send(session, data) {
     }
     subjectParts.push(subjectPart);
     const encodedSubject = subjectParts.map(part => '=?UTF-8?B?' + Buffer.from(part).toString('base64') + '?=').join('\r\n ');
-    headers.push('Subject: ' + encodedSubject, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8',
-      'Content-Transfer-Encoding: base64');
-    const encodedBody = Buffer.from(body).toString('base64').match(/.{1,76}/g).join('\r\n');
-    const raw = Buffer.from(headers.join('\r\n') + '\r\n\r\n' + encodedBody).toString('base64url');
+    const raw = buildRawMimeMessage({
+      from: session.mailbox,
+      to,
+      encodedSubject,
+      extraHeaders,
+      body,
+      attachments
+    });
     const chargedOn = await consumeQuota(session.userId, 'email');
     let result;
     try {
@@ -1943,12 +1988,16 @@ async function fetchWebsiteEmails(websiteUrl) {
   };
 }
 
-export function buildLeadIntelligence(lead = {}, senderSettings = {}) {
+export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues = '') {
   const name = lead.name || 'this business';
   const industry = lead.industry || 'local business';
   const city = lead.city || 'their area';
   const senderName = senderSettings.senderName || '[your name]';
   const senderService = senderSettings.senderService || 'digital growth, lead capture, and client acquisition';
+  const spottedList = (Array.isArray(userIssues) ? userIssues : String(userIssues || '').split(/[\r\n;]+/))
+    .map(s => s.replace(/^[\s•\-*]+/, '').trim())
+    .filter(Boolean)
+    .slice(0, 6);
 
   const socialChannels = [
     lead.facebook && 'Facebook',
@@ -2033,49 +2082,71 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}) {
   if (!gaps.length) {
     gaps.push(`Strong baseline presence; primary opportunity is scaling inbound client flow and automating follow-ups via ${senderService}.`);
   }
+  // Prepend user-spotted issues so they take top priority in both gaps and the pitch
+  const combinedGaps = [...spottedList, ...gaps.filter(g => !spottedList.some(u => u.toLowerCase() === g.toLowerCase()))];
 
-  const primaryGap = !lead.website
-    ? 'building a high-converting web presence and local search capture'
-    : signals.hasBookingOrForm === false
-      ? 'turning website visitors into booked appointments automatically'
-      : socialChannels.length === 0
-        ? 'connecting their website with active social proof and local lead capture'
-        : `strengthening their local visibility and conversion flow in ${city}`;
+  const primaryGap = spottedList[0]
+    ? spottedList[0]
+    : !lead.website
+      ? 'building a high-converting web presence and local search capture'
+      : signals.hasBookingOrForm === false
+        ? 'turning website visitors into booked appointments automatically'
+        : socialChannels.length === 0
+          ? 'connecting their website with active social proof and local lead capture'
+          : `strengthening their local visibility and conversion flow in ${city}`;
 
-  const angle = `Lead with a compliment on their ${industry.toLowerCase()} presence in ${city}${lead.rating ? ` (★ ${lead.rating})` : ''}, then highlight a concrete quick win around ${primaryGap} using ${senderService}.`;
+  const angle = `Lead with a compliment on their ${industry.toLowerCase()} presence in ${city}${lead.rating ? ` (★ ${lead.rating})` : ''}, walk through the top ${Math.min(4, combinedGaps.length)} specific issues found, and show how fixing them brings more qualified leads via ${senderService}.`;
 
   const specificHook = !lead.website
-    ? `I noticed ${name} on Bing Maps in ${city}, but saw there wasn’t a website linked for customers looking to book online`
+    ? `I noticed ${name} on Bing Maps in ${city}, and saw that customers searching online currently don’t have a dedicated website or online funnel to book with you`
     : lead.headings?.length
-      ? `I was looking through ${name}’s website (${lead.headings[0]}) in ${city}`
-      : `I came across ${name} while researching ${industry.toLowerCase()} businesses in ${city}`;
+      ? `I was just reviewing ${name}’s website (“${lead.headings[0]}”) while researching ${industry.toLowerCase()} businesses in ${city}`
+      : `I came across ${name} while reviewing top ${industry.toLowerCase()} businesses in ${city}`;
 
-  const pitchSubject = `Quick idea for ${name} in ${city}`;
+  const topFindings = combinedGaps.slice(0, 4);
+  const bulletLines = topFindings.map(item => `• ${item}`).join('\n');
+
+  const pitchSubject = `A few quick ideas to bring more leads to ${name} in ${city}`.slice(0, 88);
   const pitchBody =
     `Hi ${name} team,\n\n` +
-    `${specificHook}.\n\n` +
-    `I’m ${senderName}, and I help ${industry.toLowerCase()} businesses with ${senderService}. ` +
-    `While reviewing your online presence, I spotted a quick opportunity around ${primaryGap} (${gaps[0].charAt(0).toLowerCase() + gaps[0].slice(1)})\n\n` +
-    `Would you be open to a short 5-minute chat this week so I can share a few practical ideas tailored for ${name}?\n\n` +
+    `${specificHook}, and I really like the foundation you’ve built for customers in ${city}.\n\n` +
+    `I’m ${senderName}, and I specialize in helping ${industry.toLowerCase()} businesses generate more consistent leads and paying customers through ${senderService}. While looking closely at your online presence, I spotted a few specific issues that are likely costing you inquiries every week:\n\n` +
+    `${bulletLines}\n\n` +
+    `Fixing even one or two of these gaps can make a noticeable difference—helping more local searchers find ${name}, trust your brand faster, and reach out or book directly instead of clicking away to a competitor.\n\n` +
+    `I’d be happy to send over a quick 2-minute breakdown (or screenshots) showing exactly how to fix these and capture more leads for ${name}—no strings attached.\n\n` +
+    `Would you be open to me sending that over, or hopping on a brief 10-minute chat this week?\n\n` +
     `Best regards,\n${senderName}`;
 
   return {
     overview: overviewParts.join(' '),
-    gaps,
+    gaps: combinedGaps,
     angle,
     pitchSubject,
     pitchBody,
+    userIssues: spottedList,
     generatedAt: new Date().toISOString()
   };
 }
 
-async function analyzeLeadWithAi(lead, senderSettings) {
-  const baseline = buildLeadIntelligence(lead, senderSettings);
+async function analyzeLeadWithAi(lead, senderSettings, userIssues = '') {
+  const baseline = buildLeadIntelligence(lead, senderSettings, userIssues);
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) return baseline;
 
   try {
-    const prompt = `You are a B2B lead intelligence analyst. Analyze this local business and return a JSON object with keys: "overview" (string), "gaps" (array of 3-5 specific actionable strings about what they are missing online/in marketing), "angle" (string strategy for pitching them), "pitchSubject" (string under 80 chars), "pitchBody" (string personalized cold outreach email with no unreplaced brackets).\n\nBusiness data:\n${JSON.stringify({
+    const userIssuesNote = baseline.userIssues.length
+      ? `\n\nIMPORTANT — Specific issues personally spotted by the user (MUST be highlighted prominently in both "gaps" and the "pitchBody" email):\n${baseline.userIssues.map(i => '- ' + i).join('\n')}`
+      : '';
+
+    const prompt = `You are a senior B2B lead-generation & conversion strategist. Analyze this business and return a JSON object with keys:
+- "overview" (string: 2-3 sentence positioning summary)
+- "gaps" (array of 4-5 specific, actionable issues found on their website/listing)
+- "angle" (string: recommended outreach strategy)
+- "pitchSubject" (string under 85 chars, compelling & personalized)
+- "pitchBody" (string: a detailed, persuasive cold outreach email of 180-260 words with NO unreplaced brackets. Structure it with: (1) a personalized opener referencing their business/city, (2) a clear bulleted list using "• " highlighting 3-4 specific issues found including any user-spotted issues, (3) a short paragraph explaining how fixing these issues will bring them more qualified leads & customers, and (4) a friendly low-friction CTA + sign-off using the sender name).${userIssuesNote}
+
+Business data:
+${JSON.stringify({
       name: lead.name,
       industry: lead.industry,
       city: lead.city,
@@ -2096,7 +2167,11 @@ async function analyzeLeadWithAi(lead, senderSettings) {
       shopifyProducts: lead.shopifyProducts,
       socials: { facebook: lead.facebook, instagram: lead.instagram, twitter: lead.twitter, linkedin: lead.linkedin },
       signals: lead.signals
-    })}\n\nSender profile:\nName: ${senderSettings?.senderName || 'Outreach Specialist'}\nService offered: ${senderSettings?.senderService || 'digital growth & client acquisition'}`;
+    })}
+
+Sender profile:
+Name: ${senderSettings?.senderName || 'Outreach Specialist'}
+Service offered: ${senderSettings?.senderService || 'digital growth & lead generation'}`;
 
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
       method: 'POST',
@@ -2105,7 +2180,7 @@ async function analyzeLeadWithAi(lead, senderSettings) {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { responseMimeType: 'application/json' }
       }),
-      signal: AbortSignal.timeout(12000)
+      signal: AbortSignal.timeout(15000)
     });
     if (!response.ok) return baseline;
     const result = await response.json();
@@ -2117,6 +2192,7 @@ async function analyzeLeadWithAi(lead, senderSettings) {
       angle: String(parsed.angle || baseline.angle),
       pitchSubject: String(parsed.pitchSubject || baseline.pitchSubject).slice(0, 150),
       pitchBody: String(parsed.pitchBody || baseline.pitchBody),
+      userIssues: baseline.userIssues,
       generatedAt: new Date().toISOString()
     };
   } catch {
@@ -2451,14 +2527,14 @@ export async function handleRequest(req, res) {
     }
     if (req.method === 'POST' && path === '/api/analyze') {
       if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
-      const { lead } = await readJson(req);
+      const { lead, userIssues } = await readJson(req);
       if (!lead || typeof lead !== 'object') fail(400, 'Provide business details to analyze.');
       const ws = getWorkspace(session.userId || 'default');
-      return json(await analyzeLeadWithAi(lead, ws.settings));
+      return json(await analyzeLeadWithAi(lead, ws.settings, userIssues || lead.userSpottedIssues || ''));
     }
     if (req.method === 'POST' && path === '/api/send') {
       if (!session.userId) fail(401, 'Sign in to send email.');
-      return json(await send(session, await readJson(req)));
+      return json(await send(session, await readJson(req, 15 * 1024 * 1024)));
     }
     if (req.method === 'GET' && path === '/api/outreach') {
       if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
