@@ -1979,6 +1979,41 @@ async function refresh(manual = false) {
   renderInbox();
   let failed = 0;
   try {
+    // Hydrate any registered outreach threads from server (including direct/test emails or other devices)
+    try {
+      const serverOutreach = await api('/api/outreach');
+      let hydratedNew = false;
+      if (Array.isArray(serverOutreach)) {
+        for (const item of serverOutreach) {
+          if (!item?.id || item.mailbox !== account.mailbox) continue;
+          const alreadyTracked = leads.some(l => (l.threads || []).some(t => t.id === item.id && t.mailbox === item.mailbox));
+          if (alreadyTracked) continue;
+          let targetLead = leads.find(l => (item.leadId && l.id === item.leadId) || (item.to && norm(l.email) === norm(item.to)));
+          if (!targetLead) {
+            targetLead = {
+              id: crypto.randomUUID(),
+              name: (item.to || 'Direct Contact').split('@')[0],
+              email: item.to || '',
+              folder: 'Direct Emails',
+              savedAt: Number(item.time) || Date.now(),
+              threads: []
+            };
+            leads.unshift(targetLead);
+          }
+          if (!targetLead.threads) targetLead.threads = [];
+          targetLead.threads.push({
+            id: item.id,
+            mailbox: item.mailbox,
+            subject: item.subject || '(No subject)',
+            time: Number(item.time) || Date.now(),
+            to: item.to || targetLead.email
+          });
+          hydratedNew = true;
+        }
+        if (hydratedNew) persist();
+      }
+    } catch {}
+
     const list = outgoing().filter(item => item.conversation.mailbox === account.mailbox);
     for (let index = 0; index < list.length; index += 4) {
       const batch = await Promise.allSettled(list.slice(index, index + 4)

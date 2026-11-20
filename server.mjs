@@ -710,6 +710,7 @@ async function fetchGmailThread(session, id) {
     subject: header(message, 'subject'), messageId: header(message, 'message-id'),
     references: header(message, 'references'), inReplyTo: header(message, 'in-reply-to'),
     autoSubmitted: header(message, 'auto-submitted'), contentType: header(message, 'content-type'),
+    labelIds: message.labelIds || [],
     sent: message.labelIds?.includes('SENT') ?? false,
     time: Number(message.internalDate),
     body: extractMessageBody(message.payload, message.snippet)
@@ -744,14 +745,20 @@ async function thread(session, id) {
   const start = messages.findIndex(message => message.id === registration.messageId && message.sent &&
     emailMatches(message.to, registration.recipient));
   if (start < 0) fail(404, 'The original outreach message is unavailable in Gmail.');
-  const related = new Set();
+  const isSelfThread = emailMatches(registration.recipient, session.mailbox);
   const filtered = [];
-  for (const message of messages.slice(start)) {
-    const kind = outreachMessageKind(message, registration);
-    const references = (message.inReplyTo + ' ' + message.references).match(/<[^<>\s]+>/g) || [];
-    if (kind === 'unrelated' || (kind === 'review' && !references.some(reference => related.has(reference)))) continue;
-    if (message.messageId) related.add(message.messageId);
-    filtered.push({ ...message, kind });
+  for (let i = start; i < messages.length; i++) {
+    const message = messages[i];
+    let kind = outreachMessageKind(message, registration);
+    let sent = message.sent;
+    if (i > start && isSelfThread && message.labelIds?.includes('INBOX')) {
+      // Self-test replies have both SENT and INBOX labels in Gmail; treat subsequent messages as replies
+      sent = false;
+      kind = 'reply';
+    }
+    if (kind === 'unrelated' && !sent) kind = 'review';
+    if (kind === 'unrelated') continue;
+    filtered.push({ ...message, sent, kind });
   }
   return filtered;
 }
