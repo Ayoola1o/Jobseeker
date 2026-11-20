@@ -1822,11 +1822,11 @@ function renderProfile() {
   if (!container) return;
 
   const tierList = [
-    { key: 'basic', label: 'Basic', searches: '50', emails: '10', dailySearchLimit: 50, dailyEmailLimit: 10 },
-    { key: 'silver', label: 'Silver', searches: '120', emails: '30', dailySearchLimit: 120, dailyEmailLimit: 30 },
-    { key: 'gold', label: 'Gold', searches: '300', emails: '50', dailySearchLimit: 300, dailyEmailLimit: 50 },
-    { key: 'premium', label: 'Premium', searches: '500', emails: '100', dailySearchLimit: 500, dailyEmailLimit: 100 },
-    { key: 'diamond', label: 'Diamond', searches: 'Unlimited', emails: 'Unlimited', dailySearchLimit: null, dailyEmailLimit: null }
+    { key: 'basic', label: 'Basic', tagline: 'Starter outreach', searches: '50', emails: '10', dailySearchLimit: 50, dailyEmailLimit: 10 },
+    { key: 'silver', label: 'Silver', tagline: 'Growing pipeline', searches: '120', emails: '30', dailySearchLimit: 120, dailyEmailLimit: 30 },
+    { key: 'gold', label: 'Gold', tagline: 'Active prospecting', searches: '300', emails: '50', dailySearchLimit: 300, dailyEmailLimit: 50 },
+    { key: 'premium', label: 'Premium', tagline: 'High-volume teams', searches: '500', emails: '100', dailySearchLimit: 500, dailyEmailLimit: 100 },
+    { key: 'diamond', label: 'Diamond', tagline: 'Unrestricted scale', searches: 'Unlimited', emails: 'Unlimited', dailySearchLimit: null, dailyEmailLimit: null }
   ];
 
   const usage = currentUser?.usage || {
@@ -1839,102 +1839,187 @@ function renderProfile() {
     usageDate: new Date().toISOString().slice(0, 10)
   };
   const activeTier = tierList.find(t => t.key === usage.tier) || tierList[0];
+  const withEmailCount = leads.filter(l => l.email).length;
+  const now = new Date();
+  const nextMidnightUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  const minsLeft = Math.max(1, Math.round((nextMidnightUtc - Date.now()) / 60000));
+  const resetCountdown = `${Math.floor(minsLeft / 60)}h ${minsLeft % 60}m left`;
 
-  const topHeader = create('div', '', 'heading section-title');
-  const titleWrap = create('div');
-  titleWrap.append(create('h1', 'Your Profile & Usage'), create('p', 'Manage your account and track your daily search & outreach quotas.'));
-  const planBadge = create('span', '', 'pill');
-  planBadge.append(iconEl('crown', 13), document.createTextNode(`${activeTier.label} Plan`));
-  topHeader.append(titleWrap, planBadge);
-
-  const topGrid = create('div', '', 'grid-2');
-  topGrid.style.marginBottom = '18px';
-
-  const userCard = create('article', '', 'surface dossier-hero-card');
-  const userAvatar = makeAvatar(currentUser?.name || currentUser?.email || 'U', true);
-  userAvatar.classList.add('round');
-  userAvatar.style.background = '#052e2b';
-  const uInfo = create('div', '', 'stack');
-  uInfo.style.gap = '4px';
-  const tierPill = create('span', '', 'pill');
-  tierPill.append(create('i', '', 'status-dot'), document.createTextNode(`${activeTier.label} Tier · ID: ${String(currentUser?.id || '').slice(0, 8)}`));
-  uInfo.append(
-    create('h2', currentUser?.name || settings.senderName || 'Jobhunta User'),
-    create('p', currentUser?.email || '', 'small'),
-    tierPill
+  // 1. Modern Emerald Hero Banner
+  const hero = create('section', '', 'profile-hero');
+  const heroLeft = create('div', '', 'profile-hero-left');
+  const avatar = create('div', getInitials(currentUser?.name || currentUser?.email || 'U'), 'profile-avatar-lg');
+  const heroText = create('div');
+  const heroPills = create('div', '', 'profile-hero-pills');
+  const tierGlass = create('span', '', 'hero-glass-pill emerald');
+  tierGlass.append(iconEl('crown', 13), document.createTextNode(`${activeTier.label} Plan`));
+  const idGlass = create('button', '', 'hero-glass-pill');
+  idGlass.type = 'button';
+  idGlass.style.cursor = 'pointer';
+  const shortId = String(currentUser?.id || 'local').slice(0, 8);
+  idGlass.append(iconEl('copy', 12), document.createTextNode(`ID: ${shortId}`));
+  idGlass.onclick = async () => {
+    try { await navigator.clipboard.writeText(currentUser?.id || ''); report('Copied Workspace ID to clipboard.'); } catch {}
+  };
+  heroPills.append(tierGlass, idGlass);
+  heroText.append(
+    create('h1', currentUser?.name || settings.senderName || 'Jobhunta User'),
+    create('p', currentUser?.email || 'Personal Workspace', 'profile-hero-email'),
+    heroPills
   );
-  userCard.append(userAvatar, uInfo);
+  heroLeft.append(avatar, heroText);
 
-  const planCard = create('article', '', 'surface plan-split-card');
-  const c1 = create('div', '', 'plan-split-col'); c1.append(create('small', 'Current Plan', 'small'), create('h2', activeTier.label));
-  const c2 = create('div', '', 'plan-split-col'); c2.append(create('small', 'Daily Quota Reset', 'small'), create('h2', '00:00 UTC'));
-  planCard.append(c1, c2);
-  topGrid.append(userCard, planCard);
+  const heroActs = create('div', '', 'actions');
+  heroActs.append(
+    btnWithIcon('settings', 'Workspace Settings', () => { location.hash = '#settings'; }, 'hero-btn-ghost'),
+    btnWithIcon('search', 'Find Businesses', () => { location.hash = '#discover'; })
+  );
+  hero.append(heroLeft, heroActs);
 
-  const botGrid = create('div', '', 'dash-bot');
+  // 2. 4-Card Live Usage & Workspace KPI Strip
+  const kpiGrid = create('div', '', 'kpi-grid');
+  const makeProfileKpi = (icoName, value, label, sub, handler, amber = false) => {
+    const card = create('article', '', 'surface kpi-card');
+    const ico = create('div', '', 'kpi-ico' + (amber ? ' amber' : ''));
+    ico.append(iconEl(icoName, 24));
+    const foot = create('div', '', 'kpi-foot-row');
+    foot.append(create('small', label), create('span', sub, 'kpi-trend'));
+    card.append(ico, create('strong', String(value)), foot);
+    if (handler) card.onclick = handler;
+    return card;
+  };
+  const searchRemain = activeTier.dailySearchLimit == null ? 'Unlimited' : `${Math.max(0, activeTier.dailySearchLimit - (usage.searchesToday || 0))} left`;
+  const emailRemain = activeTier.dailyEmailLimit == null ? 'Unlimited' : `${Math.max(0, activeTier.dailyEmailLimit - (usage.emailsToday || 0))} left`;
+  kpiGrid.append(
+    makeProfileKpi('search', usage.searchesToday || 0, 'Searches Today', searchRemain, () => { location.hash = '#discover'; }),
+    makeProfileKpi('mail', usage.emailsToday || 0, 'Emails Sent Today', emailRemain, () => { location.hash = '#broadcast'; }),
+    makeProfileKpi('users', leads.length, 'Saved Leads', `${withEmailCount} with email`, () => { location.hash = '#leads'; }),
+    makeProfileKpi('refresh', '00:00 UTC', 'Daily Quota Reset', resetCountdown, null, true)
+  );
+
+  // 3. 2-Column Split: Daily Usage Meters + Account & Workspace Details
+  const midGrid = create('div', '', 'profile-mid-grid');
+
   const usageCard = create('article', '', 'surface card-pad');
-  usageCard.append(create('h2', `Usage Overview (${usage.usageDate || 'Today'})`));
-  const addMeter = (title, used, limit) => {
+  const uHead = create('div', '', 'setting-card-head');
+  const uTitleWrap = create('div', '', 'setting-card-title');
+  const uIco = create('div', '', 'setting-ico'); uIco.append(iconEl('barChart', 19));
+  const uTitleTxt = create('div');
+  uTitleTxt.append(create('h2', 'Daily Quota & Activity'), create('p', `Live usage tracking for ${usage.usageDate || 'today'}`));
+  uTitleWrap.append(uIco, uTitleTxt);
+  uHead.append(uTitleWrap, create('span', activeTier.label, 'pill'));
+  usageCard.append(uHead);
+
+  const addMeter = (title, used, limit, suffix = '') => {
     const wrap = create('div');
     const isUnlimited = limit === null || limit === undefined;
-    const labelText = isUnlimited ? `${used} / Unlimited` : `${used} / ${limit}`;
+    const pct = isUnlimited ? 100 : Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
+    const labelText = isUnlimited ? `${used} / Unlimited` : `${used} / ${limit}${suffix ? ' ' + suffix : ''} (${pct}%)`;
     const rowTop = create('div', '', 'stat-row');
     rowTop.style.border = '0'; rowTop.style.padding = '0';
     rowTop.append(create('span', title), create('strong', labelText));
     const meter = create('div', '', 'meter');
     const fill = create('div', '', 'meter-fill');
-    fill.style.width = (isUnlimited ? 100 : Math.min(100, Math.round((used / Math.max(1, limit)) * 100))) + '%';
-    if (!isUnlimited && used >= limit) fill.style.background = '#b91c1c';
+    fill.style.width = `${isUnlimited ? 100 : Math.max(pct, used > 0 ? 4 : 0)}%`;
+    if (!isUnlimited && pct >= 100) fill.style.background = '#b91c1c';
+    else if (!isUnlimited && pct >= 80) fill.style.background = '#d97706';
     meter.append(fill);
     wrap.append(rowTop, meter);
     return wrap;
   };
   usageCard.append(
-    addMeter('Searches Used Today', usage.searchesToday || 0, activeTier.dailySearchLimit),
-    addMeter('Emails Sent Today', usage.emailsToday || 0, activeTier.dailyEmailLimit),
-    addMeter('Saved Leads in Workspace', leads.length, null)
+    addMeter('Business Searches Used Today', usage.searchesToday || 0, activeTier.dailySearchLimit),
+    addMeter('Outreach Emails Sent Today', usage.emailsToday || 0, activeTier.dailyEmailLimit),
+    addMeter('Verified Email Coverage', withEmailCount, Math.max(1, leads.length), 'leads')
+  );
+  const usageFoot = create('div', '', 'actions');
+  usageFoot.style.marginTop = '4px';
+  usageFoot.append(
+    btnWithIcon('search', 'New Search', () => { location.hash = '#discover'; }, 'btn-soft'),
+    btnWithIcon('send', 'Open Broadcast', () => { location.hash = '#broadcast'; }, true)
+  );
+  usageCard.append(usageFoot);
+
+  const detailsCard = create('article', '', 'surface card-pad');
+  const dHead = create('div', '', 'setting-card-head');
+  const dTitleWrap = create('div', '', 'setting-card-title');
+  const dIco = create('div', '', 'setting-ico blue'); dIco.append(iconEl('user', 19));
+  const dTitleTxt = create('div');
+  dTitleTxt.append(create('h2', 'Workspace & Account'), create('p', 'Connected integrations and sender identity'));
+  dTitleWrap.append(dIco, dTitleTxt);
+  dHead.append(dTitleWrap);
+  detailsCard.append(dHead);
+
+  const addDetailRow = (title, sub, actionNode) => {
+    const r = create('div', '', 'setting-row');
+    const c = create('div', '', 'setting-row-copy');
+    c.append(create('strong', title), create('small', sub));
+    r.append(c, actionNode);
+    detailsCard.append(r);
+  };
+  addDetailRow(
+    'Sender Identity',
+    [settings.senderName || currentUser?.name, settings.senderService || 'No service offer set yet'].filter(Boolean).join(' · '),
+    button('Edit', () => { settingsTab = 'outreach'; location.hash = '#settings'; }, 'btn-soft')
+  );
+  addDetailRow(
+    'Gmail Outreach',
+    account.mailbox ? `Connected as ${account.mailbox}` : 'Not connected yet',
+    button(account.mailbox ? 'Manage' : 'Connect', () => { settingsTab = 'integrations'; location.hash = '#settings'; }, account.mailbox ? true : 'btn-soft')
+  );
+  const sbBadge = create('span', '', account.supabase?.connected ? 'pill' : 'pill wait');
+  sbBadge.append(create('i', '', 'status-dot'), document.createTextNode(account.supabase?.connected ? 'Synced' : 'Local'));
+  addDetailRow('Supabase Cloud Sync', 'Isolated per-user Postgres workspace', sbBadge);
+  addDetailRow(
+    'Active Session',
+    'Sign out of your Jobhunta account on this device',
+    btnWithIcon('logOut', 'Log Out', async () => {
+      try { await api('/api/auth/logout', {}); } catch {}
+      showAuthScreen();
+    }, 'danger')
   );
 
-  const compCard = create('article', '', 'surface card-pad');
-  compCard.append(create('h2', 'Plan Comparison'));
-  const tWrap = create('div', '', 'data-table-wrap');
-  tWrap.style.paddingTop = '12px';
-  const tbl = create('table', '', 'plan-table');
-  const thead = create('thead');
-  const hRow = create('tr');
-  hRow.append(create('th', 'Quota'));
+  midGrid.append(usageCard, detailsCard);
+
+  // 4. Full-Width 5-Tier Modern Plan Comparison Cards
+  const plansSection = create('section', '', 'surface card-pad');
+  const pHead = create('div', '', 'heading');
+  pHead.style.margin = '0';
+  const pHeadCopy = create('div');
+  pHeadCopy.append(create('h2', 'Subscription Tiers & Daily Allowances'), create('p', 'Compare daily search and outreach email limits across all Jobhunta plans.', 'small'));
+  pHead.append(pHeadCopy, create('span', `Current: ${activeTier.label}`, 'pill'));
+
+  const cardsGrid = create('div', '', 'plan-cards-grid');
   for (const t of tierList) {
     const isCurrent = t.key === activeTier.key;
-    const th = create('th', '', isCurrent ? 'col-active' : '');
-    if (isCurrent) th.append(create('span', 'Active', 'active-plan-tag'));
-    th.append(document.createTextNode(t.label));
-    hRow.append(th);
-  }
-  thead.append(hRow);
-  const tbody = create('tbody');
-  const makeRow = (label, getter, isCheck = false) => {
-    const r = create('tr');
-    r.append(create('td', label));
-    for (const t of tierList) {
-      const td = create('td', '', t.key === activeTier.key ? 'col-active' : '');
-      if (isCheck) td.append(iconEl('check', 16));
-      else td.textContent = getter(t);
-      r.append(td);
-    }
-    return r;
-  };
-  tbody.append(
-    makeRow('Searches / Day', t => t.searches),
-    makeRow('Emails / Day', t => t.emails),
-    makeRow('AI Lead Briefs', null, true),
-    makeRow('Supabase Sync', null, true)
-  );
-  tbl.append(thead, tbody);
-  tWrap.append(tbl);
-  compCard.append(tWrap);
+    const tc = create('article', '', 'tier-card' + (isCurrent ? ' active' : ''));
+    if (isCurrent) tc.append(create('span', 'Current Plan', 'tier-card-badge'));
 
-  botGrid.append(usageCard, compCard);
-  container.replaceChildren(topHeader, topGrid, botGrid);
+    const h3 = create('h3');
+    h3.append(document.createTextNode(t.label));
+    if (t.key === 'diamond') h3.append(iconEl('crown', 16));
+    tc.append(h3, create('p', t.tagline, 'tier-tagline'));
+
+    const statBox = create('div', '', 'tier-stat-box');
+    const sRow = create('div', '', 'tier-stat-line');
+    sRow.append(create('span', 'Searches / day'), create('strong', t.searches));
+    const eRow = create('div', '', 'tier-stat-line');
+    eRow.append(create('span', 'Emails / day'), create('strong', t.emails));
+    statBox.append(sRow, eRow);
+
+    const feats = create('ul', '', 'tier-features');
+    ['Bing Maps & Shopify Scraper', 'AI Lead Briefs & Pitches', 'Supabase Cloud Sync'].forEach(f => {
+      const li = create('li');
+      li.append(iconEl('check', 14), document.createTextNode(f));
+      feats.append(li);
+    });
+
+    tc.append(statBox, feats);
+    cardsGrid.append(tc);
+  }
+  plansSection.append(pHead, cardsGrid);
+
+  container.replaceChildren(hero, kpiGrid, midGrid, plansSection);
 }
 
 /* ---------------- SETTINGS (Modern SaaS Categorized Settings, Auto-Saving) ---------------- */
