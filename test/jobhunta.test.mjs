@@ -3,7 +3,15 @@ import { assessLead, industryAngle, normalizeLeadProfiles } from '../public/qual
 import { googleQueries, businessKeys } from '../public/discovery.mjs';
 import assert from 'node:assert/strict';
 import { readBusinessCsv, writeBusinessCsv } from '../public/csv.mjs';
-import { detectPlatform, analyzePageAudit, generateClientOutreach, generateLeadSolutionPack, buildSolutionPackHtml } from '../public/audit.mjs';
+import {
+  detectPlatform,
+  analyzePageAudit,
+  generateClientOutreach,
+  generateLeadSolutionPack,
+  buildSolutionPackHtml,
+  PERSONA_CATALOG,
+  getActivePersonaModules
+} from '../public/audit.mjs';
 import {
   extractMessageBody,
   outreachMessageKind,
@@ -439,4 +447,72 @@ test('detectPlatform, analyzePageAudit, and generateClientOutreach perform multi
   assert.ok(solutionPack.replyProposalBody.includes('PHASE 4'));
   const htmlDoc = buildSolutionPackHtml(solutionPack, { name: 'Demo Shop', auditReport: audit }, { senderName: 'Ayoola' });
   assert.ok(htmlDoc.includes('Client Solution Pack &amp; 4-Phase Growth Roadmap'));
+});
+
+test('6 Personas filter AI pitches, audit outreach, and solution packs to persona core modules and enforce Added Tools checkbox tier limits', () => {
+  assert.equal(PERSONA_CATALOG.length, 6);
+  const sampleLead = {
+    name: 'Apex Dental Studio',
+    industry: 'Dentists',
+    city: 'Lagos',
+    website: 'https://apexdental.example.com',
+    searchRank: 27,
+    searchPage: 3,
+    rating: '3.9',
+    signals: {
+      https: false,
+      hasMetaDescription: false,
+      hasBookingOrForm: false,
+      hasChatWidget: false,
+      hasAnalytics: false
+    }
+  };
+
+  // 1. Web Developer persona (only web_tech by default — no social media or paid ad pixel noise)
+  const webDevBrief = buildLeadIntelligence(sampleLead, {
+    senderName: 'Ayoola',
+    persona: 'web_dev',
+    addedTools: []
+  }, '', '', 5);
+  assert.equal(webDevBrief.personaId, 'web_dev');
+  assert.deepEqual(webDevBrief.activeModuleKeys, ['web_tech']);
+  assert.ok(webDevBrief.pitchBody.includes('HTTPS'));
+  assert.ok(!webDevBrief.pitchBody.includes('Lack of Social Media Presence'), 'Web Dev pitch should not include Social Media gaps when unchecked');
+  assert.ok(!webDevBrief.pitchBody.includes('Missing Ad & Conversion Tracking Pixels'), 'Web Dev pitch should not include Digital Marketing pixel gaps when unchecked');
+
+  // 2. Digital Marketer persona (only ads_funnel by default)
+  const marketerBrief = buildLeadIntelligence(sampleLead, {
+    senderName: 'Ayoola',
+    persona: 'digital_marketer',
+    addedTools: []
+  }, '', '', 5);
+  assert.equal(marketerBrief.personaId, 'digital_marketer');
+  assert.deepEqual(marketerBrief.activeModuleKeys, ['ads_funnel']);
+  assert.ok(marketerBrief.pitchBody.includes('Missing Ad & Conversion Tracking Pixels'));
+  assert.ok(marketerBrief.pitchBody.includes('Missing Online Lead Capture / Booking Form'));
+  assert.ok(!marketerBrief.pitchBody.includes('Lack of Social Media Presence'));
+
+  // 3. Added Tools Checkbox Tier Limits: Basic = 0, Silver = 1, Gold = 2, Premium/Diamond = All
+  const requestedExtras = ['social_brand', 'seo_local', 'ads_funnel'];
+  const basicState = getActivePersonaModules({ persona: 'web_dev', addedTools: requestedExtras }, 1);
+  assert.equal(basicState.addedTools.length, 0);
+
+  const silverState = getActivePersonaModules({ persona: 'web_dev', addedTools: requestedExtras }, 2);
+  assert.equal(silverState.addedTools.length, 1);
+  assert.deepEqual(silverState.addedTools, ['social_brand']);
+
+  const goldState = getActivePersonaModules({ persona: 'web_dev', addedTools: requestedExtras }, 3);
+  assert.equal(goldState.addedTools.length, 2);
+  assert.deepEqual(goldState.addedTools, ['social_brand', 'seo_local']);
+
+  const diamondState = getActivePersonaModules({ persona: 'web_dev', addedTools: requestedExtras }, 5);
+  assert.equal(diamondState.addedTools.length, 3);
+
+  // When Web Dev checks 'social_brand' on Silver+, Social Media gaps ARE added to their pitch!
+  const webDevPlusSocial = buildLeadIntelligence(sampleLead, {
+    senderName: 'Ayoola',
+    persona: 'web_dev',
+    addedTools: ['social_brand']
+  }, '', '', 2);
+  assert.ok(webDevPlusSocial.pitchBody.includes('Lack of Social Media Presence'));
 });

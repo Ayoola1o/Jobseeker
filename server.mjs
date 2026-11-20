@@ -1,6 +1,15 @@
 import { normalizeLeadProfiles } from './public/qualification.mjs';
 import { platformDomains, searchList, googleQueries, publicWebsite, businessKeys, websiteIdentity } from './public/discovery.mjs';
-import { detectPlatform, analyzePageAudit, generateClientOutreach } from './public/audit.mjs';
+import {
+  detectPlatform,
+  analyzePageAudit,
+  generateClientOutreach,
+  PERSONA_TOOL_MODULES,
+  PERSONA_CATALOG,
+  getPersonaConfig,
+  getActivePersonaModules,
+  filterAuditFindingsForPersona
+} from './public/audit.mjs';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, createHash, createCipheriv, createDecipheriv, scryptSync, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -131,6 +140,8 @@ function createEmptyWorkspace(name = '', service = '') {
     settings: {
       senderName: name,
       senderService: service,
+      persona: 'web_dev',
+      addedTools: [],
       defaultFollowUpDays: 4,
       templates: defaultTemplates
     },
@@ -601,6 +612,10 @@ async function loadFromSupabase(userId = 'default') {
         ws.settings = {
           senderName: String(row.settings.senderName || ''),
           senderService: String(row.settings.senderService || ''),
+          persona: getPersonaConfig(row.settings.persona || 'web_dev').id,
+          addedTools: Array.isArray(row.settings.addedTools)
+            ? row.settings.addedTools.map(String).filter(k => Object.hasOwn(PERSONA_TOOL_MODULES, k))
+            : [],
           savedSearches: normalizeSavedSearches(row.settings.savedSearches),
           leadProfiles: normalizeLeadProfiles(row.settings.leadProfiles),
           defaultFollowUpDays: Number(row.settings.defaultFollowUpDays) || 4,
@@ -2372,12 +2387,13 @@ async function fetchWebsiteEmails(websiteUrl) {
   };
 }
 
-export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues = '', extraContext = '') {
+export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues = '', extraContext = '', tierLevel = 5) {
   const name = lead.name || 'this business';
   const industry = lead.industry || 'local business';
   const city = lead.city || 'their area';
+  const { persona, hasExplicitPersona, activeModules, addedTools } = getActivePersonaModules(senderSettings, tierLevel);
   const senderName = senderSettings.senderName || '[your name]';
-  const senderService = senderSettings.senderService || 'digital growth, lead capture, and client acquisition';
+  const senderService = senderSettings.senderService || persona.defaultService || 'digital growth, lead capture, and client acquisition';
   const spottedList = (Array.isArray(userIssues) ? userIssues : String(userIssues || '').split(/[\r\n;]+/))
     .map(s => s.replace(/^[\s•\-*]+/, '').trim())
     .filter(Boolean)
@@ -2398,89 +2414,116 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
   const ratingNum = parseFloat(lead.rating);
   const signals = lead.signals || {};
   const auditReport = lead.auditReport || null;
+  const activeLensLabel = `${persona.title}${addedTools.length ? ` + ${addedTools.map(k => PERSONA_TOOL_MODULES[k]?.shortLabel).filter(Boolean).join(', ')}` : ''}`;
 
   const overviewParts = [
     `${name} operates as a ${industry} in ${city}${lead.address ? ` (${lead.address})` : ''}.`
   ];
-  if (lead.searchRank) {
+  if (activeModules.has('seo_local') && lead.searchRank) {
     overviewParts.push(`Current Bing Search Position: Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)}).`);
   }
-  if (lead.platform && lead.platform !== 'Custom / Website') {
-    overviewParts.push(`Website platform: ${lead.platform}${lead.shopifyMeta?.themeName ? ` (Theme: ${lead.shopifyMeta.themeName})` : ''}${lead.shopifyMeta?.currency ? ` [${lead.shopifyMeta.currency}]` : ''}.`);
-  } else if (lead.website) {
-    overviewParts.push(`Website: ${lead.website}.`);
-  } else {
-    overviewParts.push('Website: No official website linked.');
+  if (activeModules.has('web_tech') || activeModules.has('ecommerce_cro')) {
+    if (lead.platform && lead.platform !== 'Custom / Website') {
+      overviewParts.push(`Website platform: ${lead.platform}${lead.shopifyMeta?.themeName ? ` (Theme: ${lead.shopifyMeta.themeName})` : ''}${lead.shopifyMeta?.currency ? ` [${lead.shopifyMeta.currency}]` : ''}.`);
+    } else if (lead.website) {
+      overviewParts.push(`Website: ${lead.website}.`);
+    } else {
+      overviewParts.push('Website: No official website linked.');
+    }
+    if (auditReport?.overallScore !== undefined) {
+      overviewParts.push(`Website Audit Health Score: ${auditReport.overallScore}/100 (${auditReport.counts?.critical || 0} critical, ${auditReport.counts?.warning || 0} warnings${auditReport.ttfbMs ? `, ${auditReport.ttfbMs}ms TTFB` : ''}).`);
+    }
   }
-  if (auditReport?.overallScore !== undefined) {
-    overviewParts.push(`Website Audit Health Score: ${auditReport.overallScore}/100 (${auditReport.counts?.critical || 0} critical, ${auditReport.counts?.warning || 0} warnings${auditReport.ttfbMs ? `, ${auditReport.ttfbMs}ms TTFB` : ''}).`);
-  }
-  if (Array.isArray(lead.shopifyProducts) && lead.shopifyProducts.length) {
+  if (activeModules.has('ecommerce_cro') && Array.isArray(lead.shopifyProducts) && lead.shopifyProducts.length) {
     overviewParts.push(`Catalog sample: ${lead.shopifyProducts.slice(0, 4).map(p => `${p.title}${p.price ? ` ($${p.price})` : ''}`).join(', ')}.`);
   }
-  if (Array.isArray(lead.techStack) && lead.techStack.length) {
+  if ((activeModules.has('web_tech') || activeModules.has('ads_funnel') || activeModules.has('ecommerce_cro')) && Array.isArray(lead.techStack) && lead.techStack.length) {
     overviewParts.push(`Detected tech stack: ${lead.techStack.join(', ')}.`);
   }
-  if (socialChannels.length) {
-    overviewParts.push(`Active social channels: ${socialChannels.join(', ')} (missing: ${missingSocials.join(', ') || 'none'}).`);
-  } else {
-    overviewParts.push('Social media presence: None linked on website or listing.');
+  if (activeModules.has('social_brand')) {
+    if (socialChannels.length) {
+      overviewParts.push(`Active social channels: ${socialChannels.join(', ')} (missing: ${missingSocials.join(', ') || 'none'}).`);
+    } else {
+      overviewParts.push('Social media presence: None linked on website or listing.');
+    }
   }
-  if (lead.siteTitle || lead.metaDescription) {
-    overviewParts.push(`Website positioning: "${lead.siteTitle || lead.metaDescription}".`);
-  }
-  if (lead.headings?.length) {
-    overviewParts.push(`Key headings: ${lead.headings.slice(0, 4).join(' | ')}.`);
-  }
-  if (lead.rating) {
-    overviewParts.push(`Listed rating: ★ ${lead.rating}${lead.ratingInfo ? ` (${lead.ratingInfo})` : ''}.`);
-  } else {
-    overviewParts.push('Listed rating: No star rating or customer reviews displayed.');
-  }
-  if (lead.openHours) {
-    overviewParts.push(`Operating hours: ${lead.openHours}.`);
+  if (activeModules.has('seo_local')) {
+    if (lead.siteTitle || lead.metaDescription) {
+      overviewParts.push(`Website positioning: "${lead.siteTitle || lead.metaDescription}".`);
+    }
+    if (lead.headings?.length) {
+      overviewParts.push(`Key headings: ${lead.headings.slice(0, 4).join(' | ')}.`);
+    }
+    if (lead.rating) {
+      overviewParts.push(`Listed rating: ★ ${lead.rating}${lead.ratingInfo ? ` (${lead.ratingInfo})` : ''}.`);
+    } else {
+      overviewParts.push('Listed rating: No star rating or customer reviews displayed.');
+    }
+    if (lead.openHours) {
+      overviewParts.push(`Operating hours: ${lead.openHours}.`);
+    }
   }
   if (lead.phone || lead.email) {
     overviewParts.push(`Direct contacts found: ${[lead.email && `Email (${lead.email})`, lead.phone && `Phone (${lead.phone})`].filter(Boolean).join(', ')}.`);
   }
 
   const gaps = [];
-  if (lead.searchRank && lead.searchRank > 10) {
-    gaps.push(`Local Search Visibility: Buried at Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)}) in search for "${industry} in ${city}" — losing high-intent local buyers to Page 1 competitors.`);
-  } else if (lead.searchRank) {
-    gaps.push(`Search Capture Opportunity: Ranked #${lead.searchRank} in ${city}, meaning competitors right alongside you are competing for the same clicks if your landing page & social proof don’t convert immediately.`);
-  }
-  if (!lead.website) {
-    gaps.push('Missing Official Website: No website is linked on your listing — high-intent customers searching online have no dedicated landing page, catalog, or booking funnel to convert.');
-  } else {
-    if (signals.https === false) {
-      gaps.push('Security & Trust Warning: Website is not using HTTPS security, which triggers browser "Not Secure" warnings and hurts search trust.');
+  if (activeModules.has('seo_local')) {
+    if (lead.searchRank && lead.searchRank > 10) {
+      gaps.push(`Local Search Visibility: Buried at Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)}) in search for "${industry} in ${city}" — losing high-intent local buyers to Page 1 competitors.`);
+    } else if (lead.searchRank) {
+      gaps.push(`Search Capture Opportunity: Ranked #${lead.searchRank} in ${city}, meaning competitors right alongside you are competing for the same clicks if your landing page & local SEO don’t convert immediately.`);
     }
-    if (signals.hasMetaDescription === false) {
+    if (lead.website && signals.hasMetaDescription === false) {
       gaps.push('SEO Meta Description Missing: Missing <meta name="description"> on your website, reducing organic click-through rates from Google and Bing.');
     }
-    if (lead.platform === 'Shopify' || lead.platform === 'WooCommerce') {
-      if (!signals.hasReviewsApp) {
-        gaps.push(`E-Commerce Social Proof (${lead.platform}): Running on ${lead.platform} without a dedicated product review widget (Judge.me, Loox, or Yotpo) to boost product page conversion.`);
-      }
-      if (!(lead.techStack || []).some(t => /Klaviyo|Omnisend|Mailchimp/i.test(t))) {
-        gaps.push(`E-Commerce Retention (${lead.platform}): No automated email/SMS retention stack (Klaviyo / Omnisend) detected for abandoned cart recovery and repeat buyer flows.`);
-      }
+    if (!lead.rating || (!Number.isNaN(ratingNum) && ratingNum < 4.4)) {
+      gaps.push(`Local Reputation & Review Volume: ${lead.rating ? `Current listed rating is ★ ${lead.rating}${lead.ratingInfo ? ` (${lead.ratingInfo})` : ''}` : 'No star rating or customer reviews displayed on your map listing'} — strengthening visible review proof will lift local click-through.`);
     }
-    if (signals.hasBookingOrForm === false) {
-      gaps.push('Missing Online Lead Capture / Booking Form: No clear instant quote, booking, or lead capture form detected — forcing visitors to call manually.');
-    }
-    if (signals.hasChatWidget === false) {
-      gaps.push('No Live Chat / WhatsApp Widget: No instant chat or WhatsApp response widget on site to capture mobile and after-hours inquiries.');
-    }
-    if (signals.hasAnalytics === false) {
-      gaps.push('Missing Ad & Conversion Tracking Pixels: No Google Analytics/GTM, Meta Pixel, or TikTok Pixel detected — visitors leave without retargeting or conversion attribution.');
+    if (!lead.openHours) {
+      gaps.push('Missing Operating Hours on Listing: Operating hours are not displayed on your map profile, which reduces local pack engagement.');
     }
   }
 
-  // Merge multi-layer Website Audit findings (Bugs, SEO, Performance, Security Hygiene)
+  if (activeModules.has('web_tech')) {
+    if (!lead.website) {
+      gaps.push('Missing Official Website: No website is linked on your listing — high-intent customers searching online have no dedicated landing page, catalog, or booking funnel to convert.');
+    } else if (signals.https === false) {
+      gaps.push('Security & Trust Warning: Website is not using HTTPS security, which triggers browser "Not Secure" warnings and hurts visitor trust.');
+    }
+  }
+
+  if (activeModules.has('ecommerce_cro')) {
+    if (lead.platform === 'Shopify' || lead.platform === 'WooCommerce' || persona.id === 'shopify_cro') {
+      if (!signals.hasReviewsApp) {
+        gaps.push(`E-Commerce Social Proof (${lead.platform || 'Store'}): Running without a dedicated product review widget (Judge.me, Loox, or Yotpo) to boost product page conversion.`);
+      }
+      if (!(lead.techStack || []).some(t => /Klaviyo|Omnisend|Mailchimp/i.test(t))) {
+        gaps.push(`E-Commerce Retention (${lead.platform || 'Store'}): No automated email/SMS retention stack (Klaviyo / Omnisend) detected for abandoned cart recovery and repeat buyer flows.`);
+      }
+    }
+  }
+
+  if (activeModules.has('ads_funnel')) {
+    if (!lead.website) {
+      gaps.push('No Dedicated Paid Traffic Landing Page: Missing a conversion-optimized landing page with tracking pixels and lead capture form.');
+    } else {
+      if (signals.hasBookingOrForm === false) {
+        gaps.push('Missing Online Lead Capture / Booking Form: No clear instant quote, booking, or lead capture form detected — forcing visitors to call manually.');
+      }
+      if (signals.hasChatWidget === false) {
+        gaps.push('No Live Chat / WhatsApp Widget: No instant chat or WhatsApp response widget on site to capture mobile and after-hours inquiries.');
+      }
+      if (signals.hasAnalytics === false) {
+        gaps.push('Missing Ad & Conversion Tracking Pixels: No Google Analytics/GTM, Meta Pixel, or TikTok Pixel detected — visitors leave without retargeting or conversion attribution.');
+      }
+    }
+  }
+
+  // Merge multi-layer Website Audit findings filtered strictly to activeModules
   if (Array.isArray(auditReport?.findings)) {
-    for (const f of auditReport.findings) {
+    const { primary: personaFindings } = filterAuditFindingsForPersona(auditReport.findings, senderSettings, tierLevel);
+    for (const f of personaFindings) {
       const label = `[${(f.category || 'Audit').toUpperCase()} · ${f.severity}] ${f.title} — ${f.detail} (${f.businessImpact})`;
       if (!gaps.some(existing => existing.toLowerCase().includes(f.title.toLowerCase().slice(0, 22)))) {
         gaps.push(label);
@@ -2488,59 +2531,59 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
     }
   }
 
-  // Explicit Social Media & Online Presence findings
-  if (socialChannels.length === 0) {
-    gaps.push('Lack of Social Media Presence: Zero social media profiles (Instagram, Facebook, LinkedIn, TikTok, X/Twitter, YouTube) are linked from your website — hurting brand credibility and missing organic social traffic.');
-  } else if (missingSocials.length) {
-    gaps.push(`Incomplete Social Media Footprint: Linked to ${socialChannels.join(', ')}, but missing active/linked presence on ${missingSocials.join(', ')} where local customers discover and vet ${industry.toLowerCase()} brands.`);
+  if (activeModules.has('social_brand')) {
+    if (socialChannels.length === 0) {
+      gaps.push('Lack of Social Media Presence: Zero social media profiles (Instagram, Facebook, LinkedIn, TikTok, X/Twitter, YouTube) are linked from your website — hurting brand credibility and missing organic social traffic.');
+    } else if (missingSocials.length) {
+      gaps.push(`Incomplete Social Media Footprint: Linked to ${socialChannels.join(', ')}, but missing active/linked presence on ${missingSocials.join(', ')} where local customers discover and vet ${industry.toLowerCase()} brands.`);
+    }
   }
 
-  // Contactability, Rating & Local Listing completeness
-  if (!lead.email) {
-    gaps.push('No Public Business Email Listed: Customers and B2B partners cannot easily find a direct email contact on your site or listing.');
+  if (!hasExplicitPersona) {
+    if (!lead.email) {
+      gaps.push('No Public Business Email Listed: Customers and B2B partners cannot easily find a direct email contact on your site or listing.');
+    }
+    if (!lead.phone) {
+      gaps.push('No Direct Phone / Click-to-Call Listed: Missing a visible click-to-call phone number for mobile visitors.');
+    }
   }
-  if (!lead.phone) {
-    gaps.push('No Direct Phone / Click-to-Call Listed: Missing a visible click-to-call phone number for mobile visitors.');
-  }
-  if (!lead.rating || (!Number.isNaN(ratingNum) && ratingNum < 4.4)) {
-    gaps.push(`Local Reputation & Review Volume: ${lead.rating ? `Current listed rating is ★ ${lead.rating}${lead.ratingInfo ? ` (${lead.ratingInfo})` : ''}` : 'No star rating or customer reviews displayed on your map listing'} — strengthening visible review proof will lift local click-through.`);
-  }
-  if (!lead.openHours) {
-    gaps.push('Missing Operating Hours on Listing: Operating hours are not displayed on your map profile, which reduces local pack engagement.');
-  }
+
   if (!gaps.length) {
-    gaps.push(`Growth & Conversion Scaling: Opportunity to scale inbound client flow and automate follow-ups via ${senderService}.`);
+    gaps.push(`${persona.title} Growth & Conversion Scaling: Opportunity to resolve ${persona.label.toLowerCase()} friction and scale inbound clients via ${senderService}.`);
   }
 
-  // Prepend user-spotted issues so they take top priority, followed by ALL discovered business & audit gaps
   const combinedGaps = [
     ...spottedList.map(s => `[Spotted Issue] ${s}`),
     ...gaps.filter(g => !spottedList.some(u => g.toLowerCase().includes(u.toLowerCase())))
   ];
 
-  const primaryGap = spottedList[0]
-    ? spottedList[0]
-    : !lead.website
-      ? 'building a high-converting web presence and local search capture'
-      : socialChannels.length === 0
-        ? 'fixing website conversion leaks and building an active social media & local search presence'
-        : `fixing website, SEO, social presence, and lead-capture gaps in ${city}`;
-
-  const angle = `Present the full 360° findings across ${name}’s website${lead.platform ? ` (${lead.platform})` : ''}, social media presence (${socialChannels.length ? socialChannels.join(', ') : 'none linked'}), local search rank${lead.searchRank ? ` (#${lead.searchRank})` : ''}, and conversion funnel (${combinedGaps.length} total findings), then offer a tailored action plan using ${senderService}.`;
+  const angle = `Pitch from the [${activeLensLabel}] lens (${combinedGaps.length} focused findings), avoiding unrelated noise and offering a tailored action plan using ${senderService}.`;
 
   const specificHook = !lead.website
-    ? `I found ${name} while researching ${industry.toLowerCase()} businesses in ${city}${lead.searchRank ? ` (currently listed at Rank #${lead.searchRank} on Bing Maps)` : ''}, and noticed you don’t currently have an official website or social funnel linked for customers searching online`
-    : lead.headings?.length
-      ? `I just completed a full 360° online presence & website review of ${name} (${lead.website} — “${lead.headings[0]}”) in ${city}`
-      : `I just completed a full 360° online presence & website review of ${name} (${lead.website}) in ${city}`;
+    ? `I found ${name} while researching ${industry.toLowerCase()} businesses in ${city}${activeModules.has('seo_local') && lead.searchRank ? ` (currently listed at Rank #${lead.searchRank} on Bing Maps)` : ''}, and noticed you don’t currently have an official website or digital conversion hub linked for customers searching online`
+    : hasExplicitPersona
+      ? `As a ${persona.title.toLowerCase()}, I just completed a focused ${persona.label.toLowerCase()} review of ${name} (${lead.website}) in ${city}`
+      : lead.headings?.length
+        ? `I just completed a full 360° online presence & website review of ${name} (${lead.website} — “${lead.headings[0]}”) in ${city}`
+        : `I just completed a full 360° online presence & website review of ${name} (${lead.website}) in ${city}`;
 
   const snapshotLines = [
     `• Business & Location: ${name} (${industry} in ${city}${lead.address ? ` · ${lead.address}` : ''})`,
-    `• Search & Map Listing: ${lead.searchRank ? `Bing Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)})` : 'Local listing'} · ${lead.rating ? `Rating: ★ ${lead.rating}${lead.ratingInfo ? ` (${lead.ratingInfo})` : ''}` : 'No map reviews displayed'} · ${lead.openHours ? `Hours: ${lead.openHours}` : 'Hours not listed'}`,
-    `• Website & Tech Stack: ${lead.website ? `${lead.platform || 'Website'}${lead.shopifyMeta?.themeName ? ` (Theme: ${lead.shopifyMeta.themeName})` : ''}${auditReport?.overallScore !== undefined ? ` · Health Score: ${auditReport.overallScore}/100` : ''}${auditReport?.ttfbMs ? ` · Response Time: ${auditReport.ttfbMs}ms` : ''}` : 'No website linked'}${lead.techStack?.length ? ` · Stack: ${lead.techStack.join(', ')}` : ''}`,
-    lead.shopifyProducts?.length ? `• Product Catalog Sampled: ${lead.shopifyProducts.slice(0, 3).map(p => `${p.title}${p.price ? ` ($${p.price})` : ''}`).join(', ')}` : null,
-    `• Social Media Presence: ${socialChannels.length ? `Linked: ${socialChannels.join(', ')} | Missing: ${missingSocials.join(', ') || 'None'}` : 'No social media profiles (Instagram, Facebook, LinkedIn, TikTok) linked on site'}`,
-    `• Contact & Lead Capture: ${[lead.email ? `Email: ${lead.email}` : 'No public email', lead.phone ? `Phone: ${lead.phone}` : 'No phone listed', signals.hasBookingOrForm ? 'Lead form present' : 'No instant booking/lead form', signals.hasChatWidget ? 'Chat widget active' : 'No live chat/WhatsApp widget'].join(' · ')}`
+    activeModules.has('seo_local')
+      ? `• Search & Map Listing: ${lead.searchRank ? `Bing Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)})` : 'Local listing'} · ${lead.rating ? `Rating: ★ ${lead.rating}${lead.ratingInfo ? ` (${lead.ratingInfo})` : ''}` : 'No map reviews displayed'} · ${lead.openHours ? `Hours: ${lead.openHours}` : 'Hours not listed'}`
+      : null,
+    (activeModules.has('web_tech') || activeModules.has('ecommerce_cro'))
+      ? `• Website & Tech Stack: ${lead.website ? `${lead.platform || 'Website'}${lead.shopifyMeta?.themeName ? ` (Theme: ${lead.shopifyMeta.themeName})` : ''}${auditReport?.overallScore !== undefined ? ` · Health Score: ${auditReport.overallScore}/100` : ''}${auditReport?.ttfbMs ? ` · Response Time: ${auditReport.ttfbMs}ms` : ''}` : 'No website linked'}${lead.techStack?.length ? ` · Stack: ${lead.techStack.join(', ')}` : ''}`
+      : null,
+    activeModules.has('ecommerce_cro') && lead.shopifyProducts?.length
+      ? `• Product Catalog Sampled: ${lead.shopifyProducts.slice(0, 3).map(p => `${p.title}${p.price ? ` ($${p.price})` : ''}`).join(', ')}`
+      : null,
+    activeModules.has('social_brand')
+      ? `• Social Media Presence: ${socialChannels.length ? `Linked: ${socialChannels.join(', ')} | Missing: ${missingSocials.join(', ') || 'None'}` : 'No social media profiles (Instagram, Facebook, LinkedIn, TikTok) linked on site'}`
+      : null,
+    activeModules.has('ads_funnel')
+      ? `• Contact & Lead Capture Funnel: ${[signals.hasAnalytics ? 'Ad/Analytics pixels detected' : 'No Meta/TikTok/GA4 pixels detected', signals.hasBookingOrForm ? 'Lead form present' : 'No instant booking/lead form', signals.hasChatWidget ? 'Chat widget active' : 'No live chat/WhatsApp widget'].join(' · ')}`
+      : null
   ].filter(Boolean).join('\n');
 
   const bulletLines = combinedGaps.map(item => `• ${item}`).join('\n');
@@ -2548,21 +2591,28 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
     ? `${/[.!?]$/.test(cleanExtra) ? cleanExtra : cleanExtra + '.'}\n\n`
     : '';
 
-  const pitchSubject = `360° online presence, social & website audit for ${name} in ${city}`.slice(0, 88);
+  const pitchSubject = (hasExplicitPersona
+    ? `${persona.label} audit & growth ideas for ${name} in ${city}`
+    : `360° online presence, social & website audit for ${name} in ${city}`
+  ).slice(0, 88);
+
   const pitchBody =
     `Hi ${name} team,\n\n` +
     `${specificHook}.\n\n` +
-    `I’m ${senderName}, and I help ${industry.toLowerCase()} businesses generate more consistent leads, stronger social authority, and higher customer conversions through ${senderService}.\n\n` +
-    `Here is the complete snapshot of what we found across ${name}’s online presence:\n` +
+    `I’m ${senderName}, and I help ${industry.toLowerCase()} businesses grow through ${senderService}.\n\n` +
+    `Here is the focused snapshot of what I found (${activeLensLabel}):\n` +
     `${snapshotLines}\n\n` +
-    `Based on that review, here are the specific issues and missed opportunities currently holding back inbound leads and sales:\n\n` +
+    `Based on that review, here are the specific ${persona.label.toLowerCase()} issues and missed opportunities currently holding back your conversions and growth:\n\n` +
     `${bulletLines}\n\n` +
-    `Fixing these gaps—from your website technical/SEO health and lead capture forms to your social media presence and local search visibility—ensures that when customers in ${city} search for ${industry.toLowerCase()} services, they find ${name} first, trust your brand immediately, and convert into paying clients.\n\n` +
+    `Fixing these targeted gaps ensures that when customers in ${city} interact with ${name}, your ${persona.label.toLowerCase()} foundation converts them smoothly into paying clients.\n\n` +
     extraParagraph +
     `I’ve already mapped out a practical step-by-step fix list for ${name}. Would you be open to me sending over a quick 2-minute walkthrough, or hopping on a brief 10-minute chat this week?\n\n` +
     `Best regards,\n${senderName}`;
 
   return {
+    personaId: persona.id,
+    personaLabel: activeLensLabel,
+    activeModuleKeys: [...activeModules],
     overview: overviewParts.join(' '),
     gaps: combinedGaps,
     angle,
@@ -2574,12 +2624,19 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
   };
 }
 
-async function analyzeLeadWithAi(lead, senderSettings, userIssues = '', extraContext = '') {
-  const baseline = buildLeadIntelligence(lead, senderSettings, userIssues, extraContext);
+async function analyzeLeadWithAi(lead, senderSettings, userIssues = '', extraContext = '', tierLevel = 5) {
+  const baseline = buildLeadIntelligence(lead, senderSettings, userIssues, extraContext, tierLevel);
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) return baseline;
 
   try {
+    const { persona, activeModuleKeys } = getActivePersonaModules(senderSettings, tierLevel);
+    const activeModuleLabels = activeModuleKeys.map(k => PERSONA_TOOL_MODULES[k]?.label).filter(Boolean).join('; ');
+    const excludedModuleLabels = Object.values(PERSONA_TOOL_MODULES)
+      .filter(m => !activeModuleKeys.includes(m.key))
+      .map(m => m.label)
+      .join('; ');
+
     const userIssuesNote = baseline.userIssues.length
       ? `\n\nIMPORTANT — Specific issues personally spotted by the user (MUST be highlighted prominently in both "gaps" and the "pitchBody" email):\n${baseline.userIssues.map(i => '- ' + i).join('\n')}`
       : '';
@@ -2587,59 +2644,38 @@ async function analyzeLeadWithAi(lead, senderSettings, userIssues = '', extraCon
       ? `\n\nIMPORTANT — Additional information, offer, or instructions provided by the user (MUST be woven naturally into the regenerated "pitchBody" email):\n${baseline.extraContext}`
       : '';
 
-    const prompt = `You are a senior B2B lead-generation & conversion strategist. Analyze this business and return a JSON object with keys:
-- "overview" (string: comprehensive 3-5 sentence 360° summary covering their location, search rank, website platform/tech stack, audit health score, social media presence, rating/reviews, and contactability)
-- "gaps" (array of ALL specific, actionable issues found across their website, technical audit, SEO, social media presence, local listing, and lead capture)
-- "angle" (string: recommended outreach strategy)
-- "pitchSubject" (string under 85 chars, compelling & personalized)
-- "pitchBody" (string: a thorough, high-converting cold outreach email of 260-400 words with NO unreplaced brackets. CRITICAL: You MUST incorporate EVERY single piece of information gathered about the business—including their exact social media presence or lack of social media links, local search rank, map rating/reviews, website platform & tech stack, website audit score/findings, contact/lead-capture gaps, and user-spotted issues. Structure it with: (1) a personalized opener, (2) a "360° Online Presence Snapshot" bulleted block, (3) a comprehensive bulleted list using "• " of ALL issues found, (4) how fixing these brings more leads & sales plus any extra user offer, and (5) a friendly CTA + sign-off using the sender name).${userIssuesNote}${extraContextNote}
+    const prompt = `You are a senior ${persona.title} pitching a B2B prospect.
+CRITICAL PERSONA FILTERING RULE:
+- Your active Persona is: "${persona.title}" (${persona.tagline}).
+- Enabled pitch modules ONLY: ${activeModuleLabels}.
+${excludedModuleLabels ? `- DO NOT mention or pitch these disabled/unrelated modules: ${excludedModuleLabels}. Stick strictly to the enabled modules!` : ''}
 
-All Discovered Gaps & Audit Findings (MUST all be included in the pitch):
+Return a JSON object with keys:
+- "overview" (string: 3-4 sentence summary focused strictly on the enabled modules for ${persona.title})
+- "gaps" (array of specific, actionable issues found strictly within the enabled modules)
+- "angle" (string: recommended outreach strategy for a ${persona.title})
+- "pitchSubject" (string under 85 chars, compelling & personalized for a ${persona.title})
+- "pitchBody" (string: a thorough, high-converting cold outreach email of 220-350 words with NO unreplaced brackets. Structure it with: (1) a personalized opener as a ${persona.title}, (2) a focused Snapshot bulleted block, (3) a bulleted list using "• " of the persona-relevant issues found, (4) how fixing these brings more clients/revenue plus any extra user offer, and (5) a friendly CTA + sign-off using the sender name).${userIssuesNote}${extraContextNote}
+
+Persona-Filtered Gaps & Findings (ONLY pitch these):
 ${JSON.stringify(baseline.gaps, null, 2)}
 
-Complete Business Dossier:
+Business Context:
 ${JSON.stringify({
       name: lead.name,
       industry: lead.industry,
       city: lead.city,
       address: lead.address,
       website: lead.website,
-      email: lead.email,
-      emails: lead.emails,
-      phone: lead.phone,
-      searchRank: lead.searchRank,
-      searchPage: lead.searchPage,
-      rating: lead.rating,
-      ratingInfo: lead.ratingInfo,
-      openHours: lead.openHours,
-      siteTitle: lead.siteTitle,
-      metaDescription: lead.metaDescription,
-      headings: lead.headings,
-      aboutSummary: lead.aboutSummary,
       platform: lead.platform,
       techStack: lead.techStack,
-      shopifyMeta: lead.shopifyMeta,
-      shopifyProducts: lead.shopifyProducts,
-      socials: {
-        facebook: lead.facebook || null,
-        instagram: lead.instagram || null,
-        twitter: lead.twitter || null,
-        linkedin: lead.linkedin || null,
-        youtube: lead.youtube || null,
-        tiktok: lead.tiktok || null
-      },
-      signals: lead.signals,
-      auditSummary: lead.auditReport ? {
-        overallScore: lead.auditReport.overallScore,
-        scores: lead.auditReport.scores,
-        ttfbMs: lead.auditReport.ttfbMs,
-        counts: lead.auditReport.counts
-      } : null
+      shopifyMeta: lead.shopifyMeta
     })}
 
 Sender profile:
 Name: ${senderSettings?.senderName || 'Outreach Specialist'}
-Service offered: ${senderSettings?.senderService || 'digital growth & lead generation'}`;
+Persona: ${persona.title}
+Service offered: ${senderSettings?.senderService || persona.defaultService}`;
 
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
       method: 'POST',
@@ -2934,9 +2970,15 @@ export async function handleRequest(req, res) {
         ws.leads = payload.leads.slice(0, 5000);
       }
       if (payload.settings && typeof payload.settings === 'object') {
+        const userRecord = await findUserById(session.userId);
+        const quotaStatus = getUserQuotaStatus(userRecord);
+        const tierLevel = quotaStatus.level || 1;
+        const { persona, addedTools } = getActivePersonaModules(payload.settings, tierLevel);
         ws.settings = {
           senderName: String(payload.settings.senderName || '').slice(0, 120),
           senderService: String(payload.settings.senderService || '').slice(0, 300),
+          persona: persona.id,
+          addedTools,
           savedSearches: normalizeSavedSearches(payload.settings.savedSearches),
           leadProfiles: normalizeLeadProfiles(payload.settings.leadProfiles),
           defaultFollowUpDays: Math.max(0, Math.min(90, Number(payload.settings.defaultFollowUpDays) || 0)),
@@ -3020,17 +3062,19 @@ export async function handleRequest(req, res) {
       const ws = getWorkspace(session.userId || 'default');
       const enriched = await fetchWebsiteEmails(targetUrl);
       const mergedLead = { ...lead, ...enriched, name: lead?.name || enriched.brandName };
-      const outreach = generateClientOutreach(enriched.auditReport, mergedLead, ws.settings, tierLevel >= 3 ? extraContext : '');
+      const outreach = generateClientOutreach(enriched.auditReport, mergedLead, ws.settings, tierLevel >= 3 ? extraContext : '', tierLevel);
+      const { primary: personaFindings } = filterAuditFindingsForPersona(enriched.auditReport.findings || [], ws.settings, tierLevel);
       const gatedFindings = tierLevel === 1
-        ? (enriched.auditReport.findings || []).slice(0, 1)
+        ? personaFindings.slice(0, 1)
         : tierLevel === 2
-          ? (enriched.auditReport.findings || []).filter(f => f.category === 'bugs' || f.category === 'seo')
-          : (enriched.auditReport.findings || []);
+          ? personaFindings.filter(f => f.category === 'bugs' || f.category === 'seo')
+          : personaFindings;
       return json({
         ...enriched,
         auditReport: {
           ...enriched.auditReport,
           findings: gatedFindings,
+          allFindings: tierLevel >= 3 ? (enriched.auditReport.findings || []) : gatedFindings,
           totalUnlockedFindings: gatedFindings.length,
           totalDiscoveredFindings: (enriched.auditReport.findings || []).length,
           tierLevel,
@@ -3066,7 +3110,8 @@ export async function handleRequest(req, res) {
         enrichedLead,
         ws.settings,
         userIssues ?? enrichedLead.userSpottedIssues ?? '',
-        tierLevel >= 3 ? (extraContext ?? enrichedLead.aiExtraContext ?? '') : ''
+        tierLevel >= 3 ? (extraContext ?? enrichedLead.aiExtraContext ?? '') : '',
+        tierLevel
       );
       return json({
         ...brief,

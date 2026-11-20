@@ -456,12 +456,35 @@ dialog{border:1px solid var(--line);border-radius:16px;color:var(--ink);backgrou
 dialog::backdrop{background:#04242199}
 dialog .heading{margin:0 0 16px}
 
+/* Topbar Persona Switcher & Persona + Added Tools Checkboxes */
+.header-persona-wrap{display:inline-flex;align-items:center;gap:6px;background:var(--green-soft);border:1px solid #bde5d4;border-radius:999px;padding:4px 11px;margin:0;font-size:12px;font-weight:700;color:var(--green)}
+.header-persona-wrap .persona-lbl{color:#065f46;white-space:nowrap}
+.header-persona-select{width:auto;border:0;background:transparent;padding:2px 4px;font-size:12.5px;font-weight:700;color:#042e2a;cursor:pointer;outline:none}
+.persona-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:8px}
+.persona-card{border:1.5px solid var(--line);border-radius:13px;padding:13px;background:#fafcfc;cursor:pointer;display:grid;gap:6px;text-align:left;transition:border-color .15s,background .15s,box-shadow .15s}
+.persona-card:hover{border-color:#9fd8c0;background:#f4fbf7}
+.persona-card.active{border-color:var(--green);background:var(--green-soft);box-shadow:0 4px 14px rgba(5,150,105,.1)}
+.persona-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.persona-card-title{display:flex;align-items:center;gap:8px;font-weight:700;font-size:13.5px;color:var(--ink)}
+.persona-card p{margin:0;font-size:12px;color:var(--muted);line-height:1.4}
+.added-tools-box{border:1px solid var(--line);border-radius:13px;padding:14px;background:#f8fbfa;display:grid;gap:10px;margin-top:10px}
+.added-tools-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.tool-checkbox-card{display:flex;align-items:flex-start;gap:10px;border:1px solid var(--line);border-radius:11px;padding:11px 12px;background:white;cursor:pointer;margin:0;transition:border-color .15s,background .15s}
+.tool-checkbox-card:hover{border-color:#9fd8c0}
+.tool-checkbox-card.checked{border-color:var(--green);background:#f1faf6}
+.tool-checkbox-card.locked{opacity:.78;background:#f5f7f7}
+.tool-checkbox-card input[type=checkbox]{width:16px;height:16px;margin-top:2px;accent-color:var(--green);flex-shrink:0}
+.tool-checkbox-copy{display:grid;gap:2px}
+.tool-checkbox-copy strong{font-size:13px;color:var(--ink)}
+.tool-checkbox-copy small{font-size:11.5px;color:var(--muted);line-height:1.35}
+.dossier-persona-bar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;background:#f1faf6;border:1px solid #c2e7d7;border-radius:13px;padding:10px 14px;margin-bottom:12px}
+
 /* Mobile Bottom Nav */
 .mobile-bottom-nav{display:none}
 
 @media(max-width:1100px){
   .dossier-overview-grid,.profile-info-grid{grid-template-columns:1fr}
-  .plan-cards-grid,.audit-score-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .plan-cards-grid,.audit-score-grid,.persona-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 
 @media(max-width:1040px){
@@ -495,7 +518,8 @@ dialog .heading{margin:0 0 16px}
 /* Mobile Home (matches mobile-home.png on <= 640px) */
 @media(max-width:640px){
   .topbar{padding:10px 12px}
-  .search-bar-card,.search,.filters-bar,.grid-2,.inline-bar,.plan-cards-grid{grid-template-columns:1fr}
+  .header-persona-wrap .persona-lbl{display:none}
+  .search-bar-card,.search,.filters-bar,.grid-2,.inline-bar,.plan-cards-grid,.persona-grid,.added-tools-grid{grid-template-columns:1fr}
   .plan-split-col{padding:10px 0}
   .plan-split-col:first-child{border-right:0;border-bottom:1px solid var(--line);padding-bottom:14px}
   .desktop-dash-only{display:none}

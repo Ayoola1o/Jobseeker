@@ -1,6 +1,16 @@
 import { readBusinessCsv, writeBusinessCsv } from './csv.mjs';
 import { iconEl, iconSvg } from './icons.mjs';
-import { generateClientOutreach, generateLeadSolutionPack, buildSolutionPackHtml } from './audit.mjs';
+import {
+  generateClientOutreach,
+  generateLeadSolutionPack,
+  buildSolutionPackHtml,
+  PERSONA_TOOL_MODULES,
+  PERSONA_CATALOG,
+  getPersonaConfig,
+  getMaxAddedToolsForTier,
+  getActivePersonaModules,
+  filterAuditFindingsForPersona
+} from './audit.mjs';
 
 const $ = selector => document.querySelector(selector);
 const dialog = $('#dialog');
@@ -35,6 +45,8 @@ let leads = [];
 let settings = {
   senderName: '',
   senderService: '',
+  persona: 'web_dev',
+  addedTools: [],
   defaultFollowUpDays: 4,
   templates: defaultTemplates
 };
@@ -266,6 +278,149 @@ function requireTier(minLevel, featureTitle, description = '') {
   report(`${featureTitle} requires the ${reqTier.displayLabel} plan or higher.`, true);
   showUpgradeModal(reqTier, featureTitle, description);
   return false;
+}
+
+function getCurrentPersonaState() {
+  return getActivePersonaModules(settings, getUserTierLevel());
+}
+
+function switchActivePersona(newPersonaId, { keepAddedTools = false, silent = false } = {}) {
+  const chosen = getPersonaConfig(newPersonaId);
+  settings.persona = chosen.id;
+  if (!keepAddedTools) {
+    // By default, switching persona turns OFF non-persona added tools so the pitch stays 100% focused
+    settings.addedTools = [];
+  } else {
+    settings.addedTools = getActivePersonaModules(settings, getUserTierLevel()).addedTools;
+  }
+  const headerSel = $('#header-persona-select');
+  if (headerSel && headerSel.value !== chosen.id) headerSel.value = chosen.id;
+  persist();
+  if (!silent) {
+    report(`Switched active persona to "${chosen.title}". Non-persona added tools are turned off by default (enable extras in Settings if needed).`);
+  }
+}
+
+function buildPersonaAndAddedToolsCard(onChanged) {
+  const tierLevel = getUserTierLevel();
+  const activeTier = getActiveTier();
+  const { persona, addedTools, availableExtraModules, maxAddedTools } = getCurrentPersonaState();
+
+  const wrap = create('article', '', 'surface card-pad');
+  const head = create('div', '', 'setting-card-head');
+  const titleWrap = create('div', '', 'setting-card-title');
+  const ico = create('div', '', 'setting-ico');
+  ico.append(iconEl(persona.icon || 'sparkles', 19));
+  const txt = create('div');
+  txt.append(
+    create('h2', 'Outreach Persona & Added Pitch Tools'),
+    create('p', 'Choose your primary role so AI pitches, website audits, and 4-phase solution packs only include data relevant to your craft.')
+  );
+  titleWrap.append(ico, txt);
+  const lensPill = create('span', '', 'pill');
+  lensPill.append(iconEl('check', 12), document.createTextNode(`${persona.label}${addedTools.length ? ` + ${addedTools.length} Added` : ''}`));
+  head.append(titleWrap, lensPill);
+  wrap.append(head);
+
+  // 1. 6 Persona Cards
+  const pGrid = create('div', '', 'persona-grid');
+  for (const p of PERSONA_CATALOG) {
+    const isActive = p.id === persona.id;
+    const card = create('div', '', 'persona-card' + (isActive ? ' active' : ''));
+    const cHead = create('div', '', 'persona-card-head');
+    const cTitle = create('div', '', 'persona-card-title');
+    cTitle.append(iconEl(p.icon || 'sparkles', 16), document.createTextNode(p.label));
+    cHead.append(cTitle);
+    if (isActive) cHead.append(create('span', 'Active', 'pill'));
+    const coreNames = p.coreModules.map(k => PERSONA_TOOL_MODULES[k]?.shortLabel).filter(Boolean).join(' + ');
+    card.append(
+      cHead,
+      create('p', p.tagline),
+      create('small', `Core Default: ${coreNames}`, 'small')
+    );
+    card.onclick = () => {
+      switchActivePersona(p.id, { keepAddedTools: false });
+      if (onChanged) onChanged();
+    };
+    pGrid.append(card);
+  }
+  wrap.append(pGrid);
+
+  // 2. Added Tools Checkboxes (Turned OFF by default, tier-limited: Basic=0, Silver=1, Gold=2, Premium/Diamond=All)
+  const toolsBox = create('div', '', 'added-tools-box');
+  const tHead = create('div', '', 'heading');
+  tHead.style.margin = '0';
+  const tCopy = create('div');
+  tCopy.append(
+    create('strong', `Added Tools for ${persona.title} (Optional Checkboxes — Off by Default)`),
+    create('p', 'Check extra modules only if you want Jobhunta to include them as added tools in your audits, AI pitches, and solution packs.', 'small')
+  );
+  let allowanceText = '';
+  if (tierLevel === 1) allowanceText = 'Basic Plan: 0 Added Tools (Upgrade to Silver for +1, Gold for +2)';
+  else if (tierLevel === 2) allowanceText = `Silver Plan: ${addedTools.length} / 1 Added Tool Checked`;
+  else if (tierLevel === 3) allowanceText = `Gold Plan: ${addedTools.length} / 2 Added Tools Checked`;
+  else allowanceText = `${activeTier.displayLabel}: ${addedTools.length} / ${availableExtraModules.length} Checked (All Unlocked · Off by Default)`;
+
+  const allowancePill = create('span', allowanceText, tierLevel === 1 ? 'pill wait' : 'pill neutral');
+  tHead.append(tCopy, allowancePill);
+  toolsBox.append(tHead);
+
+  const cbGrid = create('div', '', 'added-tools-grid');
+  for (const mod of availableExtraModules) {
+    const isChecked = addedTools.includes(mod.key);
+    const isLockedByTier = !isChecked && addedTools.length >= maxAddedTools;
+    const lbl = create('label', '', 'tool-checkbox-card' + (isChecked ? ' checked' : '') + (isLockedByTier ? ' locked' : ''));
+    const cb = create('input');
+    cb.type = 'checkbox';
+    cb.checked = isChecked;
+    cb.onchange = () => {
+      if (cb.checked) {
+        if (tierLevel === 1) {
+          cb.checked = false;
+          requireTier(2, 'Added Persona Tools (+1 Extra Tool on Silver)', 'Basic plans include your core Persona signals only. Upgrade to Silver (Starter) to check 1 extra tool, Gold (Pro) to check 2, or Premium/Diamond for unlimited added tools.');
+          return;
+        }
+        if (tierLevel === 2 && addedTools.length >= 1) {
+          cb.checked = false;
+          requireTier(3, '2 Added Persona Tools (Gold / Pro)', 'Silver (Starter) lets you check 1 extra Added Tool. Upgrade to Gold (Pro) to check up to 2 extra tools, or Premium/Diamond to check any combination.');
+          return;
+        }
+        if (tierLevel === 3 && addedTools.length >= 2) {
+          cb.checked = false;
+          requireTier(4, 'Unlimited Added Persona Tools (Premium / Agency & Diamond)', 'Gold (Pro) lets you check up to 2 extra Added Tools. Upgrade to Premium (Agency) or Diamond to check any or all extra tools.');
+          return;
+        }
+        settings.addedTools = [...new Set([...addedTools, mod.key])];
+      } else {
+        settings.addedTools = addedTools.filter(k => k !== mod.key);
+      }
+      persist();
+      if (onChanged) onChanged();
+      report(
+        cb.checked
+          ? `Enabled "${mod.shortLabel}" as an added tool for your ${persona.label} persona.`
+          : `Turned off "${mod.shortLabel}" added tool.`
+      );
+    };
+
+    const copy = create('div', '', 'tool-checkbox-copy');
+    const titleSuffix = tierLevel === 1
+      ? ' [Starter+]'
+      : (isLockedByTier && tierLevel === 2)
+        ? ' [Pro+ for 2nd Tool]'
+        : (isLockedByTier && tierLevel === 3)
+          ? ' [Agency+ for 3+ Tools]'
+          : '';
+    copy.append(
+      create('strong', mod.label + titleSuffix),
+      create('small', mod.description)
+    );
+    lbl.append(cb, copy);
+    cbGrid.append(lbl);
+  }
+  toolsBox.append(cbGrid);
+  wrap.append(toolsBox);
+  return wrap;
 }
 
 const avatarColors = ['#0f4c81', '#059669', '#7c3aed', '#b45309', '#be185d', '#0369a1'];
@@ -524,6 +679,19 @@ function updateHeaderBadges() {
     const shopOpt = rankModeSelect.querySelector('option[value="shopify"]');
     if (lowOpt) lowOpt.textContent = activeTier.level < 2 ? 'Low-Ranked (Pages 3–8) [Starter+]' : 'Low-Ranked (Pages 3–8)';
     if (shopOpt) shopOpt.textContent = activeTier.level < 3 ? 'Low-Ranked Shopify Stores [Pro+]' : 'Low-Ranked Shopify Stores';
+  }
+  const headerPersonaSel = $('#header-persona-select');
+  if (headerPersonaSel) {
+    const curP = getPersonaConfig(settings.persona).id;
+    if (headerPersonaSel.value !== curP) headerPersonaSel.value = curP;
+  }
+  const oppSelect = $('#filter-opportunity');
+  if (oppSelect) {
+    const pOpt = oppSelect.querySelector('option[value="persona-match"]');
+    if (pOpt) {
+      const { persona, addedTools } = getCurrentPersonaState();
+      pOpt.textContent = `Best Matches for ${persona.label}${addedTools.length ? ` (+${addedTools.length} Tool${addedTools.length === 1 ? '' : 's'})` : ''}`;
+    }
   }
 }
 
@@ -1162,6 +1330,27 @@ function matchesOpportunityFilter(lead, mode) {
   const sig = lead.signals || {};
   const ratingNum = parseFloat(lead.rating);
 
+  if (mode === 'persona-match') {
+    const { activeModules } = getCurrentPersonaState();
+    let matched = false;
+    if (activeModules.has('web_tech')) {
+      if (!lead.website || perfScore < 78 || ttfb > 750 || sig.https === false || (lead.auditReport?.counts?.critical || 0) >= 1) matched = true;
+    }
+    if (activeModules.has('ads_funnel')) {
+      if (!lead.website || sig.hasAnalytics === false || sig.hasBookingOrForm === false || sig.hasChatWidget === false) matched = true;
+    }
+    if (activeModules.has('seo_local')) {
+      if (rank >= 11 || sig.hasMetaDescription === false || !lead.rating || (!Number.isNaN(ratingNum) && ratingNum < 4.4)) matched = true;
+    }
+    if (activeModules.has('social_brand')) {
+      if (!hasLinkedSocials(lead)) matched = true;
+    }
+    if (activeModules.has('ecommerce_cro')) {
+      if (lead.platform === 'Shopify' || lead.platform === 'WooCommerce' || !signals?.hasReviewsApp) matched = true;
+    }
+    return matched;
+  }
+
   if (mode === 'bad-rank') return rank >= 11;
   if (mode === 'very-low-rank') return rank >= 21;
   if (mode === 'bad-performance') {
@@ -1406,21 +1595,31 @@ function renderLeads() {
 
     const tdPlat = create('td');
     const platWrap = create('div', '', 'actions');
+    const { activeModules } = getCurrentPersonaState();
+    const sig = lead.signals || {};
+
     if (lead.platform && lead.platform !== 'Custom / Website') platWrap.append(create('span', lead.platform, 'pill neutral'));
     else if (!lead.website) platWrap.append(create('span', 'No Website', 'pill warn'));
     else platWrap.append(create('span', (lead.source || '').includes('bing') ? 'Bing Maps' : 'Website', 'small'));
 
-    if (lead.website) {
+    if (lead.website && (activeModules.has('web_tech') || activeModules.has('ecommerce_cro') || activeModules.has('seo_local'))) {
       const perfScore = getLeadPerformanceScore(lead);
       const scoreClass = perfScore < 60 ? 'pill warn' : perfScore < 78 ? 'pill wait' : 'pill';
       const labelPrefix = lead.auditReport ? 'Audit' : 'Est.';
       platWrap.append(create('span', `${labelPrefix} ${perfScore}/100`, scoreClass));
-      if (lead.auditReport?.ttfbMs > 800) {
+      if (activeModules.has('web_tech') && lead.auditReport?.ttfbMs > 800) {
         platWrap.append(create('span', `Slow ${lead.auditReport.ttfbMs}ms`, 'pill warn'));
       }
     }
-    if (!hasLinkedSocials(lead)) {
+    if (activeModules.has('ads_funnel') && lead.website) {
+      if (sig.hasAnalytics === false) platWrap.append(create('span', 'No Ad Pixels', 'pill warn'));
+      if (sig.hasBookingOrForm === false) platWrap.append(create('span', 'No Lead Form', 'pill wait'));
+    }
+    if (activeModules.has('social_brand') && !hasLinkedSocials(lead)) {
       platWrap.append(create('span', 'No Socials', 'pill wait'));
+    }
+    if (activeModules.has('ecommerce_cro') && (lead.platform === 'Shopify' || lead.platform === 'WooCommerce') && !sig.hasReviewsApp) {
+      platWrap.append(create('span', 'No Review App', 'pill wait'));
     }
     if (lead.folder && !selectedLeadFolder) {
       const fPill = create('span', '', 'pill neutral');
@@ -1546,6 +1745,37 @@ function renderBusinessPage() {
   addContactLine('globe', website(lead.website, lead.website) || 'No website listed');
   contactCard.append(cList);
   headerGrid.append(heroCard, contactCard);
+
+  // Quick Persona Bar inside Business Dossier
+  const { persona: activePersona, addedTools: activeAddedTools, activeModuleKeys } = getCurrentPersonaState();
+  const personaBar = create('div', '', 'dossier-persona-bar');
+  const pbLeft = create('div', '', 'actions');
+  const pbBadge = create('span', '', 'pill');
+  pbBadge.append(iconEl(activePersona.icon || 'sparkles', 13), document.createTextNode(`Active Persona: ${activePersona.title}`));
+  const pbModules = create('span', `Pitching: ${activeModuleKeys.map(k => PERSONA_TOOL_MODULES[k]?.shortLabel).filter(Boolean).join(' + ')}`, 'small');
+  pbLeft.append(pbBadge, pbModules);
+
+  const pbRight = create('div', '', 'actions');
+  const dossierPersonaSelect = create('select');
+  dossierPersonaSelect.style.cssText = 'width:auto;padding:6px 10px;font-size:12.5px;font-weight:600';
+  for (const p of PERSONA_CATALOG) {
+    dossierPersonaSelect.add(new Option(`Switch: ${p.label}`, p.id, p.id === activePersona.id, p.id === activePersona.id));
+  }
+  dossierPersonaSelect.onchange = () => {
+    switchActivePersona(dossierPersonaSelect.value, { keepAddedTools: false });
+    lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
+    if (lead.auditReport) {
+      lead.auditReport.outreach = generateClientOutreach(lead.auditReport, lead, settings, lead.aiExtraContext || '', getUserTierLevel());
+    }
+    persist();
+    renderBusinessPage();
+  };
+  const configToolsBtn = btnWithIcon('settings', `Added Tools (${activeAddedTools.length})`, () => {
+    settingsTab = 'outreach';
+    location.hash = '#settings';
+  }, 'btn-soft', 13);
+  pbRight.append(dossierPersonaSelect, configToolsBtn);
+  personaBar.append(pbLeft, pbRight);
 
   // Sub-Navigation Tabs
   const tabsBar = create('div', '', 'dossier-tabs');
@@ -1776,8 +2006,10 @@ function renderBusinessPage() {
         const findSec = create('div', '', 'ai-section stack');
         const fHead = create('div', '', 'heading');
         fHead.style.margin = '0';
-        const allFindings = reportData.findings || [];
-        fHead.append(create('h3', `2. Multi-Layer Audit Findings (${reportData.totalDiscoveredFindings || allFindings.length})`));
+        const rawReportFindings = reportData.allFindings || reportData.findings || [];
+        const { primary: personaFilteredFindings } = filterAuditFindingsForPersona(rawReportFindings, settings, tierLevel);
+        const allFindings = personaFilteredFindings;
+        fHead.append(create('h3', `2. Persona-Filtered Audit Findings (${allFindings.length} for ${activePersona.label}${activeAddedTools.length ? ` + ${activeAddedTools.length} Added` : ''})`));
         const catTabs = create('div', '', 'preset-pills');
         [
           ['all', `All (${allFindings.length})`, 1],
@@ -1871,8 +2103,8 @@ function renderBusinessPage() {
         }
         findSec.append(fList);
 
-        // Client Outreach Generator (Executive Summary + 4 Variants)
-        const outreachPkg = reportData.outreach || generateClientOutreach(reportData, lead, settings, lead.aiExtraContext || '');
+        // Client Outreach Generator (Executive Summary + 4 Variants — Persona-Aware)
+        const outreachPkg = generateClientOutreach(reportData, lead, settings, lead.aiExtraContext || '', tierLevel);
         const outSec = create('div', '', 'ai-section stack');
         const outHead = create('div', '', 'heading');
         outHead.style.margin = '0';
@@ -1945,8 +2177,8 @@ function renderBusinessPage() {
       }
       tabBody.append(auditCard);
     } else if (dossierTab === 'solution') {
-      if (!lead.solutionPack) {
-        lead.solutionPack = generateLeadSolutionPack(lead, settings);
+      if (!lead.solutionPack || lead.solutionPack.personaId !== activePersona.id) {
+        lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
       }
       const pack = lead.solutionPack;
       const allTasks = (pack.phases || []).flatMap(p => p.tasks || []);
@@ -1962,10 +2194,10 @@ function renderBusinessPage() {
       );
       const solTopActs = create('div', '', 'actions');
       const progPill = create('span', `${doneTasks}/${allTasks.length} tasks done`, 'pill');
-      const regenPackBtn = btnWithIcon('refresh', 'Rebuild from Latest Audit', () => {
-        lead.solutionPack = generateLeadSolutionPack(lead, settings);
+      const regenPackBtn = btnWithIcon('refresh', `Rebuild for ${activePersona.label}`, () => {
+        lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
         persist();
-        report(`Rebuilt 4-phase Solution Pack for ${lead.name}.`);
+        report(`Rebuilt 4-phase ${activePersona.label} Solution Pack for ${lead.name}.`);
       }, 'btn-soft');
       const solTierLevel = getUserTierLevel();
       const downloadPackBtn = btnWithIcon('fileText', `Download Solution Pack (.html)${solTierLevel < 4 ? ' [Agency+]' : ''}`, () => {
@@ -2382,7 +2614,7 @@ function renderBusinessPage() {
     contentWrap.append(tabBody);
   }
 
-  container.replaceChildren(navBar, headerGrid, tabsBar, contentWrap);
+  container.replaceChildren(navBar, headerGrid, personaBar, tabsBar, contentWrap);
 }
 
 /* ---------------- EMAIL BROADCAST (Figma Email Broadcast) ---------------- */
@@ -3269,7 +3501,8 @@ function renderProfile() {
   }
   plansSection.append(pHead, cardsGrid);
 
-  container.replaceChildren(hero, kpiGrid, infoGrid, midGrid, plansSection);
+  const personaSection = buildPersonaAndAddedToolsCard(() => renderProfile());
+  container.replaceChildren(hero, kpiGrid, personaSection, infoGrid, midGrid, plansSection);
 }
 
 /* ---------------- SETTINGS (Modern SaaS Categorized Settings, Auto-Saving) ---------------- */
@@ -3480,7 +3713,11 @@ function renderSettings() {
       )
     );
 
-    panel.append(idCard, autoCard);
+    const personaCard = buildPersonaAndAddedToolsCard(() => {
+      autoSaveSettings();
+      renderSettings();
+    });
+    panel.append(personaCard, idCard, autoCard);
   } else if (settingsTab === 'data') {
     const dataCard = create('article', '', 'surface card-pad');
     dataCard.append(cardHead('folder', 'blue', 'Lead Data & Enrichment', 'Import, export, or bulk-enrich your saved business leads.'));
@@ -4176,6 +4413,11 @@ function renderNotificationsPopover() {
 }
 
 /* ---------------- EVENT WIRING & NAVIGATION ---------------- */
+if ($('#header-persona-select')) {
+  $('#header-persona-select').onchange = e => {
+    switchActivePersona(e.target.value, { keepAddedTools: false });
+  };
+}
 $('#header-settings-btn').onclick = () => { setNotificationsOpen(false); location.hash = '#settings'; };
 $('#header-avatar-btn').onclick = () => { setNotificationsOpen(false); location.hash = '#profile'; };
 $('#header-bell-btn').onclick = e => {
