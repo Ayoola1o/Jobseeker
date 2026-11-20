@@ -289,9 +289,10 @@ function updateHeaderBadges() {
     navInbox.textContent = String(convCount);
     navInbox.hidden = convCount === 0;
   }
-  const dueOrReplied = leads.filter(l => ['Follow-up due', 'Replied', 'Interested'].includes(leadStatus(l))).length;
+  const notifications = buildNotifications();
   const bellDot = $('#bell-dot');
-  if (bellDot) bellDot.hidden = dueOrReplied === 0;
+  if (bellDot) bellDot.hidden = notifications.length === 0;
+  if (!$('#notif-popover')?.hidden) renderNotificationsPopover();
 
   const avatarBtn = $('#header-avatar-btn');
   if (avatarBtn && currentUser) {
@@ -2573,10 +2574,137 @@ function renderAccount() {
   renderSettings();
 }
 
+const dismissedNotifs = new Set();
+
+function buildNotifications() {
+  const items = [];
+  const dueLeads = leads.filter(l => leadStatus(l) === 'Follow-up due');
+  const repliedLeads = leads.filter(l => leadStatus(l) === 'Replied' || leadStatus(l) === 'Interested');
+  const missingEmailLeads = leads.filter(l => !l.email && l.website);
+
+  if (dueLeads.length && !dismissedNotifs.has('due')) {
+    items.push({
+      id: 'due',
+      icon: 'bell',
+      tone: 'amber',
+      title: `${dueLeads.length} follow-up${dueLeads.length === 1 ? '' : 's'} due`,
+      sub: dueLeads.slice(0, 2).map(l => l.name).join(', ') + (dueLeads.length > 2 ? ` +${dueLeads.length - 2} more` : ''),
+      action: () => jumpToLeadsFilter('Follow-up due')
+    });
+  }
+  if (repliedLeads.length && !dismissedNotifs.has('replied')) {
+    items.push({
+      id: 'replied',
+      icon: 'mail',
+      tone: '',
+      title: `${repliedLeads.length} warm repl${repliedLeads.length === 1 ? 'y' : 'ies'} waiting`,
+      sub: 'Open Outreach Inbox to respond while interest is fresh.',
+      action: () => { location.hash = '#inbox'; }
+    });
+  }
+  if (!account.mailbox && !dismissedNotifs.has('gmail')) {
+    items.push({
+      id: 'gmail',
+      icon: 'mail',
+      tone: 'amber',
+      title: 'Connect Gmail to send outreach',
+      sub: 'Link your Google account in Settings to unlock Broadcast & Inbox.',
+      action: () => { settingsTab = 'integrations'; location.hash = '#settings'; }
+    });
+  }
+  if (missingEmailLeads.length && !dismissedNotifs.has('missing')) {
+    items.push({
+      id: 'missing',
+      icon: 'sparkles',
+      tone: 'blue',
+      title: `${missingEmailLeads.length} lead${missingEmailLeads.length === 1 ? '' : 's'} ready for email combing`,
+      sub: 'Click to scan their websites for public email addresses.',
+      action: () => { location.hash = '#leads'; enrichMissingEmails(); }
+    });
+  }
+  const usage = currentUser?.usage;
+  if (usage?.dailySearchLimit && (usage.searchesToday || 0) >= Math.ceil(usage.dailySearchLimit * 0.8) && !dismissedNotifs.has('quota')) {
+    items.push({
+      id: 'quota',
+      icon: 'barChart',
+      tone: 'amber',
+      title: `Daily search quota at ${Math.min(100, Math.round(((usage.searchesToday || 0) / usage.dailySearchLimit) * 100))}%`,
+      sub: `${usage.searchesToday || 0} of ${usage.dailySearchLimit} searches used today.`,
+      action: () => { location.hash = '#profile'; }
+    });
+  }
+  return items;
+}
+
+function setNotificationsOpen(open) {
+  const pop = $('#notif-popover');
+  const btn = $('#header-bell-btn');
+  if (!pop || !btn) return;
+  pop.hidden = !open;
+  btn.setAttribute('aria-expanded', String(open));
+  if (open) renderNotificationsPopover();
+}
+
+function renderNotificationsPopover() {
+  const pop = $('#notif-popover');
+  if (!pop) return;
+  const items = buildNotifications();
+  const head = create('div', '', 'notif-head');
+  const h3 = create('h3');
+  h3.append(document.createTextNode('Notifications'));
+  if (items.length) h3.append(create('span', String(items.length), 'pill'));
+  head.append(h3);
+  if (items.length) {
+    head.append(button('Clear all', () => {
+      items.forEach(i => dismissedNotifs.add(i.id));
+      updateHeaderBadges();
+      renderNotificationsPopover();
+    }, 'link-btn'));
+  }
+
+  const body = create('div', '', 'notif-list');
+  if (items.length) {
+    for (const item of items) {
+      const row = create('button', '', 'notif-item');
+      row.type = 'button';
+      const ico = create('div', '', `notif-ico ${item.tone}`);
+      ico.append(iconEl(item.icon, 16));
+      const txt = create('div', '', 'notif-body');
+      txt.append(create('strong', item.title), create('small', item.sub));
+      row.append(ico, txt, iconEl('chevronRight', 15));
+      row.onclick = () => {
+        setNotificationsOpen(false);
+        item.action();
+      };
+      body.append(row);
+    }
+  } else {
+    const emptyEl = create('div', '', 'notif-empty');
+    const ic = create('div', '', 'empty-ico');
+    ic.style.margin = '0 auto 10px';
+    ic.append(iconEl('checkCircle', 22));
+    emptyEl.append(ic, create('strong', 'All caught up!'), create('p', 'No urgent follow-ups or workspace alerts right now.', 'small'));
+    body.append(emptyEl);
+  }
+  pop.replaceChildren(head, body);
+}
+
 /* ---------------- EVENT WIRING & NAVIGATION ---------------- */
-$('#header-settings-btn').onclick = () => { location.hash = '#settings'; };
-$('#header-avatar-btn').onclick = () => { location.hash = '#profile'; };
-$('#header-bell-btn').onclick = () => { jumpToLeadsFilter('Follow-up due'); };
+$('#header-settings-btn').onclick = () => { setNotificationsOpen(false); location.hash = '#settings'; };
+$('#header-avatar-btn').onclick = () => { setNotificationsOpen(false); location.hash = '#profile'; };
+$('#header-bell-btn').onclick = e => {
+  e.stopPropagation();
+  const pop = $('#notif-popover');
+  setNotificationsOpen(pop ? pop.hidden : false);
+};
+document.addEventListener('click', e => {
+  const wrap = document.querySelector('.notif-wrap');
+  const pop = $('#notif-popover');
+  if (pop && !pop.hidden && wrap && !wrap.contains(e.target)) setNotificationsOpen(false);
+});
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') setNotificationsOpen(false);
+});
 $('#global-search').oninput = e => {
   const q = e.target.value.trim();
   if ($('#filter-query')) $('#filter-query').value = q;
