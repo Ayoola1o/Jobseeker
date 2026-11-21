@@ -336,33 +336,54 @@ table.data-table tr:last-child td{border-bottom:0}
 .phase-deliv{margin-top:auto;background:#f2faf6;border:1px solid #ccead9;border-radius:10px;padding:9px 12px;font-size:12.5px;color:#065f46}
 .inline-bar{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
 
-/* Split-Pane Inbox (Figma Desktop & Mobile Inbox) */
-.inbox-shell{display:grid;grid-template-columns:360px minmax(0,1fr);min-height:580px;overflow:hidden}
-.inbox-list-pane{border-right:1px solid var(--line);display:flex;flex-direction:column}
-.inbox-tabs{display:flex;gap:16px;padding:14px 20px;border-bottom:1px solid var(--line)}
-.inbox-tab{background:transparent;color:var(--muted);padding:6px 2px;border-radius:0;border-bottom:2px solid transparent;font-size:13.5px}
-.inbox-tab.active{color:var(--ink);border-bottom-color:var(--green)}
-.inbox-items{overflow-y:auto;max-height:600px}
-.inbox-item{display:flex;gap:12px;padding:14px 18px;border-bottom:1px solid #eff4f3;cursor:pointer;transition:background .12s}
+/* 3-Pane Split Outreach Inbox (Matches Upgraded UI/UX Design) */
+.inbox-shell{display:grid;grid-template-columns:285px minmax(0,1fr) 264px;min-height:610px;overflow:hidden}
+.inbox-list-pane{border-right:1px solid var(--line);display:flex;flex-direction:column;background:white;min-width:0}
+.inbox-search-wrap{padding:12px 14px 8px}
+.inbox-search-box{position:relative;display:flex;align-items:center}
+.inbox-search-box .search-ico{position:absolute;left:11px;color:var(--muted);display:grid;place-items:center;pointer-events:none}
+.inbox-search-box input{padding:8px 12px 8px 34px;border-radius:10px;background:#f7fafa;font-size:13px}
+.inbox-tabs{display:flex;gap:14px;padding:6px 16px 0;border-bottom:1px solid var(--line)}
+.inbox-tab{background:transparent;color:var(--muted);padding:8px 2px 10px;border-radius:0;border-bottom:2px solid transparent;font-size:13px;font-weight:600}
+.inbox-tab.active{color:var(--green);border-bottom-color:var(--green)}
+.inbox-items{overflow-y:auto;max-height:560px;flex:1}
+.inbox-item{display:flex;gap:11px;padding:13px 14px;border-bottom:1px solid #eff4f3;border-left:3px solid transparent;cursor:pointer;transition:background .12s,border-color .12s}
 .inbox-item:hover{background:#f7fbf9}
-.inbox-item.active{background:#e6f7ef}
+.inbox-item.active{background:#e6f7ef;border-left-color:var(--green)}
+.inbox-item-selected-tag{font-size:10px;font-weight:800;letter-spacing:.06em;color:#065f46;text-transform:uppercase;margin-bottom:2px}
 .inbox-item-body{flex:1;min-width:0}
 .inbox-item-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-.inbox-item-top strong{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.inbox-item-top small{font-size:11.5px;color:var(--muted);flex-shrink:0}
-.inbox-item-sub{font-size:12.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
-.inbox-thread-pane{display:flex;flex-direction:column;justify-content:space-between;padding:22px 24px;gap:18px;min-width:0}
-.inbox-messages{display:grid;gap:12px;max-height:420px;overflow-y:auto}
-.mail{border:1px solid var(--line);border-radius:12px;padding:16px 18px}
-.mail.outgoing{background:#f5fbf8;border-color:#c9eadc}
-.mail-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
-.mail-sender{display:flex;align-items:center;gap:10px}
-.mail h3{margin:0;font-size:14px}
-.mail small{color:var(--muted)}
-.mail p{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0 0;font-size:14px}
-.reply-box-wrap{border:1px solid var(--line);border-radius:12px;padding:12px;background:#fafcfc;display:grid;gap:10px}
-.reply-box-wrap textarea{border:0;background:transparent;padding:4px;min-height:80px}
+.inbox-item-top strong{font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inbox-item-top small{font-size:11px;color:var(--muted);flex-shrink:0}
+.inbox-item-sub{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+.inbox-item-preview{font-size:12px;color:#334e53;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}
+.inbox-thread-pane{display:flex;flex-direction:column;justify-content:space-between;padding:18px 22px;gap:16px;min-width:0;background:#fbfdfd}
+.inbox-thread-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid #e8f0ee}
+.inbox-thread-head h2{margin:0;font-size:16.5px;line-height:1.3}
+.inbox-messages{display:flex;flex-direction:column;gap:12px;max-height:390px;overflow-y:auto;padding:4px 2px;flex:1}
+.mail{max-width:86%;align-self:flex-start;background:white;border:1px solid var(--line);border-radius:14px;padding:13px 16px;box-shadow:0 2px 8px rgba(4,46,42,.04)}
+.mail.outgoing{align-self:flex-end;background:#edf8f3;border-color:#9fdac2}
+.mail-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.mail-sender{display:flex;align-items:center;gap:8px;min-width:0}
+.mail h3{margin:0;font-size:13px;font-weight:700;color:var(--ink)}
+.mail small{color:var(--muted);font-size:11.5px}
+.mail p{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0 0;font-size:13.5px;line-height:1.55;color:var(--ink)}
+.reply-box-wrap{border:1px solid #d5e4df;border-radius:14px;padding:12px 14px;background:white;display:grid;gap:10px;box-shadow:0 2px 10px rgba(4,46,42,.04)}
+.reply-box-wrap textarea{border:0;background:transparent;padding:4px;min-height:74px;resize:vertical;font-size:13.5px}
 .reply-box-wrap textarea:focus{outline:none}
+.reply-composer-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding-top:8px;border-top:1px solid #eef4f2}
+.reply-composer-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.inbox-context-pane{border-left:1px solid var(--line);padding:18px 16px;background:white;display:flex;flex-direction:column;gap:14px;min-width:0}
+.inbox-context-pane h3{margin:0;font-size:14px;color:var(--ink)}
+.inbox-ctx-biz{display:flex;align-items:center;gap:10px}
+.inbox-ctx-biz strong{display:block;font-size:14px;line-height:1.25}
+.inbox-ctx-biz small{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+.inbox-ctx-pills{display:flex;flex-wrap:wrap;gap:6px}
+.inbox-ctx-section{border-top:1px solid #eef4f2;padding-top:12px;display:grid;gap:7px}
+.inbox-ctx-section strong{font-size:12.5px;color:var(--ink)}
+.inbox-ctx-list{margin:0;padding-left:16px;display:grid;gap:5px;font-size:12.5px;color:#334e53;line-height:1.4}
+.inbox-ctx-actions{margin-top:auto;display:grid;gap:8px;padding-top:12px;border-top:1px solid #eef4f2}
+.inbox-ctx-actions button{width:100%;justify-content:center;font-size:12.5px;padding:9px 12px}
 
 /* Broadcast Page (Figma Email Broadcast + Template Cards) */
 .broadcast-grid{display:grid;grid-template-columns:1.05fr 1.2fr;gap:18px;align-items:start}
@@ -481,6 +502,11 @@ dialog .heading{margin:0 0 16px}
 
 /* Mobile Bottom Nav */
 .mobile-bottom-nav{display:none}
+
+@media(max-width:1240px){
+  .inbox-shell{grid-template-columns:270px minmax(0,1fr)}
+  .inbox-context-pane{grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}
+}
 
 @media(max-width:1100px){
   .dossier-overview-grid,.profile-info-grid{grid-template-columns:1fr}

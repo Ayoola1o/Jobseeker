@@ -80,6 +80,7 @@ let auditOutreachTab = 'coldEmail';
 let settingsTab = 'integrations';
 let selectedInboxKey = null;
 let inboxFilter = 'all';
+let inboxSearchQuery = '';
 let selectedBroadcastTplId = 'intro';
 let broadcastAudience = 'verified';
 let broadcastSending = false;
@@ -2931,9 +2932,20 @@ function renderInbox() {
   }
 
   const allGroups = getInboxGroups();
+  const repliedCount = allGroups.filter(g => g.hasReply).length;
+  const searchTerm = norm(inboxSearchQuery);
   const filteredGroups = allGroups.filter(g => {
-    if (inboxFilter === 'replied') return g.hasReply;
-    if (inboxFilter === 'sent') return !g.hasReply;
+    if (inboxFilter === 'replied' && !g.hasReply) return false;
+    if (inboxFilter === 'sent' && g.hasReply) return false;
+    if (searchTerm) {
+      const hay = [
+        g.lead?.name,
+        g.email,
+        g.latestEntry?.conversation?.subject,
+        g.messages.at(-1)?.body
+      ].map(norm).join(' ');
+      if (!hay.includes(searchTerm)) return false;
+    }
     return true;
   });
 
@@ -2946,15 +2958,35 @@ function renderInbox() {
 
   const shell = create('div', '', 'surface inbox-shell');
 
-  // Left List Pane (1 unified row per email address)
+  // 1. LEFT PANE: Filterable Conversation List (1 unified row per email address)
   const listPane = create('div', '', 'inbox-list-pane');
+  const searchWrap = create('div', '', 'inbox-search-wrap');
+  const searchBox = create('div', '', 'inbox-search-box');
+  const searchIco = create('span', '', 'search-ico');
+  searchIco.append(iconEl('search', 14));
+  const convSearchInput = create('input');
+  convSearchInput.type = 'search';
+  convSearchInput.placeholder = 'Filter conversations…';
+  convSearchInput.value = inboxSearchQuery;
+  convSearchInput.setAttribute('aria-label', 'Filter inbox conversations');
+  convSearchInput.oninput = e => {
+    inboxSearchQuery = e.target.value;
+    const pos = e.target.selectionStart;
+    renderInbox();
+    const nextInp = $('#inbox-content .inbox-search-box input');
+    if (nextInp) { nextInp.focus(); try { nextInp.setSelectionRange(pos, pos); } catch {} }
+  };
+  searchBox.append(searchIco, convSearchInput);
+  searchWrap.append(searchBox);
+
   const tabsRow = create('div', '', 'inbox-tabs');
-  [['all', `All (${allGroups.length})`], ['replied', 'Replies'], ['sent', 'Sent']].forEach(([key, lbl]) => {
+  [['all', `All (${allGroups.length})`], ['replied', `Replies (${repliedCount})`], ['sent', 'Sent']].forEach(([key, lbl]) => {
     const t = create('button', lbl, 'inbox-tab' + (inboxFilter === key ? ' active' : ''));
     t.type = 'button';
     t.onclick = () => { inboxFilter = key; renderInbox(); };
     tabsRow.append(t);
   });
+
   const itemsWrap = create('div', '', 'inbox-items');
   if (filteredGroups.length) {
     for (const group of filteredGroups) {
@@ -2962,17 +2994,28 @@ function renderInbox() {
       const isSelected = activeGroup && activeGroup.key === group.key;
       const rowEl = create('div', '', 'inbox-item' + (isSelected ? ' active' : ''));
       const body = create('div', '', 'inbox-item-body');
+      if (isSelected) body.append(create('div', 'SELECTED', 'inbox-item-selected-tag'));
       const rTop = create('div', '', 'inbox-item-top');
-      rTop.append(create('strong', lead.name), create('small', new Date(group.latestTime || Date.now()).toLocaleDateString()));
+      rTop.append(
+        create('strong', lead.name),
+        create('small', formatRelativeTime(group.latestTime) || new Date(group.latestTime || Date.now()).toLocaleDateString())
+      );
       const rSub = create('div', group.email || latestEntry.conversation.subject, 'inbox-item-sub');
+      const lastMsg = group.messages.at(-1);
+      const snippetText = (lastMsg?.body || latestEntry.conversation.subject || '').replace(/\s+/g, ' ').trim().slice(0, 72);
+      const rPrev = create('div', snippetText, 'inbox-item-preview');
+
       const rBadges = create('div', '', 'actions');
-      rBadges.style.marginTop = '4px';
+      rBadges.style.marginTop = '5px';
       if (group.unread) rBadges.append(create('span', 'New Reply', 'pill'));
       else if (group.hasReply) rBadges.append(create('span', 'Replied', 'pill'));
       else rBadges.append(create('span', `${Math.max(1, group.messages.length)} sent`, 'pill neutral'));
-      if (group.entries.length > 1) rBadges.append(create('span', `${group.entries.length} threads`, 'pill neutral'));
+      if (lead.platform && lead.platform !== 'Custom / Website') {
+        rBadges.append(create('span', lead.platform, 'pill neutral'));
+      }
       if (lead.due) rBadges.append(create('span', `Follow-up: ${lead.due}`, 'pill wait'));
-      body.append(rTop, rSub, rBadges);
+
+      body.append(rTop, rSub, rPrev, rBadges);
       rowEl.append(makeAvatar(lead.name), body);
       rowEl.onclick = async () => {
         selectedInboxKey = group.key;
@@ -2990,23 +3033,26 @@ function renderInbox() {
       itemsWrap.append(rowEl);
     }
   } else {
-    itemsWrap.append(empty('mail', 'No conversations', 'Send an email to a lead or click "Send Test Email" above to start a thread.'));
+    itemsWrap.append(empty('mail', 'No conversations', searchTerm ? 'No conversations match your filter.' : 'Send an email to a lead or click "Send Test Email" above to start a thread.'));
   }
-  listPane.append(tabsRow, itemsWrap);
+  listPane.append(searchWrap, tabsRow, itemsWrap);
 
-  // Right Thread Pane (Unified chronological chat history for this email address)
+  // 2. CENTER PANE: Unified Directional Chat-Style Thread & Docked Composer
   const threadPane = create('div', '', 'inbox-thread-pane');
+  const contextPane = create('aside', '', 'inbox-context-pane');
+
   if (!activeGroup) {
     threadPane.append(empty('mail', 'Select a conversation', 'Pick a contact from the left to read messages and reply.'));
+    contextPane.append(create('h3', 'Lead Context'), create('p', 'Select a conversation to view audit scores, persona pitch angles, and quick proposal actions.', 'small'));
   } else {
     const { lead, latestEntry, messages: unifiedMsgs } = activeGroup;
     const conversation = latestEntry.conversation;
-    const threadHead = create('div', '', 'heading');
-    threadHead.style.margin = '0';
+    const threadHead = create('div', '', 'inbox-thread-head');
     const headTitle = create('div');
+    headTitle.style.minWidth = '0';
     headTitle.append(
       create('h2', conversation.subject),
-      create('div', `${lead.name} · ${activeGroup.email} (${unifiedMsgs.length} message${unifiedMsgs.length === 1 ? '' : 's'})`, 'small')
+      create('div', `${lead.name} · ${activeGroup.email} · ${unifiedMsgs.length} message${unifiedMsgs.length === 1 ? '' : 's'}`, 'small')
     );
     const headRight = create('div', '', 'actions');
     const dueInput = create('input');
@@ -3014,17 +3060,13 @@ function renderInbox() {
     dueInput.value = lead.due || '';
     dueInput.title = 'Schedule follow-up reminder';
     dueInput.setAttribute('aria-label', 'Follow-up date');
-    dueInput.style.cssText = 'width:auto;padding:6px 10px;font-size:12.5px';
+    dueInput.style.cssText = 'width:auto;padding:6px 10px;font-size:12.5px;border-radius:9px';
     dueInput.onchange = () => {
       lead.due = dueInput.value;
       persist();
       report(lead.due ? `Follow-up scheduled for ${lead.name} on ${lead.due}.` : `Cleared follow-up reminder for ${lead.name}.`);
     };
-    headRight.append(
-      dueInput,
-      classify(lead, conversation),
-      btnWithIcon('plus', 'Compose', () => compose(lead))
-    );
+    headRight.append(dueInput, classify(lead, conversation));
     threadHead.append(headTitle, headRight);
 
     const msgsWrap = create('div', '', 'inbox-messages');
@@ -3033,14 +3075,16 @@ function renderInbox() {
         const mail = create('article', '', 'mail' + (m.sent ? ' outgoing' : ''));
         const mHead = create('div', '', 'mail-head');
         const mSender = create('div', '', 'mail-sender');
-        const senderLabel = m.sent ? (currentUser?.name || 'You') : lead.name;
         const senderMeta = create('div');
         senderMeta.append(
-          create('h3', m.sent ? `You → ${m.to || activeGroup.email}` : m.from),
+          create('h3', m.sent ? `You → ${m.to || activeGroup.email}` : (m.from || lead.name)),
           create('small', new Date(m.time).toLocaleString())
         );
-        mSender.append(makeAvatar(senderLabel), senderMeta);
+        mSender.append(senderMeta);
         mHead.append(mSender);
+        if (!m.sent) {
+          mHead.append(create('span', 'Client Reply', 'pill'));
+        }
         mail.append(mHead, create('p', m.body));
         msgsWrap.append(mail);
       }
@@ -3050,28 +3094,46 @@ function renderInbox() {
 
     const replyForm = create('form', '', 'reply-box-wrap');
     const replyBox = create('textarea');
-    replyBox.placeholder = `Write a reply to ${lead.name} (${activeGroup.email})…`;
+    replyBox.placeholder = `Write a reply to ${lead.name}…`;
     replyBox.required = true;
     const replyAtts = createAttachmentPicker();
-    const replyActions = create('div', '', 'actions');
-    const sendReplyBtn = create('button', '', '');
-    sendReplyBtn.type = 'submit';
-    sendReplyBtn.append(iconEl('send', 14), document.createTextNode('Send Reply'));
-    const loadSolutionBtn = btnWithIcon('sparkles', `Insert Solution Pack Proposal${getUserTierLevel() < 4 ? ' [Agency+]' : ''}`, () => {
+    // Hide the default verbose note inside compact inbox bar, keep chips cleanly visible
+    const attBar = replyAtts.el.querySelector('.attach-bar');
+    const attBtn = attBar?.querySelector('button');
+    const attInput = attBar?.querySelector('input[type="file"]');
+    const attChips = replyAtts.el.querySelector('.attach-chips');
+
+    const composerBar = create('div', '', 'reply-composer-bar');
+    const composerLeft = create('div', '', 'reply-composer-left');
+    if (attBtn) {
+      attBtn.style.padding = '7px 11px';
+      attBtn.style.fontSize = '12.5px';
+      composerLeft.append(attBtn);
+    }
+    if (attInput) composerLeft.append(attInput);
+
+    const loadSolutionBtn = btnWithIcon('sparkles', `Insert 4-Phase Solution Pack${getUserTierLevel() < 4 ? ' [Agency+]' : ''}`, () => {
       if (!requireTier(4, 'One-Click Inbox Solution Pack Insertion', 'Insert a complete 4-phase turnaround proposal directly into any client reply thread on Premium (Agency) and Diamond plans.')) return;
-      if (!lead.solutionPack) lead.solutionPack = generateLeadSolutionPack(lead, settings);
+      if (!lead.solutionPack || lead.solutionPack.personaId !== getCurrentPersonaState().persona.id) {
+        lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
+      }
       replyBox.value = lead.solutionPack.replyProposalBody;
       replyBox.focus();
       report(`Loaded 4-phase Solution Pack proposal for ${lead.name} into reply box.`);
     }, 'btn-soft', 14);
-    replyActions.append(sendReplyBtn, loadSolutionBtn, button('Open Solution Pack', () => {
-      if (!lead.solutionPack) lead.solutionPack = generateLeadSolutionPack(lead, settings);
-      activeBusinessId = lead.id;
-      dossierTab = 'solution';
-      location.hash = '#business';
-      renderBusinessPage();
-    }, true));
-    replyForm.append(replyBox, replyAtts.el, replyActions);
+    loadSolutionBtn.style.padding = '7px 11px';
+    loadSolutionBtn.style.fontSize = '12.5px';
+    composerLeft.append(loadSolutionBtn);
+
+    const sendReplyBtn = create('button', '', '');
+    sendReplyBtn.type = 'submit';
+    sendReplyBtn.append(iconEl('send', 14), document.createTextNode('Send Reply'));
+    composerBar.append(composerLeft, sendReplyBtn);
+
+    replyForm.append(replyBox);
+    if (attChips) replyForm.append(attChips);
+    replyForm.append(composerBar);
+
     replyForm.onsubmit = async event => {
       event.preventDefault();
       const text = replyBox.value.trim();
@@ -3107,11 +3169,92 @@ function renderInbox() {
     };
 
     threadPane.append(threadHead, msgsWrap, replyForm);
-    // Auto-scroll to the latest message at the bottom
     requestAnimationFrame(() => { msgsWrap.scrollTop = msgsWrap.scrollHeight; });
+
+    // 3. RIGHT PANE: Lead Context & Quick Proposal Actions Drawer
+    const { persona: activePersona } = getCurrentPersonaState();
+    contextPane.append(create('h3', 'Lead Context'));
+
+    const ctxBiz = create('div', '', 'inbox-ctx-biz');
+    const ctxBizCopy = create('div');
+    ctxBizCopy.append(
+      create('strong', lead.name),
+      create('small', [lead.industry, lead.city].filter(Boolean).join(' · ') || activeGroup.email)
+    );
+    ctxBiz.append(makeAvatar(lead.name), ctxBizCopy);
+    contextPane.append(ctxBiz);
+
+    const ctxPills = create('div', '', 'inbox-ctx-pills');
+    if (lead.website) {
+      const perfScore = getLeadPerformanceScore(lead);
+      ctxPills.append(create('span', `Audit ${perfScore}/100`, perfScore < 60 ? 'pill warn' : perfScore < 78 ? 'pill wait' : 'pill'));
+    } else {
+      ctxPills.append(create('span', 'No Website', 'pill warn'));
+    }
+    if (lead.searchRank) {
+      ctxPills.append(create('span', `Rank #${lead.searchRank}`, lead.searchRank >= 21 ? 'pill warn' : lead.searchRank >= 11 ? 'pill wait' : 'pill neutral'));
+    }
+    if (lead.platform && lead.platform !== 'Custom / Website') {
+      ctxPills.append(create('span', lead.platform, 'pill neutral'));
+    }
+    if (lead.auditReport?.ttfbMs > 800) {
+      ctxPills.append(create('span', `Slow ${lead.auditReport.ttfbMs}ms`, 'pill wait'));
+    }
+    contextPane.append(ctxPills);
+
+    const ctxLens = create('div', '', 'inbox-ctx-section');
+    ctxLens.append(create('strong', `Active Pitch Lens: ${activePersona.label}`));
+    const ctxUl = create('ul', '', 'inbox-ctx-list');
+    const lensPoints = (lead.aiBrief?.gaps?.length
+      ? lead.aiBrief.gaps.slice(0, 3)
+      : lead.auditReport?.findings?.length
+        ? filterAuditFindingsForPersona(lead.auditReport.findings, settings, getUserTierLevel()).primary.slice(0, 3).map(f => f.title)
+        : [
+            !lead.website ? 'No official website linked' : (lead.signals?.https === false ? 'Missing HTTPS security' : 'Website ready for audit'),
+            !hasLinkedSocials(lead) ? 'No social media profiles linked' : 'Social channels detected',
+            lead.searchRank >= 11 ? `Low search rank (#${lead.searchRank})` : 'Open Dossier to run full audit'
+          ]
+    );
+    for (const pt of lensPoints) {
+      ctxUl.append(create('li', String(pt).replace(/^\[[^\]]+\]\s*/, '').slice(0, 78)));
+    }
+    ctxLens.append(ctxUl);
+    contextPane.append(ctxLens);
+
+    const ctxActs = create('div', '', 'inbox-ctx-actions');
+    ctxActs.append(
+      button('Open Full Dossier', () => openBusinessPage(lead), true),
+      button('Open 4-Phase Solution Pack', () => {
+        if (!lead.solutionPack || lead.solutionPack.personaId !== activePersona.id) {
+          lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
+        }
+        activeBusinessId = lead.id;
+        dossierTab = 'solution';
+        location.hash = '#business';
+        renderBusinessPage();
+      }, 'btn-soft'),
+      button(`Download Proposal (.html)${getUserTierLevel() < 4 ? ' [Agency+]' : ''}`, () => {
+        if (!requireTier(4, 'Downloadable HTML Client Solution Pack', 'Export a standalone, client-ready HTML turnaround proposal on Premium (Agency) and Diamond plans.')) return;
+        if (!lead.solutionPack || lead.solutionPack.personaId !== activePersona.id) {
+          lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
+        }
+        const htmlDoc = buildSolutionPackHtml(lead.solutionPack, lead, settings);
+        const url = URL.createObjectURL(new Blob([htmlDoc], { type: 'text/html;charset=utf-8' }));
+        const a = create('a');
+        const slug = (lead.name || 'client').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        a.href = url;
+        a.download = `${slug}-solution-pack.html`;
+        document.body.append(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        report(`Downloaded ${slug}-solution-pack.html.`);
+      }, true)
+    );
+    contextPane.append(ctxActs);
   }
 
-  shell.append(listPane, threadPane);
+  shell.append(listPane, threadPane, contextPane);
   container.replaceChildren(top, shell);
 }
 
