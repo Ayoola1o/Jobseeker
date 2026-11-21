@@ -1,5 +1,5 @@
 import { readBusinessCsv, writeBusinessCsv } from './csv.mjs';
-import { iconEl, iconSvg } from './icons.mjs';
+import { iconEl, iconSvg, planBadgeEl } from './icons.mjs';
 import {
   generateClientOutreach,
   generateLeadSolutionPack,
@@ -239,7 +239,7 @@ function showUpgradeModal(reqTier, featureTitle, description = '') {
   const badgeRow = create('div', '', 'actions');
   const curPill = create('span', `Current: ${curTier.displayLabel}`, 'pill neutral');
   const reqPill = create('span', '', 'pill');
-  reqPill.append(iconEl('crown', 13), document.createTextNode(`Unlocks on ${reqTier.displayLabel} (${reqTier.price})`));
+  reqPill.append(planBadgeEl(reqTier.key, 24), document.createTextNode(`Unlocks on ${reqTier.displayLabel} (${reqTier.price})`));
   badgeRow.append(curPill, reqPill);
 
   const descP = create('p', description || `"${featureTitle}" is available on the ${reqTier.displayLabel} plan and higher.`);
@@ -703,7 +703,13 @@ function updateHeaderBadges() {
   const planTitle = $('#sidebar-plan-title');
   const planSub = $('#sidebar-plan-sub');
   const planCta = document.querySelector('#sidebar-plan-card .plan-cta');
-  if (planTitle) planTitle.textContent = activeTier.key === 'diamond' ? 'Diamond Plan Active' : `${tierLabel} Plan`;
+  if (planTitle) {
+    planTitle.replaceChildren(
+      planBadgeEl(activeTier.key, 30),
+      document.createTextNode(activeTier.key === 'diamond' ? 'Diamond Plan Active' : `${tierLabel} Plan`)
+    );
+    planTitle.style.cssText = 'display:flex;align-items:center;gap:8px';
+  }
   if (planSub) {
     planSub.textContent = activeTier.key === 'diamond'
       ? 'Unlimited searches, leads & outreach'
@@ -1035,7 +1041,8 @@ function renderDashboard() {
   const planGlass = create('div', '', 'mob-plan-glass');
   const planLeft = create('div', '', 'mob-plan-left');
   const planIco = create('div', '', 'mob-plan-ico');
-  planIco.append(iconEl('crown', 19));
+  planIco.style.background = 'transparent';
+  planIco.append(planBadgeEl(getActiveTier().key, 38));
   const planText = create('div');
   planText.append(create('strong', `${tierLabel} Plan`), create('div', searchesLeft, 'small'));
   planText.lastChild.style.color = '#bfe0d8';
@@ -1096,7 +1103,7 @@ function renderDashboard() {
   );
   const rightActions = create('div', '', 'actions');
   const tierPill = create('span', '', 'pill');
-  tierPill.append(create('i', '', 'status-dot'), document.createTextNode(`${tierLabel} Plan`));
+  tierPill.append(planBadgeEl(getActiveTier().key, 22), document.createTextNode(`${tierLabel} Plan`));
   rightActions.append(
     tierPill,
     btnWithIcon('search', 'Find Businesses', () => { location.hash = '#discover'; })
@@ -3768,7 +3775,7 @@ function renderProfile() {
   const heroText = create('div');
   const heroPills = create('div', '', 'profile-hero-pills');
   const tierGlass = create('span', '', 'hero-glass-pill emerald');
-  tierGlass.append(iconEl('crown', 13), document.createTextNode(`${activeTier.label} Plan`));
+  tierGlass.append(planBadgeEl(activeTier.key, 24), document.createTextNode(`${activeTier.displayLabel} Plan`));
   const memberGlass = create('span', `Joined ${memberSince}`, 'hero-glass-pill');
   const idGlass = create('button', '', 'hero-glass-pill');
   idGlass.type = 'button';
@@ -3980,10 +3987,15 @@ function renderProfile() {
     const tc = create('article', '', 'tier-card' + (isCurrent ? ' active' : ''));
     if (isCurrent) tc.append(create('span', 'Current Plan', 'tier-card-badge'));
 
-    const h3 = create('h3');
-    h3.append(document.createTextNode(`${t.displayLabel} · ${t.price}`));
-    if (t.key === 'diamond') h3.append(iconEl('crown', 16));
-    tc.append(h3, create('p', t.tagline, 'tier-tagline'));
+    const medalRow = create('div', '', 'tier-card-medal-row');
+    const titleBlock = create('div');
+    const h3 = create('h3', t.displayLabel);
+    const priceTag = create('small', t.price, 'small');
+    priceTag.style.fontWeight = '700';
+    priceTag.style.color = 'var(--green)';
+    titleBlock.append(h3, priceTag);
+    medalRow.append(planBadgeEl(t.key, 48), titleBlock);
+    tc.append(medalRow, create('p', t.tagline, 'tier-tagline'));
 
     const statBox = create('div', '', 'tier-stat-box');
     const sRow = create('div', '', 'tier-stat-line');
@@ -4281,7 +4293,7 @@ function renderSettings() {
     const tierLabel = currentUser?.usage?.label || 'Basic';
     const accCard = create('article', '', 'surface card-pad');
     const tierPill = create('span', '', 'pill');
-    tierPill.append(iconEl('crown', 13), document.createTextNode(`${tierLabel} Plan`));
+    tierPill.append(planBadgeEl(getActiveTier().key, 24), document.createTextNode(`${tierLabel} Plan`));
     accCard.append(cardHead('crown', 'amber', 'Account & Subscription', 'Your Jobhunta identity, unique workspace ID, and daily quota tier.', tierPill));
 
     accCard.append(

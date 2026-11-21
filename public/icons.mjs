@@ -67,3 +67,115 @@ export function iconEl(name, size = 18, className = 'lucide') {
   wrap.innerHTML = iconSvg(name, size, className);
   return wrap.firstElementChild;
 }
+
+const PLAN_BADGE_THEMES = {
+  basic: {
+    top: 'BRONZE',
+    ribbon: 'BASIC',
+    bottom: 'FREE',
+    c1: '#f0b28c',
+    c2: '#b85d2d',
+    c3: '#6f2e10',
+    c4: '#e59a6e',
+    text: '#f5be99',
+    ribbonText: '#230d04'
+  },
+  silver: {
+    top: 'SILVER',
+    ribbon: 'STARTER',
+    bottom: 'PLUS',
+    c1: '#f1f5f9',
+    c2: '#94a3b8',
+    c3: '#475569',
+    c4: '#e2e8f0',
+    text: '#e2e8f0',
+    ribbonText: '#0f172a'
+  },
+  gold: {
+    top: 'GOLD',
+    ribbon: 'PRO',
+    bottom: 'VIP',
+    c1: '#fef08a',
+    c2: '#eab308',
+    c3: '#9a6700',
+    c4: '#fde047',
+    text: '#fde047',
+    ribbonText: '#1c1100'
+  },
+  premium: {
+    top: 'PLATINUM',
+    ribbon: 'PREMIUM',
+    bottom: 'VIP',
+    c1: '#ffffff',
+    c2: '#cbd5e1',
+    c3: '#64748b',
+    c4: '#f8fafc',
+    text: '#f8fafc',
+    ribbonText: '#090d16'
+  },
+  diamond: {
+    top: 'DIAMOND',
+    ribbon: 'DIAMOND',
+    bottom: 'VIP',
+    c1: '#cffafe',
+    c2: '#06b6d4',
+    c3: '#059669',
+    c4: '#a7f3d0',
+    text: '#67e8f9',
+    ribbonText: '#022c22'
+  }
+};
+
+let planBadgeUid = 0;
+
+export function planBadgeSvg(tierKey = 'basic', size = 48) {
+  const key = String(tierKey || 'basic').trim().toLowerCase();
+  const alias = { free: 'basic', starter: 'silver', pro: 'gold', agency: 'premium' }[key] || key;
+  const t = PLAN_BADGE_THEMES[alias] || PLAN_BADGE_THEMES.basic;
+  const uid = `pb_${alias}_${++planBadgeUid}`;
+
+  // 14 subtle star dots arranged around the metallic outer ring (skipping behind ribbon sides)
+  const starAngles = [-140, -120, -100, -80, -60, -40, 40, 60, 80, 100, 120, 140];
+  const stars = starAngles.map(deg => {
+    const rad = (deg * Math.PI) / 180;
+    const cx = (50 + 40.5 * Math.cos(rad)).toFixed(1);
+    const cy = (50 + 40.5 * Math.sin(rad)).toFixed(1);
+    return `<circle cx="${cx}" cy="${cy}" r="1.45" fill="#111827" opacity="0.78"/>`;
+  }).join('');
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 100 100" class="plan-medal-svg" aria-label="${t.top} ${t.ribbon} badge">
+    <defs>
+      <linearGradient id="${uid}_ring" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="${t.c1}"/>
+        <stop offset="42%" stop-color="${t.c2}"/>
+        <stop offset="72%" stop-color="${t.c3}"/>
+        <stop offset="100%" stop-color="${t.c4}"/>
+      </linearGradient>
+      <linearGradient id="${uid}_rib" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="${t.c3}"/>
+        <stop offset="22%" stop-color="${t.c1}"/>
+        <stop offset="50%" stop-color="${t.c4}"/>
+        <stop offset="78%" stop-color="${t.c2}"/>
+        <stop offset="100%" stop-color="${t.c3}"/>
+      </linearGradient>
+      <radialGradient id="${uid}_core" cx="50%" cy="38%" r="60%">
+        <stop offset="0%" stop-color="#1f2937"/>
+        <stop offset="100%" stop-color="#05070b"/>
+      </radialGradient>
+    </defs>
+    <circle cx="50" cy="50" r="47" fill="url(#${uid}_ring)" stroke="${t.c3}" stroke-width="1.5"/>
+    <circle cx="50" cy="50" r="35" fill="url(#${uid}_core)" stroke="${t.c1}" stroke-width="1.3"/>
+    ${stars}
+    <text x="50" y="32" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-size="8.2" font-weight="800" letter-spacing="0.8" fill="${t.text}">${t.top}</text>
+    <path d="M5,42 Q50,34 95,42 L95,58 Q50,50 5,58 Z" fill="url(#${uid}_rib)" stroke="${t.c3}" stroke-width="1.2"/>
+    <text x="50" y="51.5" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-size="11.5" font-weight="900" letter-spacing="0.7" fill="${t.ribbonText}">${t.ribbon}</text>
+    <text x="50" y="74" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-size="12" font-weight="900" letter-spacing="1.2" fill="${t.text}">${t.bottom}</text>
+  </svg>`;
+}
+
+export function planBadgeEl(tierKey = 'basic', size = 48) {
+  const wrap = document.createElement('span');
+  wrap.className = 'plan-medal-wrap';
+  wrap.innerHTML = planBadgeSvg(tierKey, size);
+  return wrap;
+}
