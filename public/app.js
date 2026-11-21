@@ -1977,7 +1977,7 @@ function renderBusinessPage() {
     const previewBody = lead.aiBrief?.pitchBody || interpolateTemplate(settings.templates[0]?.body || '', lead);
     const previewSubj = lead.aiBrief?.pitchSubject || interpolateTemplate(settings.templates[0]?.subject || '', lead);
     pitchCopy.append(pitchTitle, create('p', previewBody.slice(0, 260) + (previewBody.length > 260 ? '…' : '')));
-    const pitchActs = create('div', '', 'actions');
+    const pitchActs = create('div', '', 'pitch-banner-actions');
     pitchActs.append(
       btnWithIcon('copy', 'Copy Pitch', async e => {
         try {
@@ -2258,7 +2258,7 @@ function renderBusinessPage() {
         );
         bodyField.lastChild.style.minHeight = '200px';
 
-        const outActs = create('div', '', 'actions');
+        const outActs = create('div', '', 'dossier-action-grid');
         if (isEmailVariant) {
           outActs.append(
             btnWithIcon('mail', 'Open in Gmail Composer & Send', () => {
@@ -2304,7 +2304,7 @@ function renderBusinessPage() {
         create('h2', `Client Solution Pack & 4-Phase Roadmap for ${lead.name}`),
         create('p', 'Ready-to-send phased implementation plan and problem-to-solution breakdown for when this client replies.', 'small')
       );
-      const solTopActs = create('div', '', 'actions');
+      const solTopActs = create('div', '', 'actions sol-top-actions');
       const progPill = create('span', `${doneTasks}/${allTasks.length} tasks done`, 'pill');
       const regenPackBtn = btnWithIcon('refresh', `Rebuild for ${activePersona.label}`, () => {
         lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
@@ -2387,14 +2387,15 @@ function renderBusinessPage() {
         }
       }
 
-      // 2. Problem -> Solution -> Expected Client ROI Matrix
+      // 2. Problem -> Solution -> Expected Client ROI Matrix (Desktop Table + Mobile Cards)
       const matrixSec = create('div', '', 'ai-section stack');
       matrixSec.append(create('h3', `2. Discovered Problems → Solutions → Expected ROI (${pack.matrix?.length || 0} items)`));
-      const mWrap = create('div', '', 'data-table-wrap');
+      const mWrap = create('div', '', 'data-table-wrap sol-matrix-table');
       const mTable = create('table', '', 'data-table');
       const mHead = create('thead');
       mHead.innerHTML = '<tr><th>Problem Discovered</th><th>Proposed Solution</th><th>Expected Client Outcome</th><th>Phase</th></tr>';
       const mBody = create('tbody');
+      const mCards = create('div', '', 'sol-matrix-cards');
       for (const row of pack.matrix || []) {
         const tr = create('tr');
         const tdProb = create('td'); tdProb.append(create('strong', row.problem));
@@ -2403,10 +2404,21 @@ function renderBusinessPage() {
         const tdPh = create('td'); tdPh.append(create('span', row.phase, 'pill neutral'));
         tr.append(tdProb, tdSol, tdOut, tdPh);
         mBody.append(tr);
+
+        const mc = create('div', '', 'sol-matrix-card');
+        const mcTop = create('div', '', 'actions');
+        mcTop.append(create('span', row.phase, 'pill neutral'));
+        mc.append(
+          mcTop,
+          create('strong', row.problem),
+          create('p', row.solution),
+          create('div', `Expected ROI: ${row.expectedOutcome}`, 'sol-matrix-roi')
+        );
+        mCards.append(mc);
       }
       mTable.append(mHead, mBody);
       mWrap.append(mTable);
-      matrixSec.append(mWrap);
+      matrixSec.append(mWrap, mCards);
 
       // 3. Ready-to-Send "When Client Replies" Follow-Up Proposal
       const propSec = create('div', '', 'ai-section stack');
@@ -2432,7 +2444,7 @@ function renderBusinessPage() {
       propSubj.lastChild.onchange = savePropEdits;
       propBody.lastChild.onchange = savePropEdits;
 
-      const propActs = create('div', '', 'actions');
+      const propActs = create('div', '', 'dossier-action-grid');
       propActs.append(
         btnWithIcon('mail', 'Send Proposal in Gmail Composer', () => {
           savePropEdits();
@@ -2554,7 +2566,7 @@ function renderBusinessPage() {
       tabBody.append(metaCard, histCard);
     } else if (dossierTab === 'ai') {
       const aiCard = create('article', '', 'surface dossier-card full ai-panel');
-      const aiHeader = create('div', '', 'heading');
+      const aiHeader = create('div', '', 'heading ai-header-stack');
       aiHeader.style.margin = '0';
 
       const issuesBox = create('div', '', 'issues-prompt-box');
@@ -2703,7 +2715,7 @@ function renderBusinessPage() {
         }, 'btn-soft');
         refineBar.append(refineInput, refineBtn);
 
-        const pitchActions = create('div', '', 'actions');
+        const pitchActions = create('div', '', 'dossier-action-grid');
         pitchActions.append(
           btnWithIcon('mail', 'Use this email & Attach Files / Send', () => {
             savePitchEdits();
