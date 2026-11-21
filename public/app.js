@@ -2909,7 +2909,7 @@ function renderInbox() {
   const container = $('#inbox-content');
   if (!container) return;
 
-  const top = create('div', '', 'heading section-title');
+  const top = create('div', '', 'heading section-title inbox-page-header');
   const titleWrap = create('div');
   const statusPill = create('span', '', account.mailbox ? 'pill' : 'pill wait');
   statusPill.append(create('i', '', 'status-dot'), document.createTextNode(account.mailbox ? `Connected: ${account.mailbox}` : 'Gmail not connected'));
@@ -2958,7 +2958,9 @@ function renderInbox() {
     selectedInboxKey = activeGroup.key;
   }
 
-  const shellClass = `surface inbox-shell ${mobileInboxView === 'thread' && activeGroup ? 'mob-view-thread' : 'mob-view-list'}${mobileContextOpen ? ' mob-ctx-open' : ''}`;
+  const isThreadActive = mobileInboxView === 'thread' && Boolean(activeGroup);
+  container.classList.toggle('mob-thread-active', isThreadActive);
+  const shellClass = `surface inbox-shell ${isThreadActive ? 'mob-view-thread' : 'mob-view-list'}${mobileContextOpen ? ' mob-ctx-open' : ''}`;
   const shell = create('div', '', shellClass);
 
   // 1. LEFT PANE: Filterable Conversation List (1 unified row per email address)
@@ -3055,8 +3057,7 @@ function renderInbox() {
     const { persona: activePersona } = getCurrentPersonaState();
     const threadHead = create('div', '', 'inbox-thread-head');
 
-    const headLeftWrap = create('div', '', 'actions');
-    headLeftWrap.style.cssText = 'flex:1;min-width:0;align-items:center;flex-wrap:nowrap;gap:10px';
+    const headTopRow = create('div', '', 'inbox-thread-top');
     const mobBackBtn = create('button', '', 'inbox-mob-back');
     mobBackBtn.type = 'button';
     mobBackBtn.setAttribute('aria-label', 'Back to conversations');
@@ -3066,21 +3067,21 @@ function renderInbox() {
       mobileContextOpen = false;
       renderInbox();
     };
-    const headTitle = create('div');
-    headTitle.style.minWidth = '0';
+    const headAvatar = makeAvatar(lead.name);
+    const headTitle = create('div', '', 'inbox-thread-title');
     headTitle.append(
-      create('h2', conversation.subject),
-      create('div', `${lead.name} · ${activeGroup.email} · ${unifiedMsgs.length} message${unifiedMsgs.length === 1 ? '' : 's'}`, 'small')
+      create('h2', lead.name || conversation.subject),
+      create('div', `${activeGroup.email} · ${conversation.subject}`, 'small')
     );
-    headLeftWrap.append(mobBackBtn, headTitle);
-
-    const headRight = create('div', '', 'actions');
     const mobCtxBtn = create('button', mobileContextOpen ? 'Context ▲' : 'Context ▾', 'inbox-mob-ctx-btn');
     mobCtxBtn.type = 'button';
     mobCtxBtn.onclick = () => {
       mobileContextOpen = !mobileContextOpen;
       renderInbox();
     };
+    headTopRow.append(mobBackBtn, headAvatar, headTitle, mobCtxBtn);
+
+    const headControls = create('div', '', 'inbox-thread-controls');
     const dueInput = create('input');
     dueInput.type = 'date';
     dueInput.value = lead.due || '';
@@ -3092,8 +3093,8 @@ function renderInbox() {
       persist();
       report(lead.due ? `Follow-up scheduled for ${lead.name} on ${lead.due}.` : `Cleared follow-up reminder for ${lead.name}.`);
     };
-    headRight.append(mobCtxBtn, dueInput, classify(lead, conversation));
-    threadHead.append(headLeftWrap, headRight);
+    headControls.append(dueInput, classify(lead, conversation));
+    threadHead.append(headTopRow, headControls);
 
     // Compact Mobile Diagnostic Strip (visible on <= 860px right below thread header)
     const mobStrip = create('div', '', 'inbox-mob-strip');
@@ -3145,46 +3146,42 @@ function renderInbox() {
     }
 
     const replyForm = create('form', '', 'reply-box-wrap');
-    const replyBox = create('textarea');
-    replyBox.placeholder = `Write a reply to ${lead.name}…`;
-    replyBox.required = true;
     const replyAtts = createAttachmentPicker();
-    // Hide the default verbose note inside compact inbox bar, keep chips cleanly visible
     const attBar = replyAtts.el.querySelector('.attach-bar');
     const attBtn = attBar?.querySelector('button');
     const attInput = attBar?.querySelector('input[type="file"]');
     const attChips = replyAtts.el.querySelector('.attach-chips');
 
-    const composerBar = create('div', '', 'reply-composer-bar');
-    const composerLeft = create('div', '', 'reply-composer-left');
+    const chipsRow = create('div', '', 'reply-chips-row');
     if (attBtn) {
-      attBtn.style.padding = '7px 11px';
-      attBtn.style.fontSize = '12.5px';
-      composerLeft.append(attBtn);
+      attBtn.replaceChildren(iconEl('paperclip', 13), document.createTextNode('Attach'));
+      chipsRow.append(attBtn);
     }
-    if (attInput) composerLeft.append(attInput);
+    if (attInput) chipsRow.append(attInput);
 
-    const loadSolutionBtn = btnWithIcon('sparkles', `Insert 4-Phase Solution Pack${getUserTierLevel() < 4 ? ' [Agency+]' : ''}`, () => {
+    const loadSolutionBtn = btnWithIcon('sparkles', `Insert 4-Phase Pack${getUserTierLevel() < 4 ? ' [Agency+]' : ''}`, () => {
       if (!requireTier(4, 'One-Click Inbox Solution Pack Insertion', 'Insert a complete 4-phase turnaround proposal directly into any client reply thread on Premium (Agency) and Diamond plans.')) return;
-      if (!lead.solutionPack || lead.solutionPack.personaId !== getCurrentPersonaState().persona.id) {
+      if (!lead.solutionPack || lead.solutionPack.personaId !== activePersona.id) {
         lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
       }
       replyBox.value = lead.solutionPack.replyProposalBody;
       replyBox.focus();
       report(`Loaded 4-phase Solution Pack proposal for ${lead.name} into reply box.`);
-    }, 'btn-soft', 14);
-    loadSolutionBtn.style.padding = '7px 11px';
-    loadSolutionBtn.style.fontSize = '12.5px';
-    composerLeft.append(loadSolutionBtn);
+    }, 'btn-soft', 13);
+    chipsRow.append(loadSolutionBtn);
 
-    const sendReplyBtn = create('button', '', '');
+    const inputRow = create('div', '', 'reply-input-row');
+    const replyBox = create('textarea');
+    replyBox.placeholder = `Write a reply…`;
+    replyBox.required = true;
+    const sendReplyBtn = create('button', '', 'reply-send-btn');
     sendReplyBtn.type = 'submit';
-    sendReplyBtn.append(iconEl('send', 14), document.createTextNode('Send Reply'));
-    composerBar.append(composerLeft, sendReplyBtn);
+    sendReplyBtn.append(iconEl('send', 14), document.createTextNode('Send'));
+    inputRow.append(replyBox, sendReplyBtn);
 
-    replyForm.append(replyBox);
+    replyForm.append(chipsRow);
     if (attChips) replyForm.append(attChips);
-    replyForm.append(composerBar);
+    replyForm.append(inputRow);
 
     replyForm.onsubmit = async event => {
       event.preventDefault();
