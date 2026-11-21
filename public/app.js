@@ -1739,14 +1739,20 @@ function kvItem(label, valueNodeOrText) {
   return box;
 }
 
-function buildSparklineSvg() {
+function buildHealthRingSvg(score = 75) {
+  const safeScore = Math.max(0, Math.min(100, Number(score) || 0));
+  const color = safeScore >= 80 ? '#059669' : safeScore >= 55 ? '#d97706' : '#dc2626';
+  const r = 30;
+  const circ = 2 * Math.PI * r;
+  const filled = (safeScore / 100) * circ;
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('viewBox', '0 0 220 56');
-  svg.setAttribute('class', 'chart-svg');
-  svg.innerHTML = '<defs><linearGradient id="spGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#059669" stop-opacity="0.22"/><stop offset="100%" stop-color="#059669" stop-opacity="0"/></linearGradient></defs>'
-    + '<path d="M4,46 L38,38 L72,41 L108,26 L146,30 L182,14 L216,10 L216,54 L4,54 Z" fill="url(#spGrad)"/>'
-    + '<polyline fill="none" stroke="#059669" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" points="4,46 38,38 72,41 108,26 146,30 182,14 216,10"/>';
+  svg.setAttribute('viewBox', '0 0 76 76');
+  svg.setAttribute('class', 'health-ring-svg');
+  svg.innerHTML =
+    `<circle cx="38" cy="38" r="${r}" fill="none" stroke="#e6eeec" stroke-width="7"/>` +
+    `<circle cx="38" cy="38" r="${r}" fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round" stroke-dasharray="${filled.toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90 38 38)"/>` +
+    `<text x="38" y="42" text-anchor="middle" font-size="16" font-weight="800" fill="#0f2a2e">${safeScore}</text>`;
   return svg;
 }
 
@@ -1869,7 +1875,41 @@ function renderBusinessPage() {
   pbRight.append(dossierPersonaSelect, configToolsBtn);
   personaBar.append(pbLeft, pbRight);
 
-  // Sub-Navigation Tabs (Horizontally scrollable left/right via swipe or chevron buttons)
+  // Quick Contact Action Strip (1-tap Website, Call, Copy Email, Maps with real SVG icons)
+  const quickContactStrip = create('div', '', 'quick-contact-strip');
+  if (lead.website) {
+    const visitLink = create('a', '', 'quick-contact-chip');
+    visitLink.href = lead.website;
+    visitLink.target = '_blank';
+    visitLink.rel = 'noreferrer';
+    visitLink.append(iconEl('globe', 14), document.createTextNode('Visit Website'), iconEl('externalLink', 12));
+    quickContactStrip.append(visitLink);
+  }
+  if (lead.phone) {
+    const callLink = create('a', '', 'quick-contact-chip');
+    callLink.href = 'tel:' + lead.phone.replace(/[^\d+]/g, '');
+    callLink.append(iconEl('phone', 14), document.createTextNode(lead.phone));
+    quickContactStrip.append(callLink);
+  }
+  if (lead.email) {
+    const copyMailChip = create('button', '', 'quick-contact-chip');
+    copyMailChip.type = 'button';
+    copyMailChip.append(iconEl('mail', 14), document.createTextNode(lead.email));
+    copyMailChip.onclick = async () => {
+      try { await navigator.clipboard.writeText(lead.email); report(`Copied ${lead.email} to clipboard.`); } catch {}
+    };
+    quickContactStrip.append(copyMailChip);
+  }
+  if (lead.source && /^https?:\/\//i.test(lead.source)) {
+    const mapLink = create('a', '', 'quick-contact-chip');
+    mapLink.href = lead.source;
+    mapLink.target = '_blank';
+    mapLink.rel = 'noreferrer';
+    mapLink.append(iconEl('mapPin', 14), document.createTextNode('Open Listing'), iconEl('externalLink', 12));
+    quickContactStrip.append(mapLink);
+  }
+
+  // Sub-Navigation Tabs (Horizontally scrollable left/right with real Lucide SVG icons)
   const tabsShell = create('div', '', 'dossier-tabs-shell');
   const scrollLeftBtn = create('button', '', 'tabs-scroll-btn');
   scrollLeftBtn.type = 'button';
@@ -1878,18 +1918,19 @@ function renderBusinessPage() {
 
   const tabsBar = create('div', '', 'dossier-tabs');
   const tabDefs = [
-    ['overview', 'Overview'],
-    ['audit', `Website Audit${lead.auditReport ? ` (${lead.auditReport.overallScore}/100)` : ''}`],
-    ['solution', 'Solution Pack & Phases'],
-    ['tech', 'Tech Stack'],
-    ['socials', 'Social Links'],
-    ['insights', 'Insights & History'],
-    ['ai', 'AI Analysis']
+    ['overview', 'building', 'Overview'],
+    ['audit', 'shieldCheck', `Website Audit${lead.auditReport ? ` (${lead.auditReport.overallScore}/100)` : ''}`],
+    ['solution', 'layers', 'Solution Pack & Phases'],
+    ['tech', 'code', 'Tech Stack'],
+    ['socials', 'share2', 'Social Links'],
+    ['insights', 'clock', 'Insights & History'],
+    ['ai', 'sparkles', 'AI Analysis']
   ];
   let activeTabEl = null;
-  for (const [key, label] of tabDefs) {
-    const t = create('button', label, 'dossier-tab' + (dossierTab === key ? ' active' : ''));
+  for (const [key, icoName, label] of tabDefs) {
+    const t = create('button', '', 'dossier-tab' + (dossierTab === key ? ' active' : ''));
     t.type = 'button';
+    t.append(iconEl(icoName, 15), document.createTextNode(label));
     t.onclick = () => { dossierTab = key; renderBusinessPage(); };
     if (dossierTab === key) activeTabEl = t;
     tabsBar.append(t);
@@ -1910,50 +1951,92 @@ function renderBusinessPage() {
   const contentWrap = create('div');
 
   if (dossierTab === 'overview') {
+    const makeCardHead = (icoName, titleText, tone = '', rightNode = null) => {
+      const h = create('div', '', 'dossier-card-head');
+      const t = create('div', '', 'dossier-card-title');
+      const ic = create('span', '', `dossier-card-ico ${tone}`);
+      ic.append(iconEl(icoName, 16));
+      t.append(ic, create('h2', titleText));
+      h.append(t);
+      if (rightNode) h.append(rightNode);
+      return h;
+    };
+
     // Figma 3-Column Overview Grid (Company Overview | Website Insights | AI Lead Intelligence)
     const ov3 = create('div', '', 'dossier-overview-grid');
 
     const ovCard = create('article', '', 'surface dossier-card');
-    ovCard.append(create('h2', 'Company Overview'));
-    ovCard.append(create('p', lead.aboutSummary || lead.about || 'Click "Comb Site" above to crawl this business website and extract positioning, tech stack, and email details.', 'small'));
-    const highlights = create('ul', '', 'check-list');
-    const hlItems = [
-      lead.industry && `Industry: ${lead.industry}`,
-      lead.city && `Market: ${lead.city}`,
-      lead.platform && `Platform: ${lead.platform}`,
-      lead.searchRank && `Search Visibility: Bing Rank #${lead.searchRank}`
-    ].filter(Boolean);
-    (hlItems.length ? hlItems : ['Saved in your Jobhunta pipeline']).forEach(txt => {
-      const li = create('li');
-      li.append(iconEl('check', 15), document.createTextNode(txt));
-      highlights.append(li);
-    });
-    ovCard.append(highlights);
+    ovCard.append(makeCardHead('building', 'Company Overview'));
+
+    const metaPills = create('div', '', 'actions');
+    if (lead.industry) {
+      const p = create('span', '', 'pill neutral');
+      p.append(iconEl('building', 12), document.createTextNode(lead.industry));
+      metaPills.append(p);
+    }
+    if (lead.city) {
+      const p = create('span', '', 'pill neutral');
+      p.append(iconEl('mapPin', 12), document.createTextNode(lead.city));
+      metaPills.append(p);
+    }
+    if (lead.platform && lead.platform !== 'Custom / Website') {
+      const p = create('span', '', lead.platform === 'Shopify' ? 'pill' : 'pill info');
+      p.append(iconEl(lead.platform === 'Shopify' ? 'shoppingBag' : 'code', 12), document.createTextNode(lead.platform));
+      metaPills.append(p);
+    }
+    if (lead.searchRank) {
+      const p = create('span', '', lead.searchRank >= 21 ? 'pill warn' : lead.searchRank >= 11 ? 'pill wait' : 'pill');
+      p.append(iconEl('trendingUp', 12), document.createTextNode(`Rank #${lead.searchRank}`));
+      metaPills.append(p);
+    }
+    if (metaPills.childNodes.length) ovCard.append(metaPills);
+
+    const aboutText = lead.aboutSummary || lead.about || 'Click "Comb Site" above to crawl this business website and extract positioning, tech stack, and email details.';
+    const aboutP = create('p', aboutText, 'small about-clamped');
+    ovCard.append(aboutP);
+    if (aboutText.length > 220) {
+      const moreBtn = button('Read more ▾', () => {
+        const exp = aboutP.classList.toggle('expanded');
+        moreBtn.textContent = exp ? 'Show less ▲' : 'Read more ▾';
+      }, 'link-btn');
+      moreBtn.style.alignSelf = 'flex-start';
+      moreBtn.style.fontSize = '12.5px';
+      ovCard.append(moreBtn);
+    }
 
     const insCard = create('article', '', 'surface dossier-card');
-    insCard.append(create('h2', 'Website Insights'));
-    insCard.append(buildSparklineSvg());
+    const scoreVal = getLeadPerformanceScore(lead);
+    const auditPill = create('span', '', scoreVal >= 80 ? 'pill' : scoreVal >= 55 ? 'pill wait' : 'pill warn');
+    auditPill.append(iconEl(scoreVal >= 80 ? 'shieldCheck' : 'shieldAlert', 12), document.createTextNode(lead.auditReport ? 'Audited' : 'Estimated'));
+    insCard.append(makeCardHead('shieldCheck', 'Website Health', scoreVal < 60 ? 'amber' : '', auditPill));
+
+    const ringRow = create('div', '', 'health-ring-row');
+    const ringMeta = create('div', '', 'health-ring-meta');
+    ringMeta.append(
+      create('strong', `${scoreVal}/100 Health Score`),
+      create('span', lead.auditReport
+        ? `${lead.auditReport.counts?.critical || 0} Critical · ${lead.auditReport.counts?.warning || 0} Warnings${lead.auditReport.ttfbMs ? ` · ${lead.auditReport.ttfbMs}ms` : ''}`
+        : 'Run Website Audit for deep 4-layer diagnostics.', 'small')
+    );
+    ringRow.append(buildHealthRingSvg(scoreVal), ringMeta);
+    insCard.append(ringRow);
+
     const sig = lead.signals || {};
-    const insRows = create('div', '', 'stack');
-    insRows.style.gap = '6px';
-    const addStat = (k, v) => {
-      const r = create('div', '', 'stat-row');
-      r.style.padding = '5px 0';
-      r.append(create('span', k, 'small'), create('strong', v));
-      insRows.append(r);
-    };
-    addStat('SSL / HTTPS', lead.website ? ((sig.https ?? lead.website.startsWith('https://')) ? 'Active' : 'Missing') : 'No site');
-    addStat('Platform', lead.platform || 'Not combed');
-    addStat('Tech Apps', String(lead.techStack?.length || 0));
-    insCard.append(insRows);
+    const insBadges = create('div', '', 'actions');
+    const hasSsl = lead.website ? (sig.https ?? lead.website.startsWith('https://')) : false;
+    const sslPill = create('span', '', hasSsl ? 'pill' : 'pill warn');
+    sslPill.append(iconEl(hasSsl ? 'lock' : 'shieldAlert', 12), document.createTextNode(lead.website ? (hasSsl ? 'SSL Active' : 'No HTTPS') : 'No Website'));
+    const platPill = create('span', '', 'pill neutral');
+    platPill.append(iconEl('code', 12), document.createTextNode(lead.platform || 'Not combed'));
+    const appsPill = create('span', '', 'pill info');
+    appsPill.append(iconEl('layers', 12), document.createTextNode(`${lead.techStack?.length || 0} Tech Apps`));
+    insBadges.append(sslPill, platPill, appsPill);
+    insCard.append(insBadges);
 
     const aiCard = create('article', '', 'surface dossier-card');
-    const aiTop = create('div', '', 'heading');
-    aiTop.style.margin = '0';
     const oppPill = create('span', '', 'pill');
     oppPill.append(iconEl('star', 12), document.createTextNode(lead.aiBrief ? 'High Opportunity' : 'Ready for AI'));
-    aiTop.append(create('h2', 'AI Lead Intelligence'), oppPill);
-    aiCard.append(aiTop);
+    aiCard.append(makeCardHead('sparkles', 'AI Lead Intelligence', 'blue', oppPill));
     const aiBullets = create('ul', '', 'check-list');
     const points = lead.aiBrief?.gaps?.slice(0, 3) || [
       !lead.email ? 'No public email extracted yet — comb site to uncover contacts.' : 'Verified email contact ready for 1-to-1 outreach.',
@@ -1969,29 +2052,29 @@ function renderBusinessPage() {
 
     ov3.append(ovCard, insCard, aiCard);
 
-    // Figma Full-Width Soft-Mint Outreach Pitch Preview Banner
+    // Figma Full-Width Soft-Mint Outreach Pitch Preview Banner (Zero unresolved brackets!)
     const pitchBanner = create('div', '', 'pitch-banner');
     const pitchCopy = create('div', '', 'pitch-banner-copy');
     const pitchTitle = create('h3');
     pitchTitle.append(iconEl('sparkles', 16), document.createTextNode('Outreach Pitch Preview'));
     const previewBody = lead.aiBrief?.pitchBody || interpolateTemplate(settings.templates[0]?.body || '', lead);
     const previewSubj = lead.aiBrief?.pitchSubject || interpolateTemplate(settings.templates[0]?.subject || '', lead);
-    pitchCopy.append(pitchTitle, create('p', previewBody.slice(0, 260) + (previewBody.length > 260 ? '…' : '')));
+    pitchCopy.append(pitchTitle, create('p', previewBody.slice(0, 280) + (previewBody.length > 280 ? '…' : '')));
     const pitchActs = create('div', '', 'pitch-banner-actions');
     pitchActs.append(
-      btnWithIcon('copy', 'Copy Pitch', async e => {
+      btnWithIcon('copy', 'Copy Pitch', async () => {
         try {
           await navigator.clipboard.writeText(`${previewSubj}\n\n${previewBody}`);
           report('Copied outreach pitch to clipboard.');
         } catch {}
       }, true),
-      btnWithIcon('mail', 'Draft Email', () => compose(lead, null, null, lead.aiBrief ? { subject: previewSubj, body: previewBody } : null))
+      btnWithIcon('mail', 'Draft Email', () => compose(lead, null, null, { subject: previewSubj, body: previewBody }))
     );
     pitchBanner.append(pitchCopy, pitchActs);
 
     // Auto-Saving Quick CRM Controls
     const crmCard = create('article', '', 'surface dossier-card');
-    crmCard.append(create('h2', 'Quick CRM Controls (Auto-Saves)'));
+    crmCard.append(makeCardHead('settings', 'Quick CRM Controls (Auto-Saves)'));
     const crmGrid = create('div', '', 'grid-2');
     const statusSelect = selectField('Lead Status', 'classification', { '': `Automatic (${status})`, ...statusNames }, lead.classification || '');
     statusSelect.lastChild.onchange = e => { lead.classification = e.target.value; persist(); report('Updated lead status.'); };
@@ -2189,8 +2272,14 @@ function renderBusinessPage() {
             const fc = create('div', '', `finding-card sev-${f.severity}`);
             const fh = create('div', '', 'finding-head');
             const ft = create('div', '', 'finding-title');
-            const sevClass = f.severity === 'Critical' ? 'pill warn' : f.severity === 'Warning' ? 'pill wait' : 'pill neutral';
-            ft.append(create('span', f.severity, sevClass), create('span', f.category.toUpperCase(), 'pill neutral'), document.createTextNode(f.title));
+            const sevClass = f.severity === 'Critical' ? 'pill warn' : f.severity === 'Warning' ? 'pill wait' : 'pill info';
+            const sevIco = f.severity === 'Critical' ? 'alertCircle' : f.severity === 'Warning' ? 'alertTriangle' : 'info';
+            const catIco = f.category === 'bugs' ? 'bug' : f.category === 'seo' ? 'search' : f.category === 'performance' ? 'zap' : 'shieldAlert';
+            const sevPill = create('span', '', sevClass);
+            sevPill.append(iconEl(sevIco, 12), document.createTextNode(f.severity));
+            const catPill = create('span', '', 'pill neutral');
+            catPill.append(iconEl(catIco, 12), document.createTextNode(f.category.toUpperCase()));
+            ft.append(sevPill, catPill, document.createTextNode(f.title));
             const addIssueBtn = button('+ Add to AI Pitch', () => {
               const cur = (lead.userSpottedIssues || '').trim();
               const line = `${f.title} (${f.businessImpact})`;
@@ -2507,11 +2596,34 @@ function renderBusinessPage() {
         persist();
         if (urlVal) await enrichItemEmail(lead, combBtn);
       };
-      const foundSocials = socialLinks(lead);
-      const socialsRow = create('div', '', 'actions');
-      if (foundSocials.length) socialsRow.append(...foundSocials);
-      else socialsRow.append(create('span', 'No social media links discovered yet.', 'small'));
-      webCard.append(webUrlForm, create('small', 'DISCOVERED SOCIAL LINKS', 'small'), socialsRow);
+      const socialDefs = [
+        ['instagram', 'Instagram', lead.instagram],
+        ['facebook', 'Facebook', lead.facebook],
+        ['linkedin', 'LinkedIn', lead.linkedin],
+        ['tiktok', 'TikTok', lead.tiktok],
+        ['twitter', 'X / Twitter', lead.twitter],
+        ['youtube', 'YouTube', lead.youtube]
+      ];
+      const socialsGrid = create('div', '', 'social-brand-grid');
+      for (const [icoKey, label, href] of socialDefs) {
+        if (href && /^https?:\/\//i.test(href)) {
+          const a = create('a', '', 'social-brand-card linked');
+          a.href = href;
+          a.target = '_blank';
+          a.rel = 'noreferrer';
+          const left = create('span', '', 'social-brand-left');
+          left.append(iconEl(icoKey, 16), document.createTextNode(label));
+          a.append(left, iconEl('externalLink', 13));
+          socialsGrid.append(a);
+        } else {
+          const div = create('div', '', 'social-brand-card missing');
+          const left = create('span', '', 'social-brand-left');
+          left.append(iconEl(icoKey, 16), document.createTextNode(label));
+          div.append(left, create('span', 'Missing', 'pill wait'));
+          socialsGrid.append(div);
+        }
+      }
+      webCard.append(webUrlForm, create('small', 'SOCIAL MEDIA PROFILES (LINKED VS. MISSING)', 'small'), socialsGrid);
 
       const sigCard = create('article', '', 'surface dossier-card');
       sigCard.append(create('h2', 'Digital Presence Signals & Missing Gaps'));
@@ -2780,7 +2892,10 @@ function renderBusinessPage() {
     }, '', 14)
   );
 
-  container.replaceChildren(mobDossierBar, navBar, headerGrid, personaBar, tabsShell, contentWrap, mobDossierCta);
+  const nodes = [mobDossierBar, navBar, headerGrid, personaBar];
+  if (quickContactStrip.childNodes.length) nodes.push(quickContactStrip);
+  nodes.push(tabsShell, contentWrap, mobDossierCta);
+  container.replaceChildren(...nodes);
 }
 
 /* ---------------- EMAIL BROADCAST (Figma Email Broadcast) ---------------- */
@@ -4266,12 +4381,22 @@ async function enrichMissingEmails() {
 }
 
 function interpolateTemplate(text = '', lead = {}) {
+  const activePersona = getCurrentPersonaState().persona;
+  const fallbackService = settings.senderService || activePersona.defaultService || 'digital growth and conversion optimization';
+  const fallbackOpp = !lead.website
+    ? 'launching a modern conversion-ready website'
+    : lead.searchRank >= 11
+      ? `moving ${lead.name || 'your business'} higher in ${lead.city || 'local'} search results`
+      : `improving ${lead.name || 'your'} website conversions and client inquiries`;
   return text
     .replace(/\{\{\s*business_name\s*\}\}/gi, lead.name || 'there')
     .replace(/\{\{\s*city\s*\}\}/gi, lead.city || 'your area')
     .replace(/\{\{\s*industry\s*\}\}/gi, lead.industry || 'local')
-    .replace(/\{\{\s*your_name\s*\}\}/gi, settings.senderName || '[your name]')
-    .replace(/\{\{\s*your_service\s*\}\}/gi, settings.senderService || '[your service]');
+    .replace(/\{\{\s*your_name\s*\}\}/gi, settings.senderName || currentUser?.name || 'Team')
+    .replace(/\{\{\s*your_service\s*\}\}/gi, fallbackService)
+    .replace(/\{\{\s*specific_opportunity\s*\}\}/gi, fallbackOpp)
+    .replace(/\[your service\]/gi, fallbackService)
+    .replace(/\[your name\]/gi, settings.senderName || currentUser?.name || 'Team');
 }
 
 function futureDateString(days) {

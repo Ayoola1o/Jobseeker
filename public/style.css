@@ -155,6 +155,7 @@ form.stack,.stack{display:grid;gap:14px}
 .pill{display:inline-flex;align-items:center;gap:5px;background:var(--green-soft);color:#057a55;border-radius:24px;padding:4px 11px;font-size:12px;font-weight:600;white-space:nowrap}
 .pill.wait{background:#fef5e0;color:#b47208}
 .pill.warn{background:#fdecec;color:var(--danger)}
+.pill.info{background:#eff6ff;color:#1d4ed8}
 .pill.neutral{background:#eef3f3;color:#41595e}
 .status-dot{width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block}
 #notice{background:var(--green-soft);padding:11px 15px;border-radius:10px;color:#065f46;margin-bottom:16px;font-size:13.5px;border:1px solid #b7e8d2}
@@ -275,9 +276,32 @@ table.data-table tr:last-child td{border-bottom:0}
 .dossier-tabs-shell{position:relative;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--line);margin-bottom:18px;max-width:100%;min-width:0}
 .dossier-tabs{display:flex;flex-wrap:nowrap;gap:22px;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;touch-action:pan-x;scroll-behavior:smooth;flex:1;min-width:0;scrollbar-width:none;padding:0 2px}
 .dossier-tabs::-webkit-scrollbar{display:none}
-.dossier-tab{background:transparent;color:var(--muted);padding:10px 2px 13px;border-radius:0;border-bottom:2px solid transparent;font-size:14px;font-weight:600;flex-shrink:0;white-space:nowrap}
+.dossier-tab{display:inline-flex;align-items:center;gap:6px;background:transparent;color:var(--muted);padding:10px 2px 13px;border-radius:0;border-bottom:2px solid transparent;font-size:14px;font-weight:600;flex-shrink:0;white-space:nowrap}
 .dossier-tab:hover{background:transparent;color:var(--ink)}
 .dossier-tab.active{color:var(--ink);border-bottom-color:var(--green)}
+.dossier-tab.active svg{color:var(--green)}
+.quick-contact-strip{display:flex;align-items:center;gap:8px;overflow-x:auto;scrollbar-width:none;margin-bottom:12px;padding-bottom:2px}
+.quick-contact-strip::-webkit-scrollbar{display:none}
+.quick-contact-chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;background:white;border:1px solid var(--line);color:var(--ink);text-decoration:none;font-size:12.5px;font-weight:600;white-space:nowrap;flex-shrink:0;cursor:pointer}
+.quick-contact-chip:hover{border-color:#9fd8c0;background:#f3faf7;color:#065f46}
+.quick-contact-chip svg{color:var(--green)}
+.dossier-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.dossier-card-title{display:flex;align-items:center;gap:8px}
+.dossier-card-ico{width:30px;height:30px;border-radius:9px;background:var(--green-soft);color:var(--green);display:inline-grid;place-items:center;flex-shrink:0}
+.dossier-card-ico.amber{background:#fef3c7;color:#d97706}
+.dossier-card-ico.blue{background:#eff6ff;color:#2563eb}
+.about-clamped{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;margin:0;line-height:1.55}
+.about-clamped.expanded{display:block;-webkit-line-clamp:unset}
+.health-ring-row{display:flex;align-items:center;gap:14px;padding:6px 0}
+.health-ring-svg{width:76px;height:76px;flex-shrink:0}
+.health-ring-meta{display:grid;gap:4px;min-width:0}
+.health-ring-meta strong{font-size:15px;color:var(--ink)}
+.social-brand-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:4px}
+.social-brand-card{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-radius:11px;border:1px solid var(--line);background:#fafcfc;text-decoration:none;color:var(--ink);font-size:13px;font-weight:600}
+.social-brand-card.linked{background:#f2faf6;border-color:#bde5d4;color:#065f46}
+.social-brand-card.linked:hover{background:#e6f7ef}
+.social-brand-card.missing{opacity:.72;background:#f8fafa;color:var(--muted)}
+.social-brand-left{display:flex;align-items:center;gap:8px;min-width:0}
 .tabs-scroll-btn{width:28px;height:28px;padding:0;border-radius:50%;background:white;color:var(--ink);border:1px solid var(--line);flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;box-shadow:var(--shadow-sm)}
 .tabs-scroll-btn:hover{background:var(--green-soft);color:var(--green);border-color:#9fd8c0}
 .dossier-overview-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-bottom:18px}
