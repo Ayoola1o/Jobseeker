@@ -394,6 +394,7 @@ table.data-table tr:last-child td{border-bottom:0}
 .inbox-ctx-actions{margin-top:auto;display:grid;gap:8px;padding-top:12px;border-top:1px solid #eef4f2}
 .inbox-ctx-actions button{width:100%;justify-content:center;font-size:12.5px;padding:9px 12px}
 .inbox-mob-back,.inbox-mob-ctx-btn,.inbox-mob-strip{display:none}
+.mob-opp-pills,.mob-lead-cards,.mob-dossier-bar,.mob-dossier-cta{display:none}
 
 /* Broadcast Page (Figma Email Broadcast + Template Cards) */
 .broadcast-grid{display:grid;grid-template-columns:1.05fr 1.2fr;gap:18px;align-items:start}
@@ -578,6 +579,64 @@ dialog .heading{margin:0 0 16px}
   .inbox-messages{max-height:54dvh}
   .mail{max-width:92%;padding:12px 13px}
   .reply-box-wrap{padding:9px 10px;gap:8px}
+
+  /* Mobile Saved Leads (Matches Mobile UI/UX Mockup Screen 1) */
+  #leads .section-title{margin-bottom:12px;gap:10px}
+  #leads .section-title h1{font-size:21px}
+  #leads .section-title p{display:none}
+  #leads .section-title .actions button{padding:7px 11px;font-size:12px}
+  #leads-kpi-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-bottom:12px}
+  #leads-kpi-grid .kpi-card{padding:10px 6px;align-items:center;text-align:center;gap:2px;border-radius:12px}
+  #leads-kpi-grid .kpi-ico{display:none}
+  #leads-kpi-grid .kpi-card strong{font-size:17px}
+  #leads-kpi-grid .kpi-card small{font-size:10.5px;line-height:1.15}
+  .folders-section{margin-bottom:10px;padding:10px 12px;border-radius:12px}
+  .folders-head span{display:none}
+  .folders-grid{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+  .folders-grid::-webkit-scrollbar{display:none}
+  .folder-chip{flex-shrink:0;white-space:nowrap;padding:6px 11px;font-size:12px}
+  .mob-opp-pills{display:flex;align-items:center;gap:7px;overflow-x:auto;scrollbar-width:none;margin:0 0 10px;padding-bottom:2px}
+  .mob-opp-pills::-webkit-scrollbar{display:none}
+  .mob-opp-pill{padding:6px 12px;border-radius:999px;font-size:12px;font-weight:650;background:white;color:var(--ink);border:1px solid var(--line);white-space:nowrap;flex-shrink:0}
+  .mob-opp-pill.active{background:var(--green-soft);color:#065f46;border-color:var(--green)}
+  #lead-filters{grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+  #lead-filters .pill-input-wrap{grid-column:1/-1}
+  #leads .table-card{background:transparent;border:0;box-shadow:none}
+  #leads .table-meta{padding:0 2px 8px;border-bottom:0;font-size:12px}
+  #leads .data-table-wrap{display:none}
+  .mob-lead-cards{display:grid;gap:11px}
+  .mob-lead-card{background:white;border:1px solid var(--line);border-radius:15px;padding:14px;display:grid;gap:10px;box-shadow:var(--shadow-sm);cursor:pointer}
+  .mob-lead-head{display:flex;align-items:center;gap:11px;min-width:0}
+  .mob-lead-meta{flex:1;min-width:0}
+  .mob-lead-meta strong{display:block;font-size:14.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mob-lead-meta small{display:block;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+  .mob-lead-pills{display:flex;flex-wrap:wrap;gap:6px}
+  .mob-lead-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding-top:2px}
+  .mob-lead-actions button{width:100%;padding:8px 10px;font-size:12.5px;border-radius:10px}
+
+  /* Mobile Business Dossier (Matches Mobile UI/UX Mockup Screen 2) */
+  #business .dossier-desktop-nav,
+  #business .dossier-header-grid{display:none}
+  #business{padding-bottom:74px}
+  .mob-dossier-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;background:white;border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin-bottom:10px;box-shadow:var(--shadow-sm)}
+  .mob-dossier-bar-left{display:flex;align-items:center;gap:9px;flex:1;min-width:0}
+  .mob-dossier-bar-title{min-width:0;flex:1}
+  .mob-dossier-bar-title strong{display:block;font-size:14.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mob-dossier-bar-title small{display:block;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mob-dossier-bar .mob-email-btn{padding:7px 13px;font-size:12.5px;border-radius:999px;flex-shrink:0}
+  .dossier-persona-bar{padding:8px 11px;margin-bottom:10px;border-radius:12px;gap:8px}
+  .dossier-persona-bar .small{display:none}
+  .dossier-tabs{display:flex;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;gap:14px;padding:0 2px;margin-bottom:12px}
+  .dossier-tabs::-webkit-scrollbar{display:none}
+  .dossier-tab{white-space:nowrap;flex-shrink:0;padding:8px 2px 10px;font-size:13px}
+  .audit-score-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
+  .audit-score-card.hero{grid-column:1/-1;text-align:center;align-items:center;padding:18px 14px;border-radius:14px}
+  .audit-score-card.hero .audit-score-num{font-size:34px}
+  .audit-score-card:not(.hero){padding:8px 5px;text-align:center;align-items:center;gap:2px;border-radius:11px}
+  .audit-score-card:not(.hero) .audit-score-num{font-size:15px}
+  .audit-score-card:not(.hero) small{font-size:10.5px;line-height:1.15}
+  .mob-dossier-cta{display:grid;grid-template-columns:1fr 1.2fr;gap:9px;position:fixed;left:0;right:0;bottom:58px;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-top:1px solid var(--line);padding:10px 12px;z-index:55;box-shadow:0 -4px 16px rgba(4,46,42,.06)}
+  .mob-dossier-cta button{width:100%;padding:10px 12px;font-size:13px;border-radius:11px}
 }
 
 /* Mobile Home (matches mobile-home.png on <= 640px) */

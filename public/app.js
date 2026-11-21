@@ -1511,6 +1511,34 @@ function renderLeads() {
     }
   }
 
+  // Render Mobile Quick Opportunity Filter Pills (Screen 1)
+  const mobOppEl = $('#leads-mob-opp-pills');
+  if (mobOppEl) {
+    const curOpp = $('#filter-opportunity')?.value || '';
+    const { persona } = getCurrentPersonaState();
+    const pillsDef = [
+      ['', 'All Leads'],
+      ['persona-match', `Best for ${persona.label}`],
+      ['bad-rank', 'Rank #11+'],
+      ['bad-performance', 'Audit <75'],
+      ['no-website', 'No Website'],
+      ['no-socials', 'No Socials']
+    ];
+    mobOppEl.replaceChildren(...pillsDef.map(([val, lbl]) => {
+      const b = create('button', lbl, 'mob-opp-pill' + (curOpp === val ? ' active' : ''));
+      b.type = 'button';
+      b.onclick = () => {
+        if (val && !requireTier(2, 'Bad Ranking & Website Performance Filters', 'Filter saved leads by Rank #11+, Audit <75, missing website, or no social presence on Silver (Starter) and above.')) {
+          return;
+        }
+        if ($('#filter-opportunity')) $('#filter-opportunity').value = val;
+        leadsPage = 1;
+        renderLeads();
+      };
+      return b;
+    }));
+  }
+
   const filtered = getFilteredLeads();
   const summary = $('#lead-summary');
   if (summary) {
@@ -1558,9 +1586,16 @@ function renderLeads() {
   const thead = create('thead');
   thead.innerHTML = '<tr><th>Business</th><th>Industry &amp; Ranking</th><th>Status</th><th>Performance &amp; Platform</th><th>Actions</th></tr>';
   const tbody = create('tbody');
+  const mobCards = create('div', '', 'mob-lead-cards');
 
   for (const lead of pageLeads) {
     const status = leadStatus(lead);
+    const { activeModules } = getCurrentPersonaState();
+    const sig = lead.signals || {};
+    const perfScore = lead.website ? getLeadPerformanceScore(lead) : null;
+    const scoreClass = perfScore !== null ? (perfScore < 60 ? 'pill warn' : perfScore < 78 ? 'pill wait' : 'pill') : '';
+
+    // Desktop table row
     const tr = create('tr', '', 'clickable-row');
     tr.onclick = () => openBusinessPage(lead);
 
@@ -1598,16 +1633,12 @@ function renderLeads() {
 
     const tdPlat = create('td');
     const platWrap = create('div', '', 'actions');
-    const { activeModules } = getCurrentPersonaState();
-    const sig = lead.signals || {};
 
     if (lead.platform && lead.platform !== 'Custom / Website') platWrap.append(create('span', lead.platform, 'pill neutral'));
     else if (!lead.website) platWrap.append(create('span', 'No Website', 'pill warn'));
     else platWrap.append(create('span', (lead.source || '').includes('bing') ? 'Bing Maps' : 'Website', 'small'));
 
     if (lead.website && (activeModules.has('web_tech') || activeModules.has('ecommerce_cro') || activeModules.has('seo_local'))) {
-      const perfScore = getLeadPerformanceScore(lead);
-      const scoreClass = perfScore < 60 ? 'pill warn' : perfScore < 78 ? 'pill wait' : 'pill';
       const labelPrefix = lead.auditReport ? 'Audit' : 'Est.';
       platWrap.append(create('span', `${labelPrefix} ${perfScore}/100`, scoreClass));
       if (activeModules.has('web_tech') && lead.auditReport?.ttfbMs > 800) {
@@ -1644,10 +1675,51 @@ function renderLeads() {
 
     tr.append(tdBiz, tdInd, tdStatus, tdPlat, tdAct);
     tbody.append(tr);
+
+    // Mobile Lead Card (Screen 1)
+    const mCard = create('article', '', 'mob-lead-card');
+    mCard.onclick = () => openBusinessPage(lead);
+    const mHead = create('div', '', 'mob-lead-head');
+    const mMeta = create('div', '', 'mob-lead-meta');
+    mMeta.append(
+      create('strong', lead.name),
+      create('small', [lead.industry, lead.city, lead.email || 'No email'].filter(Boolean).join(' · '))
+    );
+    mHead.append(makeAvatar(lead.name), mMeta);
+
+    const mPills = create('div', '', 'mob-lead-pills');
+    if (lead.searchRank) {
+      mPills.append(create('span', `Rank #${lead.searchRank}`, lead.searchRank >= 21 ? 'pill warn' : lead.searchRank >= 11 ? 'pill wait' : 'pill neutral'));
+    }
+    if (lead.website) {
+      mPills.append(create('span', `${lead.auditReport ? 'Audit' : 'Est.'} ${perfScore}/100`, scoreClass));
+    } else {
+      mPills.append(create('span', 'No Website', 'pill warn'));
+    }
+    if (lead.platform && lead.platform !== 'Custom / Website') {
+      mPills.append(create('span', lead.platform, lead.platform === 'Shopify' ? 'pill' : 'pill neutral'));
+    }
+    if (lead.auditReport?.ttfbMs > 800) {
+      mPills.append(create('span', `Slow ${lead.auditReport.ttfbMs}ms`, 'pill wait'));
+    }
+    if (lead.aiBrief) {
+      mPills.append(create('span', 'AI Pitch', 'pill'));
+    } else if (status !== 'New') {
+      mPills.append(create('span', status, statusPillClass(status)));
+    }
+
+    const mActs = create('div', '', 'mob-lead-actions');
+    mActs.onclick = e => e.stopPropagation();
+    mActs.append(
+      button('Open Dossier', () => openBusinessPage(lead), 'btn-soft'),
+      button('Email', () => compose(lead))
+    );
+    mCard.append(mHead, mPills, mActs);
+    mobCards.append(mCard);
   }
   table.append(thead, tbody);
   wrap.append(table);
-  $('#lead-list').replaceChildren(wrap);
+  $('#lead-list').replaceChildren(wrap, mobCards);
 
   renderPagination(leadsPaginationEl, leadsPage, totalPages, filtered.length, newPage => {
     leadsPage = newPage;
@@ -1693,7 +1765,24 @@ function renderBusinessPage() {
   activeBusinessId = lead.id;
 
   const status = leadStatus(lead);
-  const navBar = create('div', '', 'heading');
+  const navBar = create('div', '', 'heading dossier-desktop-nav');
+
+  // Mobile Focused Sticky Dossier Top Bar (Screen 2)
+  const mobDossierBar = create('div', '', 'mob-dossier-bar');
+  const mobBarLeft = create('div', '', 'mob-dossier-bar-left');
+  const mobDossierBack = create('button', '', 'inbox-mob-back');
+  mobDossierBack.type = 'button';
+  mobDossierBack.setAttribute('aria-label', 'Back to Saved Leads');
+  mobDossierBack.append(iconEl('chevronLeft', 18));
+  mobDossierBack.onclick = () => { location.hash = '#leads'; };
+  const mobBarTitle = create('div', '', 'mob-dossier-bar-title');
+  mobBarTitle.append(
+    create('strong', lead.name),
+    create('small', [lead.industry, lead.city].filter(Boolean).join(' · ') || lead.email || 'Saved Lead')
+  );
+  mobBarLeft.append(mobDossierBack, makeAvatar(lead.name), mobBarTitle);
+  const mobEmailBtn = button('Email', () => compose(lead), 'mob-email-btn');
+  mobDossierBar.append(mobBarLeft, mobEmailBtn);
   const queueLeft = create('div', '', 'actions');
   const backBtn = btnWithIcon('chevronLeft', 'Saved Leads', () => { location.hash = '#leads'; }, true);
   const prevBtn = button('Prev', () => { if (leadIndex > 0) { activeBusinessId = leads[leadIndex - 1].id; renderBusinessPage(); } }, true);
@@ -2617,7 +2706,25 @@ function renderBusinessPage() {
     contentWrap.append(tabBody);
   }
 
-  container.replaceChildren(navBar, headerGrid, personaBar, tabsBar, contentWrap);
+  // Mobile Docked Bottom Dual CTA Bar (Screen 2)
+  const mobDossierCta = create('div', '', 'mob-dossier-cta');
+  mobDossierCta.append(
+    button('4-Phase Pack', () => {
+      if (!lead.solutionPack || lead.solutionPack.personaId !== activePersona.id) {
+        lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
+      }
+      dossierTab = 'solution';
+      renderBusinessPage();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }, 'btn-soft'),
+    btnWithIcon('sparkles', 'Generate AI Pitch', () => {
+      dossierTab = 'ai';
+      renderBusinessPage();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }, '', 14)
+  );
+
+  container.replaceChildren(mobDossierBar, navBar, headerGrid, personaBar, tabsBar, contentWrap, mobDossierCta);
 }
 
 /* ---------------- EMAIL BROADCAST (Figma Email Broadcast) ---------------- */
