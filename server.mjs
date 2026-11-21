@@ -2717,13 +2717,17 @@ async function analyzeLeadWithAi(lead, senderSettings, userIssues = '', extraCon
   if (!apiKey) return baseline;
 
   try {
-    const { persona, activeModuleKeys } = getActivePersonaModules(senderSettings, tierLevel);
+    const { persona, activeModuleKeys, addedTools } = getActivePersonaModules(senderSettings, tierLevel);
     const activeModuleLabels = activeModuleKeys.map(k => PERSONA_TOOL_MODULES[k]?.label).filter(Boolean).join('; ');
+    const addedToolLabels = addedTools.map(k => PERSONA_TOOL_MODULES[k]?.label).filter(Boolean).join('; ');
     const excludedModuleLabels = Object.values(PERSONA_TOOL_MODULES)
       .filter(m => !activeModuleKeys.includes(m.key))
       .map(m => m.label)
       .join('; ');
     const blueprint = PERSONA_PROMPT_BLUEPRINTS[persona.id] || PERSONA_PROMPT_BLUEPRINTS.web_dev;
+    const addedToolsDirective = addedToolLabels
+      ? `\n\nADDED TOOLS ENABLED BY USER (MUST BE INCLUDED): The user explicitly toggled ON these extra Added Tool modules: ${addedToolLabels}. You MUST weave relevant verified findings from BOTH their primary persona (${persona.title}) AND these enabled Added Tools into the overview, gaps, angle, pitchBody, and followUpMessage.`
+      : '';
 
     const userIssuesNote = baseline.userIssues.length
       ? `\n\nPRIORITY — Specific issues personally spotted by the user (MUST be featured prominently):\n${baseline.userIssues.map(i => '- ' + i).join('\n')}`
@@ -2732,11 +2736,11 @@ async function analyzeLeadWithAi(lead, senderSettings, userIssues = '', extraCon
       ? `\n\nPRIORITY — Extra offer/instructions provided by the user (MUST be woven naturally into pitchBody):\n${baseline.extraContext}`
       : '';
 
-    const prompt = `${blueprint}
+    const prompt = `${blueprint}${addedToolsDirective}
 
 STRICT PERSONA & COPYWRITING RULES:
 1. Active Persona: "${persona.title}". Enabled Pitch Modules ONLY: ${activeModuleLabels}.
-${excludedModuleLabels ? `2. STRICTLY EXCLUDED (DO NOT mention or pitch these topics): ${excludedModuleLabels}.` : '2. Use the enabled modules cleanly.'}
+${excludedModuleLabels ? `2. STRICTLY EXCLUDED (DO NOT mention or pitch these topics): ${excludedModuleLabels}.` : '2. Use all enabled modules cleanly.'}
 3. Write in natural, warm, human B2B prose. NEVER include raw internal log tags like "[BUGS · Critical]" or "[SEO · Warning]". NEVER use placeholder brackets like [your name].
 4. Reference at least 1 real detail scraped from the company's actual website or listing (e.g., their exact headline, about summary, city, platform, or product) so the owner knows a human reviewed their business.
 5. Keep pitchSubject under 70 characters (natural, non-spammy). Keep pitchBody concise and punchy (180–280 words): Personalized Opener → 2–4 clean "• " bullets of verified persona-relevant issues & their revenue impact → Natural low-friction CTA → Sign-off as ${senderSettings?.senderName || 'Outreach Specialist'}.${userIssuesNote}${extraContextNote}
@@ -3176,25 +3180,35 @@ export async function handleRequest(req, res) {
       const userRecord = await findUserById(session.userId);
       const quotaStatus = getUserQuotaStatus(userRecord);
       const tierLevel = quotaStatus.level || 1;
-      const { website, lead = {}, extraContext = '' } = await readJson(req);
+      const { website, lead = {}, extraContext = '', senderSettings: reqSenderSettings = null } = await readJson(req);
       const targetUrl = String(website || lead?.website || '').trim();
       if (!targetUrl) fail(400, 'Provide a website URL to audit.');
       const ws = getWorkspace(session.userId || 'default');
+      const effectiveSettings = reqSenderSettings && typeof reqSenderSettings === 'object'
+        ? {
+            ...ws.settings,
+            persona: reqSenderSettings.persona || ws.settings.persona,
+            addedTools: Array.isArray(reqSenderSettings.addedTools) ? reqSenderSettings.addedTools : ws.settings.addedTools,
+            senderName: reqSenderSettings.senderName || ws.settings.senderName,
+            senderService: reqSenderSettings.senderService || ws.settings.senderService
+          }
+        : ws.settings;
       const enriched = await fetchWebsiteEmails(targetUrl);
       const mergedLead = { ...lead, ...enriched, name: lead?.name || enriched.brandName };
-      const outreach = generateClientOutreach(enriched.auditReport, mergedLead, ws.settings, tierLevel >= 3 ? extraContext : '', tierLevel);
-      const { primary: personaFindings } = filterAuditFindingsForPersona(enriched.auditReport.findings || [], ws.settings, tierLevel);
+      const outreach = generateClientOutreach(enriched.auditReport, mergedLead, effectiveSettings, tierLevel >= 3 ? extraContext : '', tierLevel);
+      const { primary: personaFindings } = filterAuditFindingsForPersona(enriched.auditReport.findings || [], effectiveSettings, tierLevel);
+      const { addedTools: activeAddedTools } = getActivePersonaModules(effectiveSettings, tierLevel);
       const gatedFindings = tierLevel === 1
         ? personaFindings.slice(0, 1)
         : tierLevel === 2
-          ? personaFindings.filter(f => f.category === 'bugs' || f.category === 'seo')
+          ? personaFindings.filter(f => f.category === 'bugs' || f.category === 'seo' || activeAddedTools.includes(f.module))
           : personaFindings;
       return json({
         ...enriched,
         auditReport: {
           ...enriched.auditReport,
           findings: gatedFindings,
-          allFindings: tierLevel >= 3 ? (enriched.auditReport.findings || []) : gatedFindings,
+          allFindings: tierLevel >= 2 ? (enriched.auditReport.findings || []) : gatedFindings,
           totalUnlockedFindings: gatedFindings.length,
           totalDiscoveredFindings: (enriched.auditReport.findings || []).length,
           tierLevel,
@@ -3207,7 +3221,7 @@ export async function handleRequest(req, res) {
       const userRecord = await findUserById(session.userId);
       const quotaStatus = getUserQuotaStatus(userRecord);
       const tierLevel = quotaStatus.level || 1;
-      const { lead, userIssues, extraContext } = await readJson(req);
+      const { lead, userIssues, extraContext, senderSettings: reqSenderSettings = null } = await readJson(req);
       if (!lead || typeof lead !== 'object') fail(400, 'Provide business details to analyze.');
       if (String(extraContext || '').trim() && tierLevel < 3) {
         fail(403, 'Custom AI instructions & prompt refinement require the Gold (Pro) plan or higher.');
@@ -3226,9 +3240,18 @@ export async function handleRequest(req, res) {
         } catch {}
       }
       const ws = getWorkspace(session.userId || 'default');
+      const effectiveSettings = reqSenderSettings && typeof reqSenderSettings === 'object'
+        ? {
+            ...ws.settings,
+            persona: reqSenderSettings.persona || ws.settings.persona,
+            addedTools: Array.isArray(reqSenderSettings.addedTools) ? reqSenderSettings.addedTools : ws.settings.addedTools,
+            senderName: reqSenderSettings.senderName || ws.settings.senderName,
+            senderService: reqSenderSettings.senderService || ws.settings.senderService
+          }
+        : ws.settings;
       const brief = await analyzeLeadWithAi(
         enrichedLead,
-        ws.settings,
+        effectiveSettings,
         userIssues ?? enrichedLead.userSpottedIssues ?? '',
         tierLevel >= 3 ? (extraContext ?? enrichedLead.aiExtraContext ?? '') : '',
         tierLevel

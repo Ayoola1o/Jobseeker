@@ -288,6 +288,22 @@ function getCurrentPersonaState() {
   return getActivePersonaModules(settings, getUserTierLevel());
 }
 
+function getPersonaSettingsPayload() {
+  return {
+    persona: settings.persona || 'web_dev',
+    addedTools: Array.isArray(settings.addedTools) ? settings.addedTools : [],
+    senderName: settings.senderName || '',
+    senderService: settings.senderService || ''
+  };
+}
+
+function isSolutionPackStale(pack, activePersona, activeAddedTools = []) {
+  if (!pack || pack.personaId !== activePersona?.id) return true;
+  const packTools = Array.isArray(pack.addedTools) ? [...pack.addedTools].sort().join(',') : '';
+  const curTools = Array.isArray(activeAddedTools) ? [...activeAddedTools].sort().join(',') : '';
+  return packTools !== curTools;
+}
+
 function switchActivePersona(newPersonaId, { keepAddedTools = false, silent = false } = {}) {
   const chosen = getPersonaConfig(newPersonaId);
   settings.persona = chosen.id;
@@ -1633,10 +1649,10 @@ function renderLeads() {
   const mobOppEl = $('#leads-mob-opp-pills');
   if (mobOppEl) {
     const curOpp = $('#filter-opportunity')?.value || '';
-    const { persona } = getCurrentPersonaState();
+    const { persona, addedTools } = getCurrentPersonaState();
     const pillsDef = [
       ['', 'All Leads'],
-      ['persona-match', `Best for ${persona.label}`],
+      ['persona-match', `Best for ${persona.label}${addedTools.length ? ` (+${addedTools.length})` : ''}`],
       ['bad-rank', 'Rank #11+'],
       ['bad-performance', 'Audit <75'],
       ['no-website', 'No Website'],
@@ -2280,7 +2296,7 @@ function renderBusinessPage() {
         runBtn.disabled = true;
         runBtn.textContent = 'Running multi-layer audit…';
         try {
-          const res = await api('/api/audit', { website: targetUrl, lead, extraContext: lead.aiExtraContext || '' });
+          const res = await api('/api/audit', { website: targetUrl, lead, extraContext: lead.aiExtraContext || '', senderSettings: getPersonaSettingsPayload() });
           lead.scanned = true;
           applyEnrichmentToItem(lead, res);
           persist();
@@ -2537,7 +2553,7 @@ function renderBusinessPage() {
       }
       tabBody.append(auditCard);
     } else if (dossierTab === 'solution') {
-      if (!lead.solutionPack || lead.solutionPack.personaId !== activePersona.id) {
+      if (isSolutionPackStale(lead.solutionPack, activePersona, activeAddedTools)) {
         lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
       }
       const pack = lead.solutionPack;
@@ -2906,7 +2922,7 @@ function renderBusinessPage() {
               applyEnrichmentToItem(lead, enriched);
             } catch {}
           }
-          const aiRes = await api('/api/analyze', { lead, userIssues, extraContext });
+          const aiRes = await api('/api/analyze', { lead, userIssues, extraContext, senderSettings: getPersonaSettingsPayload() });
           if (aiRes.auditReport && !lead.auditReport) lead.auditReport = aiRes.auditReport;
           lead.aiBrief = aiRes;
           persist();
@@ -2929,6 +2945,13 @@ function renderBusinessPage() {
         const srcPill = create('span', '', isGemini ? 'pill' : 'pill neutral');
         srcPill.append(iconEl('sparkles', 12), document.createTextNode(isGemini ? 'Gemini 2.5 Flash AI' : 'Smart Engine'));
         aiTitleWrap.append(srcPill);
+      }
+      if (lead.aiBrief) {
+        const briefMods = Array.isArray(lead.aiBrief.activeModuleKeys) ? [...lead.aiBrief.activeModuleKeys].sort().join(',') : '';
+        const curMods = [...activeModuleKeys].sort().join(',');
+        if (lead.aiBrief.personaId !== activePersona.id || (briefMods && briefMods !== curMods)) {
+          aiTitleWrap.append(create('span', 'Persona / Added Tools updated — click Regenerate', 'pill wait'));
+        }
       }
       aiHeader.append(aiTitleWrap, genBtn);
       aiCard.append(aiHeader, issuesBox);
@@ -3000,7 +3023,7 @@ function renderBusinessPage() {
             } catch {}
           }, 'btn-soft'),
           btnWithIcon('folder', 'Build 4-Phase Solution Pack', () => {
-            lead.solutionPack = generateLeadSolutionPack(lead, settings);
+            lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
             dossierTab = 'solution';
             persist();
           }, 'btn-soft'),
@@ -3037,7 +3060,7 @@ function renderBusinessPage() {
   const mobDossierCta = create('div', '', 'mob-dossier-cta');
   mobDossierCta.append(
     button('4-Phase Pack', () => {
-      if (!lead.solutionPack || lead.solutionPack.personaId !== activePersona.id) {
+      if (isSolutionPackStale(lead.solutionPack, activePersona, activeAddedTools)) {
         lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
       }
       dossierTab = 'solution';
@@ -3491,7 +3514,7 @@ function renderInbox() {
   } else {
     const { lead, latestEntry, messages: unifiedMsgs } = activeGroup;
     const conversation = latestEntry.conversation;
-    const { persona: activePersona } = getCurrentPersonaState();
+    const { persona: activePersona, addedTools: activeAddedTools } = getCurrentPersonaState();
     const threadHead = create('div', '', 'inbox-thread-head');
 
     const headTopRow = create('div', '', 'inbox-thread-top');
@@ -3549,7 +3572,7 @@ function renderInbox() {
       mobStripPills.append(create('span', lead.platform, 'pill neutral'));
     }
     const mobPackLink = button('4-Phase Pack →', () => {
-      if (!lead.solutionPack || lead.solutionPack.personaId !== activePersona.id) {
+      if (isSolutionPackStale(lead.solutionPack, activePersona, activeAddedTools)) {
         lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
       }
       activeBusinessId = lead.id;
@@ -3598,7 +3621,7 @@ function renderInbox() {
 
     const loadSolutionBtn = btnWithIcon('sparkles', `Insert 4-Phase Pack${getUserTierLevel() < 4 ? ' [Agency+]' : ''}`, () => {
       if (!requireTier(4, 'One-Click Inbox Solution Pack Insertion', 'Insert a complete 4-phase turnaround proposal directly into any client reply thread on Premium (Agency) and Diamond plans.')) return;
-      if (!lead.solutionPack || lead.solutionPack.personaId !== activePersona.id) {
+      if (isSolutionPackStale(lead.solutionPack, activePersona, activeAddedTools)) {
         lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
       }
       replyBox.value = lead.solutionPack.replyProposalBody;
@@ -3710,7 +3733,7 @@ function renderInbox() {
     ctxActs.append(
       button('Open Full Dossier', () => openBusinessPage(lead), true),
       button('Open 4-Phase Solution Pack', () => {
-        if (!lead.solutionPack || lead.solutionPack.personaId !== activePersona.id) {
+        if (isSolutionPackStale(lead.solutionPack, activePersona, activeAddedTools)) {
           lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
         }
         activeBusinessId = lead.id;
@@ -3720,7 +3743,7 @@ function renderInbox() {
       }, 'btn-soft'),
       button(`Download Proposal (.html)${getUserTierLevel() < 4 ? ' [Agency+]' : ''}`, () => {
         if (!requireTier(4, 'Downloadable HTML Client Solution Pack', 'Export a standalone, client-ready HTML turnaround proposal on Premium (Agency) and Diamond plans.')) return;
-        if (!lead.solutionPack || lead.solutionPack.personaId !== activePersona.id) {
+        if (isSolutionPackStale(lead.solutionPack, activePersona, activeAddedTools)) {
           lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
         }
         const htmlDoc = buildSolutionPackHtml(lead.solutionPack, lead, settings);

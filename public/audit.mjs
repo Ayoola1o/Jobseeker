@@ -1439,6 +1439,8 @@ export function generateLeadSolutionPack(lead = {}, senderSettings = {}, tierLev
     generatedAt: new Date().toISOString(),
     personaId: persona.id,
     personaLabel: activeLensLabel,
+    addedTools: [...addedTools],
+    activeModuleKeys: [...activeModules],
     businessName: name,
     industry,
     city,
