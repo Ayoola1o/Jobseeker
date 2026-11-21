@@ -2639,7 +2639,15 @@ function renderBusinessPage() {
       issuesBox.append(issuesField, extraField, quickPrompts, issuesHint);
 
       const genBtn = btnWithIcon('sparkles', lead.aiBrief ? 'Regenerate AI Analysis & Email' : 'Generate AI Lead Brief & Email', event => runAiAnalysis(event.currentTarget));
-      aiHeader.append(create('h2', 'AI Lead Intelligence & Professional Pitch'), genBtn);
+      const aiTitleWrap = create('div', '', 'actions');
+      aiTitleWrap.append(create('h2', 'AI Lead Intelligence & Professional Pitch'));
+      if (lead.aiBrief?.aiSource) {
+        const isGemini = lead.aiBrief.aiSource === 'gemini-2.5-flash';
+        const srcPill = create('span', '', isGemini ? 'pill' : 'pill neutral');
+        srcPill.append(iconEl('sparkles', 12), document.createTextNode(isGemini ? 'Gemini 2.5 Flash AI' : 'Smart Engine'));
+        aiTitleWrap.append(srcPill);
+      }
+      aiHeader.append(aiTitleWrap, genBtn);
       aiCard.append(aiHeader, issuesBox);
 
       if (lead.aiBrief) {
@@ -2718,6 +2726,22 @@ function renderBusinessPage() {
 
         pitchSec.append(pitchHead, editSubj, editBody, refineBar, pitchActions);
         aiCard.append(ovSec, gapsSec, angSec, pitchSec);
+        if (lead.aiBrief.followUpMessage) {
+          const fuSec = create('div', '', 'ai-section stack');
+          const fuHead = create('div', '', 'heading');
+          fuHead.style.margin = '0';
+          fuHead.append(
+            create('h3', '3-Day Follow-Up Nudge'),
+            btnWithIcon('copy', 'Copy Follow-Up', async () => {
+              try {
+                await navigator.clipboard.writeText(lead.aiBrief.followUpMessage);
+                report('Copied 3-day follow-up message to clipboard.');
+              } catch {}
+            }, 'btn-soft', 13)
+          );
+          fuSec.append(fuHead, create('div', lead.aiBrief.followUpMessage, 'pitch-preview'));
+          aiCard.append(fuSec);
+        }
       } else {
         aiCard.append(empty('sparkles', 'Ready to analyze ' + lead.name, 'Optionally list any issues you spotted or extra instructions above, then click "Generate AI Lead Brief & Email".'));
       }

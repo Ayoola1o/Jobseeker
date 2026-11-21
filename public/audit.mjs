@@ -151,7 +151,7 @@ export function classifyFindingModule(finding = {}) {
 }
 
 export function filterAuditFindingsForPersona(findings = [], senderSettings = {}, tierLevel = 5) {
-  const { activeModules } = getActivePersonaModules(senderSettings, tierLevel);
+  const { activeModules, hasExplicitPersona } = getActivePersonaModules(senderSettings, tierLevel);
   const tagged = (Array.isArray(findings) ? findings : []).map(f => ({
     ...f,
     module: classifyFindingModule(f)
@@ -159,7 +159,7 @@ export function filterAuditFindingsForPersona(findings = [], senderSettings = {}
   const primary = tagged.filter(f => activeModules.has(f.module));
   const secondary = tagged.filter(f => !activeModules.has(f.module));
   return {
-    primary: primary.length ? primary : tagged.slice(0, 2),
+    primary: hasExplicitPersona ? primary : (primary.length ? primary : tagged.slice(0, 2)),
     secondary,
     allTagged: tagged
   };

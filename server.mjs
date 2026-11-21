@@ -2520,12 +2520,28 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
     }
   }
 
-  // Merge multi-layer Website Audit findings filtered strictly to activeModules
+  // Merge multi-layer Website Audit findings filtered strictly to activeModules (smart deduplication, clean human bullets)
+  const normalizeGapKey = str => String(str || '')
+    .toLowerCase()
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\b(missing|seo|website|on|your|the|a|an|of|is|are|for|and|tag)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
   if (Array.isArray(auditReport?.findings)) {
     const { primary: personaFindings } = filterAuditFindingsForPersona(auditReport.findings, senderSettings, tierLevel);
     for (const f of personaFindings) {
-      const label = `[${(f.category || 'Audit').toUpperCase()} · ${f.severity}] ${f.title} — ${f.detail} (${f.businessImpact})`;
-      if (!gaps.some(existing => existing.toLowerCase().includes(f.title.toLowerCase().slice(0, 22)))) {
+      const fKey = normalizeGapKey(f.title);
+      const isDup = gaps.some(existing => {
+        const eKey = normalizeGapKey(existing);
+        return (fKey && eKey.includes(fKey.slice(0, 18))) ||
+          (/meta description/i.test(f.title) && /meta description/i.test(existing)) ||
+          (/https/i.test(f.title) && /https/i.test(existing));
+      });
+      if (!isDup) {
+        const cleanImpact = String(f.businessImpact || '').trim();
+        const label = cleanImpact ? `${f.title} — ${cleanImpact}` : f.title;
         gaps.push(label);
       }
     }
@@ -2557,12 +2573,34 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
     ...gaps.filter(g => !spottedList.some(u => g.toLowerCase().includes(u.toLowerCase())))
   ];
 
+  const foundationPhrases = {
+    web_dev: 'website speed, security, and mobile experience',
+    digital_marketer: 'ad tracking, retargeting, and lead-capture funnel',
+    seo_specialist: 'local search visibility and Google/Bing rankings',
+    social_media: 'social media presence and brand authority',
+    shopify_cro: 'online store conversion rate and checkout retention',
+    full_agency: 'website experience and automated lead-capture funnel'
+  };
+  const personaRoleIntro = {
+    web_dev: 'a Web Developer & UI/UX Designer',
+    digital_marketer: 'a Digital Marketer & Funnel Specialist',
+    seo_specialist: 'an SEO & Local Ranking Specialist',
+    social_media: 'a Social Media & Brand Growth Manager',
+    shopify_cro: 'a Shopify & E-Commerce CRO Specialist',
+    full_agency: 'a Full-Service Digital Growth Agency'
+  };
+  const cleanIndustryGroup = /\b(business|store|shop|clinic|agency|company|studio|salon|restaurant|hotel|firm)s?$/i.test(industry)
+    ? industry.toLowerCase()
+    : `${industry.toLowerCase()} brands`;
+  const foundationPhrase = foundationPhrases[persona.id] || 'digital presence';
+  const roleIntro = personaRoleIntro[persona.id] || `a ${persona.title}`;
+
   const angle = `Pitch from the [${activeLensLabel}] lens (${combinedGaps.length} focused findings), avoiding unrelated noise and offering a tailored action plan using ${senderService}.`;
 
   const specificHook = !lead.website
-    ? `I found ${name} while researching ${industry.toLowerCase()} businesses in ${city}${activeModules.has('seo_local') && lead.searchRank ? ` (currently listed at Rank #${lead.searchRank} on Bing Maps)` : ''}, and noticed you don’t currently have an official website or digital conversion hub linked for customers searching online`
+    ? `I came across ${name} while researching ${cleanIndustryGroup} in ${city}${activeModules.has('seo_local') && lead.searchRank ? ` (currently listed at Rank #${lead.searchRank} on Bing Maps)` : ''}, and noticed you don’t currently have an official website linked for customers searching online`
     : hasExplicitPersona
-      ? `As a ${persona.title.toLowerCase()}, I just completed a focused ${persona.label.toLowerCase()} review of ${name} (${lead.website}) in ${city}`
+      ? `As ${roleIntro}, I just reviewed ${name} (${lead.website}${lead.headings?.[0] ? ` — “${lead.headings[0].slice(0, 60)}”` : ''}) in ${city}`
       : lead.headings?.length
         ? `I just completed a full 360° online presence & website review of ${name} (${lead.website} — “${lead.headings[0]}”) in ${city}`
         : `I just completed a full 360° online presence & website review of ${name} (${lead.website}) in ${city}`;
@@ -2586,43 +2624,57 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
       : null
   ].filter(Boolean).join('\n');
 
-  const bulletLines = combinedGaps.map(item => `• ${item}`).join('\n');
+  const bulletLines = combinedGaps.map(item => `• ${item.replace(/^\[Spotted Issue\]\s*/i, '')}`).join('\n');
   const extraParagraph = cleanExtra
     ? `${/[.!?]$/.test(cleanExtra) ? cleanExtra : cleanExtra + '.'}\n\n`
     : '';
 
   const pitchSubject = (hasExplicitPersona
-    ? `${persona.label} audit & growth ideas for ${name} in ${city}`
+    ? `Quick idea for ${name}’s ${foundationPhrase.split(',')[0]} in ${city}`
     : `360° online presence, social & website audit for ${name} in ${city}`
   ).slice(0, 88);
 
   const pitchBody =
     `Hi ${name} team,\n\n` +
     `${specificHook}.\n\n` +
-    `I’m ${senderName}, and I help ${industry.toLowerCase()} businesses grow through ${senderService}.\n\n` +
-    `Here is the focused snapshot of what I found (${activeLensLabel}):\n` +
+    `I’m ${senderName}, and I help ${cleanIndustryGroup} grow through ${senderService}.\n\n` +
+    `Here is a quick snapshot of what stood out (${activeLensLabel}):\n` +
     `${snapshotLines}\n\n` +
-    `Based on that review, here are the specific ${persona.label.toLowerCase()} issues and missed opportunities currently holding back your conversions and growth:\n\n` +
+    `A few specific issues are currently costing ${name} qualified inquiries and sales:\n\n` +
     `${bulletLines}\n\n` +
-    `Fixing these targeted gaps ensures that when customers in ${city} interact with ${name}, your ${persona.label.toLowerCase()} foundation converts them smoothly into paying clients.\n\n` +
+    `Fixing these targeted gaps ensures that when customers in ${city} find ${name}, your ${foundationPhrase} converts them smoothly into paying clients.\n\n` +
     extraParagraph +
     `I’ve already mapped out a practical step-by-step fix list for ${name}. Would you be open to me sending over a quick 2-minute walkthrough, or hopping on a brief 10-minute chat this week?\n\n` +
     `Best regards,\n${senderName}`;
+
+  const followUpMessage =
+    `Hi ${name} team — just floating this back to the top of your inbox in case it got buried. Happy to send over the 2-minute breakdown on improving ${name}’s ${foundationPhrase} whenever you have a moment.\n\nBest,\n${senderName}`;
 
   return {
     personaId: persona.id,
     personaLabel: activeLensLabel,
     activeModuleKeys: [...activeModules],
+    aiSource: 'smart-engine',
     overview: overviewParts.join(' '),
     gaps: combinedGaps,
     angle,
     pitchSubject,
     pitchBody,
+    followUpMessage,
     userIssues: spottedList,
     extraContext: cleanExtra,
     generatedAt: new Date().toISOString()
   };
 }
+
+const PERSONA_PROMPT_BLUEPRINTS = {
+  web_dev: 'Write like a senior Web Developer & UI/UX Designer. Focus strictly on website design quality, mobile responsiveness, viewport/layout bugs, broken links/forms, server speed (TTFB), and HTTPS/security hygiene.',
+  digital_marketer: 'Write like a senior Performance Marketer & Funnel Strategist. Focus strictly on missing ad tracking/retargeting pixels (Meta, TikTok, GA4), missing instant booking/lead capture forms, missing Live Chat/WhatsApp widgets, and converting traffic into booked clients.',
+  seo_specialist: 'Write like a senior Local SEO & Search Growth Strategist. Focus strictly on Bing/Google search rank, Page 1 competitor clicks, missing title/meta description/H1/Schema/sitemap, and local map rating/review authority.',
+  social_media: 'Write like a senior Social Media & Brand Growth Director. Focus strictly on missing or unlinked Instagram, TikTok, Facebook, LinkedIn, and YouTube profiles, Open Graph social preview cards, brand trust, and turning social viewers into DM inquiries.',
+  shopify_cro: 'Write like a senior Shopify & E-Commerce CRO Specialist. Focus strictly on their store theme, product catalog conversion, missing Judge.me/Loox/Yotpo review proof, and Klaviyo/Omnisend abandoned-cart recovery flows.',
+  full_agency: 'Write like a senior Digital Growth Agency founder. Focus on connecting a high-converting website with an automated lead capture and tracking funnel.'
+};
 
 async function analyzeLeadWithAi(lead, senderSettings, userIssues = '', extraContext = '', tierLevel = 5) {
   const baseline = buildLeadIntelligence(lead, senderSettings, userIssues, extraContext, tierLevel);
@@ -2636,67 +2688,95 @@ async function analyzeLeadWithAi(lead, senderSettings, userIssues = '', extraCon
       .filter(m => !activeModuleKeys.includes(m.key))
       .map(m => m.label)
       .join('; ');
+    const blueprint = PERSONA_PROMPT_BLUEPRINTS[persona.id] || PERSONA_PROMPT_BLUEPRINTS.web_dev;
 
     const userIssuesNote = baseline.userIssues.length
-      ? `\n\nIMPORTANT — Specific issues personally spotted by the user (MUST be highlighted prominently in both "gaps" and the "pitchBody" email):\n${baseline.userIssues.map(i => '- ' + i).join('\n')}`
+      ? `\n\nPRIORITY — Specific issues personally spotted by the user (MUST be featured prominently):\n${baseline.userIssues.map(i => '- ' + i).join('\n')}`
       : '';
     const extraContextNote = baseline.extraContext
-      ? `\n\nIMPORTANT — Additional information, offer, or instructions provided by the user (MUST be woven naturally into the regenerated "pitchBody" email):\n${baseline.extraContext}`
+      ? `\n\nPRIORITY — Extra offer/instructions provided by the user (MUST be woven naturally into pitchBody):\n${baseline.extraContext}`
       : '';
 
-    const prompt = `You are a senior ${persona.title} pitching a B2B prospect.
-CRITICAL PERSONA FILTERING RULE:
-- Your active Persona is: "${persona.title}" (${persona.tagline}).
-- Enabled pitch modules ONLY: ${activeModuleLabels}.
-${excludedModuleLabels ? `- DO NOT mention or pitch these disabled/unrelated modules: ${excludedModuleLabels}. Stick strictly to the enabled modules!` : ''}
+    const prompt = `${blueprint}
 
-Return a JSON object with keys:
-- "overview" (string: 3-4 sentence summary focused strictly on the enabled modules for ${persona.title})
-- "gaps" (array of specific, actionable issues found strictly within the enabled modules)
-- "angle" (string: recommended outreach strategy for a ${persona.title})
-- "pitchSubject" (string under 85 chars, compelling & personalized for a ${persona.title})
-- "pitchBody" (string: a thorough, high-converting cold outreach email of 220-350 words with NO unreplaced brackets. Structure it with: (1) a personalized opener as a ${persona.title}, (2) a focused Snapshot bulleted block, (3) a bulleted list using "• " of the persona-relevant issues found, (4) how fixing these brings more clients/revenue plus any extra user offer, and (5) a friendly CTA + sign-off using the sender name).${userIssuesNote}${extraContextNote}
+STRICT PERSONA & COPYWRITING RULES:
+1. Active Persona: "${persona.title}". Enabled Pitch Modules ONLY: ${activeModuleLabels}.
+${excludedModuleLabels ? `2. STRICTLY EXCLUDED (DO NOT mention or pitch these topics): ${excludedModuleLabels}.` : '2. Use the enabled modules cleanly.'}
+3. Write in natural, warm, human B2B prose. NEVER include raw internal log tags like "[BUGS · Critical]" or "[SEO · Warning]". NEVER use placeholder brackets like [your name].
+4. Reference at least 1 real detail scraped from the company's actual website or listing (e.g., their exact headline, about summary, city, platform, or product) so the owner knows a human reviewed their business.
+5. Keep pitchSubject under 70 characters (natural, non-spammy). Keep pitchBody concise and punchy (180–280 words): Personalized Opener → 2–4 clean "• " bullets of verified persona-relevant issues & their revenue impact → Natural low-friction CTA → Sign-off as ${senderSettings?.senderName || 'Outreach Specialist'}.${userIssuesNote}${extraContextNote}
 
-Persona-Filtered Gaps & Findings (ONLY pitch these):
+Verified Persona-Filtered Findings (use ONLY these):
 ${JSON.stringify(baseline.gaps, null, 2)}
 
-Business Context:
+Scraped Company Intelligence:
 ${JSON.stringify({
       name: lead.name,
       industry: lead.industry,
       city: lead.city,
       address: lead.address,
       website: lead.website,
+      siteTitle: lead.siteTitle,
+      headings: (lead.headings || []).slice(0, 3),
+      aboutSummary: (lead.aboutSummary || '').slice(0, 350),
       platform: lead.platform,
       techStack: lead.techStack,
-      shopifyMeta: lead.shopifyMeta
+      shopifyMeta: lead.shopifyMeta,
+      shopifyProducts: (lead.shopifyProducts || []).slice(0, 3),
+      searchRank: lead.searchRank,
+      rating: lead.rating,
+      auditScore: lead.auditReport?.overallScore ?? null,
+      ttfbMs: lead.auditReport?.ttfbMs ?? null
     })}
 
-Sender profile:
+Sender Profile:
 Name: ${senderSettings?.senderName || 'Outreach Specialist'}
 Persona: ${persona.title}
-Service offered: ${senderSettings?.senderService || persona.defaultService}`;
+Service Offered: ${senderSettings?.senderService || persona.defaultService}`;
+
+    const responseSchema = {
+      type: 'OBJECT',
+      properties: {
+        overview: { type: 'STRING' },
+        gaps: { type: 'ARRAY', items: { type: 'STRING' } },
+        angle: { type: 'STRING' },
+        pitchSubject: { type: 'STRING' },
+        pitchBody: { type: 'STRING' },
+        followUpMessage: { type: 'STRING' }
+      },
+      required: ['overview', 'gaps', 'angle', 'pitchSubject', 'pitchBody', 'followUpMessage']
+    };
 
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: 'application/json' }
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema,
+          temperature: 0.65
+        }
       }),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(18000)
     });
     if (!response.ok) return baseline;
     const result = await response.json();
     const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const parsed = JSON.parse(rawText);
     return {
+      personaId: baseline.personaId,
+      personaLabel: baseline.personaLabel,
+      activeModuleKeys: baseline.activeModuleKeys,
+      aiSource: 'gemini-2.5-flash',
       overview: String(parsed.overview || baseline.overview),
       gaps: Array.isArray(parsed.gaps) && parsed.gaps.length ? parsed.gaps.map(String) : baseline.gaps,
       angle: String(parsed.angle || baseline.angle),
       pitchSubject: String(parsed.pitchSubject || baseline.pitchSubject).slice(0, 150),
       pitchBody: String(parsed.pitchBody || baseline.pitchBody),
+      followUpMessage: String(parsed.followUpMessage || baseline.followUpMessage),
       userIssues: baseline.userIssues,
+      extraContext: baseline.extraContext,
       generatedAt: new Date().toISOString()
     };
   } catch {
