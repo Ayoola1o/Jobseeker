@@ -384,6 +384,7 @@ table.data-table tr:last-child td{border-bottom:0}
 .inbox-ctx-list{margin:0;padding-left:16px;display:grid;gap:5px;font-size:12.5px;color:#334e53;line-height:1.4}
 .inbox-ctx-actions{margin-top:auto;display:grid;gap:8px;padding-top:12px;border-top:1px solid #eef4f2}
 .inbox-ctx-actions button{width:100%;justify-content:center;font-size:12.5px;padding:9px 12px}
+.inbox-mob-back,.inbox-mob-ctx-btn,.inbox-mob-strip{display:none}
 
 /* Broadcast Page (Figma Email Broadcast + Template Cards) */
 .broadcast-grid{display:grid;grid-template-columns:1.05fr 1.2fr;gap:18px;align-items:start}
@@ -539,6 +540,30 @@ dialog .heading{margin:0 0 16px}
   .mobile-bottom-nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;text-decoration:none;color:var(--muted);font-size:11px;font-weight:600;padding:4px 2px}
   .mobile-bottom-nav a .mob-ico{display:grid;place-items:center}
   .mobile-bottom-nav a[aria-current=page]{color:var(--green)}
+
+  /* 2-Screen Mobile Outreach Inbox Flow */
+  .inbox-shell{grid-template-columns:1fr;min-height:calc(100dvh - 210px);border-radius:16px}
+  .inbox-shell.mob-view-list .inbox-thread-pane,
+  .inbox-shell.mob-view-list .inbox-context-pane{display:none}
+  .inbox-shell.mob-view-thread .inbox-list-pane{display:none}
+  .inbox-shell.mob-view-thread .inbox-context-pane{display:none}
+  .inbox-shell.mob-view-thread.mob-ctx-open .inbox-context-pane{display:flex;border-left:0;border-top:1px solid var(--line)}
+  .inbox-list-pane{border-right:0;border-bottom:0}
+  .inbox-items{max-height:none}
+  .inbox-thread-pane{padding:14px 12px;gap:12px}
+  .inbox-thread-head{gap:8px;padding-bottom:10px;align-items:center}
+  .inbox-thread-head h2{font-size:15px}
+  .inbox-mob-back{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;border-radius:10px;background:#f3f7f6;border:1px solid var(--line);color:var(--ink);flex-shrink:0}
+  .inbox-mob-ctx-btn{display:inline-flex;align-items:center;gap:4px;padding:6px 11px;border-radius:999px;font-size:12px;font-weight:700;background:var(--green-soft);color:#065f46;border:1px solid #bde5d4;flex-shrink:0}
+  .inbox-mob-strip{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;background:#f7f5ef;border:1px solid #ebe6d9;border-radius:12px;padding:9px 12px}
+  .inbox-mob-strip-pills{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .inbox-mob-strip .link-btn{font-size:12px;font-weight:700;color:var(--green);padding:0}
+  .inbox-messages{max-height:52dvh}
+  .mail{max-width:92%;padding:12px 13px}
+  .reply-box-wrap{padding:10px 11px;gap:8px}
+  .reply-composer-bar{gap:6px}
+  .reply-composer-left{overflow-x:auto;flex-wrap:nowrap;max-width:100%;padding-bottom:2px}
+  .reply-composer-left button{white-space:nowrap;flex-shrink:0}
 }
 
 /* Mobile Home (matches mobile-home.png on <= 640px) */

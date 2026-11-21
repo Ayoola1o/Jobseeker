@@ -81,6 +81,8 @@ let settingsTab = 'integrations';
 let selectedInboxKey = null;
 let inboxFilter = 'all';
 let inboxSearchQuery = '';
+let mobileInboxView = 'list';
+let mobileContextOpen = false;
 let selectedBroadcastTplId = 'intro';
 let broadcastAudience = 'verified';
 let broadcastSending = false;
@@ -2956,7 +2958,8 @@ function renderInbox() {
     selectedInboxKey = activeGroup.key;
   }
 
-  const shell = create('div', '', 'surface inbox-shell');
+  const shellClass = `surface inbox-shell ${mobileInboxView === 'thread' && activeGroup ? 'mob-view-thread' : 'mob-view-list'}${mobileContextOpen ? ' mob-ctx-open' : ''}`;
+  const shell = create('div', '', shellClass);
 
   // 1. LEFT PANE: Filterable Conversation List (1 unified row per email address)
   const listPane = create('div', '', 'inbox-list-pane');
@@ -3019,6 +3022,8 @@ function renderInbox() {
       rowEl.append(makeAvatar(lead.name), body);
       rowEl.onclick = async () => {
         selectedInboxKey = group.key;
+        mobileInboxView = 'thread';
+        mobileContextOpen = false;
         let clearedUnread = false;
         for (const e of group.entries) {
           if (e.conversation.unread) { e.conversation.unread = false; clearedUnread = true; }
@@ -3047,14 +3052,35 @@ function renderInbox() {
   } else {
     const { lead, latestEntry, messages: unifiedMsgs } = activeGroup;
     const conversation = latestEntry.conversation;
+    const { persona: activePersona } = getCurrentPersonaState();
     const threadHead = create('div', '', 'inbox-thread-head');
+
+    const headLeftWrap = create('div', '', 'actions');
+    headLeftWrap.style.cssText = 'flex:1;min-width:0;align-items:center;flex-wrap:nowrap;gap:10px';
+    const mobBackBtn = create('button', '', 'inbox-mob-back');
+    mobBackBtn.type = 'button';
+    mobBackBtn.setAttribute('aria-label', 'Back to conversations');
+    mobBackBtn.append(iconEl('chevronLeft', 18));
+    mobBackBtn.onclick = () => {
+      mobileInboxView = 'list';
+      mobileContextOpen = false;
+      renderInbox();
+    };
     const headTitle = create('div');
     headTitle.style.minWidth = '0';
     headTitle.append(
       create('h2', conversation.subject),
       create('div', `${lead.name} · ${activeGroup.email} · ${unifiedMsgs.length} message${unifiedMsgs.length === 1 ? '' : 's'}`, 'small')
     );
+    headLeftWrap.append(mobBackBtn, headTitle);
+
     const headRight = create('div', '', 'actions');
+    const mobCtxBtn = create('button', mobileContextOpen ? 'Context ▲' : 'Context ▾', 'inbox-mob-ctx-btn');
+    mobCtxBtn.type = 'button';
+    mobCtxBtn.onclick = () => {
+      mobileContextOpen = !mobileContextOpen;
+      renderInbox();
+    };
     const dueInput = create('input');
     dueInput.type = 'date';
     dueInput.value = lead.due || '';
@@ -3066,8 +3092,34 @@ function renderInbox() {
       persist();
       report(lead.due ? `Follow-up scheduled for ${lead.name} on ${lead.due}.` : `Cleared follow-up reminder for ${lead.name}.`);
     };
-    headRight.append(dueInput, classify(lead, conversation));
-    threadHead.append(headTitle, headRight);
+    headRight.append(mobCtxBtn, dueInput, classify(lead, conversation));
+    threadHead.append(headLeftWrap, headRight);
+
+    // Compact Mobile Diagnostic Strip (visible on <= 860px right below thread header)
+    const mobStrip = create('div', '', 'inbox-mob-strip');
+    const mobStripPills = create('div', '', 'inbox-mob-strip-pills');
+    if (lead.website) {
+      const perfScore = getLeadPerformanceScore(lead);
+      mobStripPills.append(create('span', `Audit ${perfScore}/100`, perfScore < 60 ? 'pill warn' : perfScore < 78 ? 'pill wait' : 'pill'));
+    } else {
+      mobStripPills.append(create('span', 'No Website', 'pill warn'));
+    }
+    if (lead.searchRank) {
+      mobStripPills.append(create('span', `Rank #${lead.searchRank}`, lead.searchRank >= 21 ? 'pill warn' : lead.searchRank >= 11 ? 'pill wait' : 'pill neutral'));
+    }
+    if (lead.platform && lead.platform !== 'Custom / Website') {
+      mobStripPills.append(create('span', lead.platform, 'pill neutral'));
+    }
+    const mobPackLink = button('4-Phase Pack →', () => {
+      if (!lead.solutionPack || lead.solutionPack.personaId !== activePersona.id) {
+        lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
+      }
+      activeBusinessId = lead.id;
+      dossierTab = 'solution';
+      location.hash = '#business';
+      renderBusinessPage();
+    }, 'link-btn');
+    mobStrip.append(mobStripPills, mobPackLink);
 
     const msgsWrap = create('div', '', 'inbox-messages');
     if (unifiedMsgs.length) {
@@ -3168,11 +3220,10 @@ function renderInbox() {
       }
     };
 
-    threadPane.append(threadHead, msgsWrap, replyForm);
+    threadPane.append(threadHead, mobStrip, msgsWrap, replyForm);
     requestAnimationFrame(() => { msgsWrap.scrollTop = msgsWrap.scrollHeight; });
 
     // 3. RIGHT PANE: Lead Context & Quick Proposal Actions Drawer
-    const { persona: activePersona } = getCurrentPersonaState();
     contextPane.append(create('h3', 'Lead Context'));
 
     const ctxBiz = create('div', '', 'inbox-ctx-biz');
