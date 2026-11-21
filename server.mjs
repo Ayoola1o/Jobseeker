@@ -140,6 +140,7 @@ function createEmptyWorkspace(name = '', service = '') {
     settings: {
       senderName: name,
       senderService: service,
+      avatarUrl: '',
       persona: 'web_dev',
       addedTools: [],
       defaultFollowUpDays: 4,
@@ -612,6 +613,7 @@ async function loadFromSupabase(userId = 'default') {
         ws.settings = {
           senderName: String(row.settings.senderName || ''),
           senderService: String(row.settings.senderService || ''),
+          avatarUrl: String(row.settings.avatarUrl || '').slice(0, 180000),
           persona: getPersonaConfig(row.settings.persona || 'web_dev').id,
           addedTools: Array.isArray(row.settings.addedTools)
             ? row.settings.addedTools.map(String).filter(k => Object.hasOwn(PERSONA_TOOL_MODULES, k))
@@ -3087,9 +3089,14 @@ export async function handleRequest(req, res) {
         const quotaStatus = getUserQuotaStatus(userRecord);
         const tierLevel = quotaStatus.level || 1;
         const { persona, addedTools } = getActivePersonaModules(payload.settings, tierLevel);
+        const rawAvatar = String(payload.settings.avatarUrl || '').trim();
+        const safeAvatar = (rawAvatar.startsWith('data:image/') || /^https?:\/\//i.test(rawAvatar)) && rawAvatar.length <= 180000
+          ? rawAvatar
+          : '';
         ws.settings = {
           senderName: String(payload.settings.senderName || '').slice(0, 120),
           senderService: String(payload.settings.senderService || '').slice(0, 300),
+          avatarUrl: safeAvatar,
           persona: persona.id,
           addedTools,
           savedSearches: normalizeSavedSearches(payload.settings.savedSearches),

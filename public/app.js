@@ -45,6 +45,7 @@ let leads = [];
 let settings = {
   senderName: '',
   senderService: '',
+  avatarUrl: '',
   persona: 'web_dev',
   addedTools: [],
   defaultFollowUpDays: 4,
@@ -672,6 +673,69 @@ function statusPillClass(status) {
   return 'pill';
 }
 
+async function resizeAvatarImageFile(file) {
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Could not read image file.'));
+    reader.readAsDataURL(file);
+  });
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = () => reject(new Error('Invalid image file.'));
+    i.src = dataUrl;
+  });
+  // Center-crop to a crisp 256x256 square JPEG so it syncs fast to Supabase & localStorage
+  const size = 256;
+  const side = Math.min(img.width, img.height);
+  const sx = Math.floor((img.width - side) / 2);
+  const sy = Math.floor((img.height - side) / 2);
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+  ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+  return canvas.toDataURL('image/jpeg', 0.85);
+}
+
+function triggerProfilePhotoUpload() {
+  const input = create('input');
+  input.type = 'file';
+  input.accept = 'image/png,image/jpeg,image/webp,image/gif';
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      report('Please choose a valid image file (JPG, PNG, or WebP).', true);
+      return;
+    }
+    try {
+      const croppedUrl = await resizeAvatarImageFile(file);
+      settings.avatarUrl = croppedUrl;
+      persist();
+      report('Profile picture updated and synced to your workspace.');
+    } catch (err) {
+      report(err.message || 'Could not process profile picture.', true);
+    }
+  };
+  input.click();
+}
+
+function renderUserAvatarVisual(containerEl, fallbackText) {
+  if (settings.avatarUrl) {
+    const img = create('img');
+    img.src = settings.avatarUrl;
+    img.alt = currentUser?.name || 'Profile picture';
+    img.onerror = () => { containerEl.textContent = fallbackText; };
+    containerEl.replaceChildren(img);
+  } else {
+    containerEl.textContent = fallbackText;
+  }
+}
+
 function updateHeaderBadges() {
   const navCount = $('#nav-leads-count');
   if (navCount) {
@@ -696,7 +760,18 @@ function updateHeaderBadges() {
 
   const avatarBtn = $('#header-avatar-btn');
   if (avatarBtn && currentUser) {
-    avatarBtn.textContent = getInitials(currentUser.name || currentUser.email);
+    renderUserAvatarVisual(avatarBtn, getInitials(currentUser.name || currentUser.email));
+  }
+  const sidebarUser = $('#sidebar-user');
+  if (sidebarUser && currentUser) {
+    if (settings.avatarUrl) {
+      const img = create('img', '', 'sidebar-user-avatar');
+      img.src = settings.avatarUrl;
+      img.alt = currentUser.name || 'User';
+      sidebarUser.replaceChildren(img, document.createTextNode(currentUser.name || currentUser.email));
+    } else {
+      sidebarUser.replaceChildren(create('i'), document.createTextNode(' ' + (currentUser.name || currentUser.email)));
+    }
   }
   const activeTier = getActiveTier();
   const tierLabel = activeTier.displayLabel;
@@ -3768,10 +3843,25 @@ function renderProfile() {
   const minsLeft = Math.max(1, Math.round((nextMidnightUtc - Date.now()) / 60000));
   const resetCountdown = `${Math.floor(minsLeft / 60)}h ${minsLeft % 60}m left`;
 
-  // 1. Modern Emerald Hero Banner
+  // 1. Modern Emerald Hero Banner (with Editable Profile Picture Upload)
   const hero = create('section', '', 'profile-hero');
   const heroLeft = create('div', '', 'profile-hero-left');
-  const avatar = create('div', getInitials(currentUser?.name || currentUser?.email || 'U'), 'profile-avatar-lg');
+  const avatarBtn = create('button', '', 'profile-avatar-btn');
+  avatarBtn.type = 'button';
+  avatarBtn.title = 'Click to upload or change your profile picture';
+  avatarBtn.setAttribute('aria-label', 'Upload profile picture');
+  if (settings.avatarUrl) {
+    const img = create('img');
+    img.src = settings.avatarUrl;
+    img.alt = currentUser?.name || 'Profile photo';
+    avatarBtn.append(img);
+  } else {
+    avatarBtn.append(document.createTextNode(getInitials(currentUser?.name || currentUser?.email || 'U')));
+  }
+  const camBadge = create('span', '', 'profile-avatar-cam');
+  camBadge.append(iconEl('camera', 11), document.createTextNode('Edit'));
+  avatarBtn.append(camBadge);
+  avatarBtn.onclick = triggerProfilePhotoUpload;
   const heroText = create('div');
   const heroPills = create('div', '', 'profile-hero-pills');
   const tierGlass = create('span', '', 'hero-glass-pill emerald');
@@ -3791,10 +3881,16 @@ function renderProfile() {
     create('p', currentUser?.email || 'Personal Workspace', 'profile-hero-email'),
     heroPills
   );
-  heroLeft.append(avatar, heroText);
+  heroLeft.append(avatarBtn, heroText);
 
   const heroActs = create('div', '', 'actions');
   heroActs.append(
+    btnWithIcon('camera', settings.avatarUrl ? 'Change Photo' : 'Upload Photo', triggerProfilePhotoUpload, 'hero-btn-ghost'),
+    ...(settings.avatarUrl ? [button('Remove Photo', () => {
+      settings.avatarUrl = '';
+      persist();
+      report('Removed profile picture.');
+    }, 'hero-btn-ghost')] : []),
     btnWithIcon('settings', 'Edit Profile', () => { settingsTab = 'outreach'; location.hash = '#settings'; }, 'hero-btn-ghost'),
     btnWithIcon('search', 'Find Businesses', () => { location.hash = '#discover'; })
   );
@@ -4217,7 +4313,22 @@ function renderSettings() {
     sName.lastChild.onchange = autoSaveSettings;
     sService.lastChild.onchange = autoSaveSettings;
 
-    idCard.append(fieldsGrid, sigBox);
+    idCard.append(
+      actionRow(
+        'Profile Picture',
+        settings.avatarUrl ? 'Custom profile photo is active across your workspace.' : 'Upload a headshot or brand logo for your Jobhunta profile.',
+        btnWithIcon('camera', settings.avatarUrl ? 'Change Photo' : 'Upload Photo', triggerProfilePhotoUpload, 'btn-soft', 14),
+        ...(settings.avatarUrl ? [button('Remove', () => {
+          settings.avatarUrl = '';
+          autoSaveSettings();
+          renderSettings();
+          updateHeaderBadges();
+          report('Removed profile picture.');
+        }, 'danger')] : [])
+      ),
+      fieldsGrid,
+      sigBox
+    );
 
     // 2. Outreach Automation & Follow-up Cadence
     const autoCard = create('article', '', 'surface card-pad');
