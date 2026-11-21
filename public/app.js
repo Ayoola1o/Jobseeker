@@ -373,7 +373,7 @@ function buildPersonaAndAddedToolsCard(onChanged) {
   const tCopy = create('div');
   tCopy.append(
     create('strong', `Added Tools for ${persona.title} (Optional Checkboxes — Off by Default)`),
-    create('p', 'Check extra modules only if you want Jobhunta to include them as added tools in your audits, AI pitches, and solution packs.', 'small')
+    create('p', 'Check extra modules only if you want Job Hunta to include them as added tools in your audits, AI pitches, and solution packs.', 'small')
   );
   let allowanceText = '';
   if (tierLevel === 1) allowanceText = 'Basic Plan: 0 Added Tools (Upgrade to Silver for +1, Gold for +2)';
@@ -1190,7 +1190,7 @@ function renderDashboard() {
   const titleWrap = create('div');
   titleWrap.append(
     create('h1', `Welcome back, ${firstName}!`),
-    create('p', "Here's what's happening with your Jobhunta outreach workspace today.")
+    create('p', "Here's what's happening with your Job Hunta outreach workspace today.")
   );
   const rightActions = create('div', '', 'actions');
   const tierPill = create('span', '', 'pill');
@@ -3380,8 +3380,8 @@ function renderInbox() {
   topActions.append(
     btnWithIcon('mail', 'Send Test Email', () => composeDirectEmail({
       defaultTo: account.mailbox || currentUser?.email || '',
-      defaultSubject: 'Test email from Jobhunta',
-      defaultBody: `Hi ${currentUser?.name || 'there'},\n\nThis is a test email sent from your Jobhunta outreach workspace to verify that Gmail sending and attachments are working properly.\n\nBest regards,\n${settings.senderName || currentUser?.name || 'Jobhunta'}`
+      defaultSubject: 'Test email from Job Hunta',
+      defaultBody: `Hi ${currentUser?.name || 'there'},\n\nThis is a test email sent from your Job Hunta outreach workspace to verify that Gmail sending and attachments are working properly.\n\nBest regards,\n${settings.senderName || currentUser?.name || 'Job Hunta'}`
     }), 'btn-soft'),
     btnWithIcon('plus', 'Compose Email', () => composeDirectEmail()),
     btnWithIcon('refresh', refreshing ? 'Refreshing…' : 'Refresh Inbox', () => refresh(true), true)
@@ -3941,7 +3941,7 @@ function renderProfile() {
   };
   heroPills.append(tierGlass, memberGlass, idGlass);
   heroText.append(
-    create('h1', currentUser?.name || settings.senderName || 'Jobhunta User'),
+    create('h1', currentUser?.name || settings.senderName || 'Job Hunta User'),
     create('p', currentUser?.email || 'Personal Workspace', 'profile-hero-email'),
     heroPills
   );
@@ -4004,7 +4004,7 @@ function renderProfile() {
   };
 
   const personalInfoCard = makeInfoCard(
-    'user', '', 'Personal & Account Info', 'Your Jobhunta identity & workspace details',
+    'user', '', 'Personal & Account Info', 'Your Job Hunta identity & workspace details',
     [
       ['Full Name', currentUser?.name || settings.senderName || 'Not set'],
       ['Email Address', currentUser?.email || '—'],
@@ -4120,7 +4120,7 @@ function renderProfile() {
   );
   addDetailRow(
     'Active Session',
-    'Sign out of your Jobhunta account on this device',
+    'Sign out of your Job Hunta account on this device',
     btnWithIcon('logOut', 'Log Out', async () => {
       try { await api('/api/auth/logout', {}); } catch {}
       showAuthScreen();
@@ -4289,7 +4289,7 @@ function renderSettings() {
     const gmailCard = create('article', '', 'surface card-pad');
     const gPill = create('span', '', account.mailbox ? 'pill' : 'pill wait');
     gPill.append(create('i', '', 'status-dot'), document.createTextNode(account.mailbox ? 'Connected' : 'Not Connected'));
-    gmailCard.append(cardHead('mail', '', 'Gmail Integration', 'Send 1-to-1 outreach emails and track replies directly from Jobhunta.', gPill));
+    gmailCard.append(cardHead('mail', '', 'Gmail Integration', 'Send 1-to-1 outreach emails and track replies directly from Job Hunta.', gPill));
 
     const expectedUri = account.redirectUri || (location.origin + '/oauth/callback');
     if (account.mailbox) {
@@ -4300,8 +4300,8 @@ function renderSettings() {
           'Send yourself a test email to verify Gmail delivery, refresh threads, or disconnect.',
           btnWithIcon('send', 'Send Test Email', () => composeDirectEmail({
             defaultTo: account.mailbox || currentUser?.email || '',
-            defaultSubject: 'Test email from Jobhunta',
-            defaultBody: `Hi ${currentUser?.name || 'there'},\n\nThis is a test email sent from your Jobhunta outreach workspace to confirm Gmail delivery is working.\n\nBest regards,\n${settings.senderName || currentUser?.name || 'Jobhunta'}`
+            defaultSubject: 'Test email from Job Hunta',
+            defaultBody: `Hi ${currentUser?.name || 'there'},\n\nThis is a test email sent from your Job Hunta outreach workspace to confirm Gmail delivery is working.\n\nBest regards,\n${settings.senderName || currentUser?.name || 'Job Hunta'}`
           }), 'btn-soft'),
           btnWithIcon('refresh', 'Sync Inbox', () => { location.hash = '#inbox'; refresh(true); }, true),
           button('Disconnect Gmail', async () => {
@@ -4379,7 +4379,7 @@ function renderSettings() {
     idCard.append(
       actionRow(
         'Profile Picture',
-        settings.avatarUrl ? 'Custom profile photo is active across your workspace.' : 'Upload a headshot or brand logo for your Jobhunta profile.',
+        settings.avatarUrl ? 'Custom profile photo is active across your workspace.' : 'Upload a headshot or brand logo for your Job Hunta profile.',
         btnWithIcon('camera', settings.avatarUrl ? 'Change Photo' : 'Upload Photo', triggerProfilePhotoUpload, 'btn-soft', 14),
         ...(settings.avatarUrl ? [button('Remove', () => {
           settings.avatarUrl = '';
@@ -4443,7 +4443,7 @@ function renderSettings() {
     dlTpl.style.cssText = 'text-decoration:none;padding:9px 14px;border-radius:10px;border:1px solid var(--line);font-size:13.5px;font-weight:600;color:var(--ink)';
 
     dataCard.append(
-      actionRow('Import Businesses (CSV)', 'Upload a Jobhunta or Bing Maps Scraper CSV file into your workspace.', btnWithIcon('plus', 'Import CSV', importLeads, 'btn-soft'), dlTpl),
+      actionRow('Import Businesses (CSV)', 'Upload a Job Hunta or Bing Maps Scraper CSV file into your workspace.', btnWithIcon('plus', 'Import CSV', importLeads, 'btn-soft'), dlTpl),
       actionRow('Export Saved Leads', `Download all ${leads.length} saved business lead(s) as a clean CSV spreadsheet.`, btnWithIcon('fileText', 'Export CSV', exportLeads, 'btn-soft')),
       actionRow('Bulk Website Email Combing', missingCount ? `${missingCount} saved business(es) have websites without an email address yet.` : 'All saved businesses with websites already have emails or were combed.', btnWithIcon('sparkles', enrichingAll ? 'Combing…' : `Enrich Missing (${missingCount})`, enrichMissingEmails, 'btn-soft'))
     );
@@ -4468,10 +4468,10 @@ function renderSettings() {
     const accCard = create('article', '', 'surface card-pad');
     const tierPill = create('span', '', 'pill');
     tierPill.append(planBadgeEl(getActiveTier().key, 24), document.createTextNode(`${tierLabel} Plan`));
-    accCard.append(cardHead('crown', 'amber', 'Account & Subscription', 'Your Jobhunta identity, unique workspace ID, and daily quota tier.', tierPill));
+    accCard.append(cardHead('crown', 'amber', 'Account & Subscription', 'Your Job Hunta identity, unique workspace ID, and daily quota tier.', tierPill));
 
     accCard.append(
-      kvItem('Account Name', currentUser?.name || settings.senderName || 'Jobhunta User'),
+      kvItem('Account Name', currentUser?.name || settings.senderName || 'Job Hunta User'),
       kvItem('Email Address', currentUser?.email || '—'),
       kvItem('Unique Workspace ID', currentUser?.id || '—'),
       actionRow('Usage & Tier Limits', 'Track your daily searches, email quota, and compare available plans.', btnWithIcon('barChart', 'Open Profile & Usage', () => { location.hash = '#profile'; }, 'btn-soft'))
@@ -4480,7 +4480,7 @@ function renderSettings() {
     const secCard = create('article', '', 'surface card-pad');
     secCard.append(
       cardHead('lock', 'slate', 'Session & Security', 'Manage your active login session on this device.'),
-      actionRow('Sign Out of Jobhunta', 'Securely end your current session and return to the sign-in screen.', btnWithIcon('logOut', 'Log Out', async () => {
+      actionRow('Sign Out of Job Hunta', 'Securely end your current session and return to the sign-in screen.', btnWithIcon('logOut', 'Log Out', async () => {
         try { await api('/api/auth/logout', {}); } catch {}
         showAuthScreen();
       }, 'danger'))
@@ -4561,9 +4561,9 @@ function editLead(lead) {
 }
 
 function importLeads() {
-  if (!requireTier(3, 'CSV Import & Export', 'Import external Jobhunta or Bing Maps Scraper CSV files on Gold (Pro) and above.')) return;
+  if (!requireTier(3, 'CSV Import & Export', 'Import external Job Hunta or Bing Maps Scraper CSV files on Gold (Pro) and above.')) return;
   const form = create('form', '', 'stack');
-  const label = create('label', 'Business CSV (Jobhunta or Bing Maps Scraper format)');
+  const label = create('label', 'Business CSV (Job Hunta or Bing Maps Scraper format)');
   const file = create('input');
   file.type = 'file'; file.accept = '.csv,text/csv'; file.required = true;
   label.append(file);
@@ -4771,7 +4771,7 @@ function createAttachmentPicker() {
 function composeDirectEmail({ defaultTo = '', defaultSubject = '', defaultBody = '' } = {}) {
   const form = create('form', '', 'stack');
   const to = field('To (any email address)', 'to', defaultTo, { type: 'email', required: true, maxLength: 254, placeholder: 'you@example.com' });
-  const subject = field('Subject', 'subject', defaultSubject, { required: true, maxLength: 160, placeholder: 'e.g. Test email from Jobhunta' });
+  const subject = field('Subject', 'subject', defaultSubject, { required: true, maxLength: 160, placeholder: 'e.g. Test email from Job Hunta' });
   const body = field('Message', 'body', defaultBody, { type: 'textarea', required: true, maxLength: 16000, placeholder: 'Write your message here…' });
   body.lastChild.style.minHeight = '160px';
   const picker = createAttachmentPicker();

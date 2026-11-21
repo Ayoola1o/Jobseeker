@@ -469,7 +469,7 @@ async function findUserById(userId) {
 }
 
 async function consumeQuota(userId, kind, refundDate = null, requested = 1) {
-  if (!userId) fail(401, 'Sign in to your Jobhunta account first.');
+  if (!userId) fail(401, 'Sign in to your Job Hunta account first.');
   const field = { search: 'searches_today', email: 'emails_today', result: 'results_today' }[kind];
   for (let attempt = 0; attempt < 8; attempt++) {
     const record = await findUserById(userId);
@@ -532,7 +532,7 @@ async function findUserByEmail(email) {
       if (!Array.isArray(rows)) throw new Error('Unexpected Supabase response.');
       return rows[0] || null;
     } catch {
-      fail(503, 'Jobhunta cannot reach its account database. Check the Supabase server credentials and try again.');
+      fail(503, 'Job Hunta cannot reach its account database. Check the Supabase server credentials and try again.');
     }
   }
   return store.users.find(u => u.email.toLowerCase() === normalized) || null;
@@ -1205,7 +1205,7 @@ export async function resolveSearchLocations(rawLocation = '') {
   }
   try {
     const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleaned)}&format=json&limit=1`, {
-      headers: { 'User-Agent': 'Jobhunta/1.1 (local business discovery)' },
+      headers: { 'User-Agent': 'Job Hunta/1.1 (local business discovery)' },
       signal: AbortSignal.timeout(3500)
     });
     if (res.ok) {
@@ -1464,7 +1464,7 @@ async function searchOverpassFallback(cleanIndustry, city) {
       try {
         const result = await provider('https://' + host + '/api/interpreter', {
           method: 'POST',
-          headers: { 'User-Agent': 'Jobhunta/1.1 (personal local business search)', Accept: 'application/json' },
+          headers: { 'User-Agent': 'Job Hunta/1.1 (personal local business search)', Accept: 'application/json' },
           body: new URLSearchParams({ data: '[out:json][timeout:12];' + query + 'out tags 100;' })
         }, 'Business search');
         if (!result.remark && Array.isArray(result.elements)) return result;
@@ -2174,7 +2174,7 @@ export function extractWebsiteInsights(html = '', urlStr = '') {
 async function fetchShopifyProducts(originUrl) {
   try {
     const res = await fetch(new URL('/products.json?limit=6', originUrl).href, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Jobhunta/1.1)', Accept: 'application/json' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Job Hunta/1.1)', Accept: 'application/json' },
       signal: AbortSignal.timeout(5000),
       redirect: 'manual'
     });
@@ -2927,7 +2927,7 @@ export async function handleRequest(req, res) {
       return res.end(content);
     }
     if (req.method === 'POST' && req.headers.origin && req.headers.origin !== reqOrigin) {
-      fail(403, 'Open Jobhunta directly to submit this request.');
+      fail(403, 'Open Job Hunta directly to submit this request.');
     }
     const cookiesToSet = [];
     let sessionToken = req.headers.cookie?.match(/(?:^|;\s*)jobhunta=([\w-]+)/)?.[1];
@@ -3032,7 +3032,7 @@ export async function handleRequest(req, res) {
     }
 
     if (req.method === 'POST' && path === '/api/connect') {
-      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
+      if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');
       if (!gmailConfigured) fail(503, credentialError || 'Add a Google web OAuth client to enable Gmail.');
       const verifier = nonce();
       const stateToken = nonce();
@@ -3161,7 +3161,7 @@ export async function handleRequest(req, res) {
       return json({ ok: true, supabase: supabaseStatus });
     }
     if (req.method === 'POST' && path === '/api/disconnect') {
-      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
+      if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');
       const targetUserId = session.userId || 'default';
       const ws = getWorkspace(targetUserId);
       delete session.tokens;
@@ -3206,13 +3206,13 @@ export async function handleRequest(req, res) {
       }
     }
     if (req.method === 'POST' && path === '/api/enrich') {
-      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
+      if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');
       const { website } = await readJson(req);
       if (typeof website !== 'string' || !website.trim()) fail(400, 'Provide a website URL to scan.');
       return json(await fetchWebsiteEmails(website.trim()));
     }
     if (req.method === 'POST' && path === '/api/audit') {
-      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
+      if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');
       const userRecord = await findUserById(session.userId);
       const quotaStatus = getUserQuotaStatus(userRecord);
       const tierLevel = quotaStatus.level || 1;
@@ -3253,7 +3253,7 @@ export async function handleRequest(req, res) {
       });
     }
     if (req.method === 'POST' && path === '/api/analyze') {
-      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
+      if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');
       const userRecord = await findUserById(session.userId);
       const quotaStatus = getUserQuotaStatus(userRecord);
       const tierLevel = quotaStatus.level || 1;
@@ -3310,7 +3310,7 @@ export async function handleRequest(req, res) {
       return json(await send(session, payload));
     }
     if (req.method === 'GET' && path === '/api/outreach') {
-      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
+      if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');
       if (!session.mailbox) fail(401, 'Connect Gmail first.');
       const registry = await outreachRegistry(session.userId);
       return json(Object.entries(registry).flatMap(([id, item]) =>
@@ -3318,7 +3318,7 @@ export async function handleRequest(req, res) {
           to: item.recipient, subject: item.subject, time: item.time, templateName: item.templateName }] : []));
     }
     if (req.method === 'POST' && path === '/api/thread') {
-      if (!session.userId) fail(401, 'Sign in to your Jobhunta account first.');
+      if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');
       const { id, mailbox } = await readJson(req);
       if (!session.mailbox) fail(401, 'Connect your Gmail account first.');
       if (session.mailbox !== mailbox) fail(403, 'Connect the Gmail account that sent this conversation.');
@@ -3326,7 +3326,7 @@ export async function handleRequest(req, res) {
     }
     return json({ error: 'Page not found.' }, 404);
   } catch (error) {
-    return json({ error: error.status ? error.message : 'Jobhunta could not complete the request.' }, error.status || 500);
+    return json({ error: error.status ? error.message : 'Job Hunta could not complete the request.' }, error.status || 500);
   }
 }
 
@@ -3334,5 +3334,5 @@ export const server = createServer(handleRequest);
 export default handleRequest;
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  server.listen(port, 'localhost', () => console.log('Jobhunta is running at ' + localOrigin));
+  server.listen(port, 'localhost', () => console.log('Job Hunta is running at ' + localOrigin));
 }
