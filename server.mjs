@@ -2111,6 +2111,37 @@ export function extractWebsiteInsights(html = '', urlStr = '') {
     .join('\n\n')
     .slice(0, 1500);
 
+  const resolveAsset = raw => {
+    const clean = decodeHtmlEntities(String(raw || '').trim());
+    if (!clean || clean.startsWith('data:image/svg+xml') || clean.length > 500) return '';
+    try {
+      const u = new URL(clean, urlStr || 'https://example.com');
+      return ['http:', 'https:'].includes(u.protocol) ? u.href : '';
+    } catch { return ''; }
+  };
+
+  // Extract business logo in priority order: Apple Touch Icon -> JSON-LD logo -> Header Logo <img> -> Favicon -> og:image
+  const appleIconMatch =
+    html.match(/<link[^>]+rel=["'][^"']*apple-touch-icon[^"']*["'][^>]+href=["']([^"']+)["']/i) ||
+    html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["'][^"']*apple-touch-icon[^"']*["']/i);
+  const jsonLdLogoMatch = html.match(/"logo"\s*:\s*(?:"([^"]+)"|\{\s*[^}]*"url"\s*:\s*"([^"]+)")/i);
+  const imgLogoMatch = html.match(/<img\b[^>]*(?:class|id|alt)=["'][^"']*\blogo\b[^"']*["'][^>]*src=["']([^"']+)["']/i)
+    || html.match(/<img\b[^>]*src=["']([^"']+)["'][^>]*(?:class|id|alt)=["'][^"']*\blogo\b[^"']*["']/i);
+  const faviconMatch =
+    html.match(/<link[^>]+rel=["'][^"']*\bicon\b[^"']*["'][^>]+href=["']([^"']+)["']/i) ||
+    html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["'][^"']*\bicon\b[^"']*["']/i);
+  const ogImgMatch =
+    html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+
+  const logoUrl =
+    resolveAsset(appleIconMatch?.[1]) ||
+    resolveAsset(jsonLdLogoMatch?.[1] || jsonLdLogoMatch?.[2]) ||
+    resolveAsset(imgLogoMatch?.[1]) ||
+    resolveAsset(faviconMatch?.[1]) ||
+    resolveAsset(ogImgMatch?.[1]) ||
+    '';
+
   const { platform, techStack, shopifyMeta, platformEvidence, platformConfidence } = detectPlatformAndTech(html, urlStr);
 
   const signals = {
@@ -2125,6 +2156,7 @@ export function extractWebsiteInsights(html = '', urlStr = '') {
   return {
     siteTitle,
     brandName,
+    logoUrl,
     metaDescription,
     headings,
     aboutSummary,
@@ -2358,6 +2390,7 @@ async function fetchWebsiteEmails(websiteUrl) {
   return {
     website: base.href,
     brandName: insights.brandName || insights.siteTitle?.split(/[|\-–—]/)[0]?.trim() || base.hostname.replace(/^www\./, ''),
+    logoUrl: insights.logoUrl || '',
     emails: [...emails],
     emailSources,
     contactPage,

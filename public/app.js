@@ -438,9 +438,44 @@ function getAvatarColor(name = '') {
   for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0;
   return avatarColors[Math.abs(hash) % avatarColors.length];
 }
-function makeAvatar(name, large = false) {
-  const el = create('div', getInitials(name), 'biz-avatar' + (large ? ' lg' : ''));
-  el.style.background = getAvatarColor(name);
+function resolveLeadLogoUrl(leadOrName) {
+  if (!leadOrName || typeof leadOrName !== 'object') return '';
+  if (leadOrName.logoUrl && /^https?:\/\//i.test(leadOrName.logoUrl)) return leadOrName.logoUrl;
+  if (leadOrName.imageUrl && /^https?:\/\//i.test(leadOrName.imageUrl)) return leadOrName.imageUrl;
+  if (leadOrName.website) {
+    try {
+      const host = new URL(leadOrName.website).hostname;
+      if (host) return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=128`;
+    } catch {}
+  }
+  return '';
+}
+
+function makeAvatar(nameOrLead, large = false) {
+  const isObj = Boolean(nameOrLead && typeof nameOrLead === 'object');
+  const displayName = isObj ? (nameOrLead.name || 'Business') : String(nameOrLead || '?');
+  const logoSrc = isObj ? resolveLeadLogoUrl(nameOrLead) : '';
+  const el = create('div', '', 'biz-avatar' + (large ? ' lg' : ''));
+  const applyFallback = () => {
+    el.classList.remove('has-logo');
+    el.style.background = getAvatarColor(displayName);
+    el.textContent = getInitials(displayName);
+  };
+  if (logoSrc) {
+    el.classList.add('has-logo');
+    const img = create('img');
+    img.src = logoSrc;
+    img.alt = displayName;
+    img.loading = 'lazy';
+    img.referrerPolicy = 'no-referrer';
+    img.onerror = applyFallback;
+    img.onload = () => {
+      if (img.naturalWidth < 12 || img.naturalHeight < 12) applyFallback();
+    };
+    el.append(img);
+    return el;
+  }
+  applyFallback();
   return el;
 }
 
@@ -703,9 +738,10 @@ function applyEnrichmentToItem(item, found) {
   if (Array.isArray(found.emails) && found.emails.length) {
     item.emails = [...new Set([...(item.emails || []), ...found.emails])];
   }
-  for (const fieldName of ['facebook', 'instagram', 'twitter', 'linkedin', 'youtube', 'tiktok', 'siteTitle', 'metaDescription', 'aboutSummary', 'platform']) {
+  for (const fieldName of ['logoUrl', 'facebook', 'instagram', 'twitter', 'linkedin', 'youtube', 'tiktok', 'siteTitle', 'metaDescription', 'aboutSummary', 'platform']) {
     if (found[fieldName] && !item[fieldName]) item[fieldName] = found[fieldName];
   }
+  if (found.logoUrl) item.logoUrl = found.logoUrl;
   if (found.platform && found.platform !== 'Custom / Website') {
     item.platform = found.platform;
   }
@@ -1157,7 +1193,7 @@ function renderDashboard() {
       const left = create('div', '', 'biz-mini-left');
       const info = create('div');
       info.append(create('h4', l.name), create('p', [l.industry, l.city].filter(Boolean).join(' · ') || 'Saved business'));
-      left.append(makeAvatar(l.name), info);
+      left.append(makeAvatar(l), info);
       item.append(left, create('span', leadStatus(l), statusPillClass(leadStatus(l))));
       item.onclick = () => openBusinessPage(l);
       recentCard.append(item);
@@ -1228,7 +1264,7 @@ function renderResults() {
     const bizBox = create('div', '', 'cell-biz');
     const bizText = create('div');
     bizText.append(create('strong', item.name), create('small', item.phone || item.openHours || ''));
-    bizBox.append(makeAvatar(item.name), bizText);
+    bizBox.append(makeAvatar(item), bizText);
     tdBiz.append(bizBox);
 
     const tdInd = create('td');
@@ -1606,7 +1642,7 @@ function renderLeads() {
       create('strong', lead.name),
       create('small', [lead.city, lead.email || 'No email', lead.phone].filter(Boolean).join(' · '))
     );
-    bizBox.append(makeAvatar(lead.name), bizText);
+    bizBox.append(makeAvatar(lead), bizText);
     tdBiz.append(bizBox);
 
     const tdInd = create('td');
@@ -1685,7 +1721,7 @@ function renderLeads() {
       create('strong', lead.name),
       create('small', [lead.industry, lead.city, lead.email || 'No email'].filter(Boolean).join(' · '))
     );
-    mHead.append(makeAvatar(lead.name), mMeta);
+    mHead.append(makeAvatar(lead), mMeta);
 
     const mPills = create('div', '', 'mob-lead-pills');
     if (lead.searchRank) {
@@ -1786,7 +1822,7 @@ function renderBusinessPage() {
     create('strong', lead.name),
     create('small', [lead.industry, lead.city].filter(Boolean).join(' · ') || lead.email || 'Saved Lead')
   );
-  mobBarLeft.append(mobDossierBack, makeAvatar(lead.name), mobBarTitle);
+  mobBarLeft.append(mobDossierBack, makeAvatar(lead), mobBarTitle);
   const mobEmailBtn = button('Email', () => compose(lead), 'mob-email-btn');
   mobDossierBar.append(mobBarLeft, mobEmailBtn);
   const queueLeft = create('div', '', 'actions');
@@ -1824,7 +1860,7 @@ function renderBusinessPage() {
   h1.style.margin = '0';
   h1.style.fontSize = '24px';
   heroText.append(h1, create('p', lead.siteTitle || lead.about || 'Saved Business Prospect', 'small'), pills);
-  heroCard.append(makeAvatar(lead.name, true), heroText);
+  heroCard.append(makeAvatar(lead, true), heroText);
 
   const contactCard = create('article', '', 'surface dossier-card');
   contactCard.append(create('h2', 'Contact Information'));
@@ -3299,7 +3335,7 @@ function renderInbox() {
       if (lead.due) rBadges.append(create('span', `Follow-up: ${lead.due}`, 'pill wait'));
 
       body.append(rTop, rSub, rPrev, rBadges);
-      rowEl.append(makeAvatar(lead.name), body);
+      rowEl.append(makeAvatar(lead), body);
       rowEl.onclick = async () => {
         selectedInboxKey = group.key;
         mobileInboxView = 'thread';
@@ -3345,7 +3381,7 @@ function renderInbox() {
       mobileContextOpen = false;
       renderInbox();
     };
-    const headAvatar = makeAvatar(lead.name);
+    const headAvatar = makeAvatar(lead);
     const headTitle = create('div', '', 'inbox-thread-title');
     headTitle.append(
       create('h2', lead.name || conversation.subject),
@@ -3507,7 +3543,7 @@ function renderInbox() {
       create('strong', lead.name),
       create('small', [lead.industry, lead.city].filter(Boolean).join(' · ') || activeGroup.email)
     );
-    ctxBiz.append(makeAvatar(lead.name), ctxBizCopy);
+    ctxBiz.append(makeAvatar(lead), ctxBizCopy);
     contextPane.append(ctxBiz);
 
     const ctxPills = create('div', '', 'inbox-ctx-pills');
