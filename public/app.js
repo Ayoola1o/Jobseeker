@@ -1629,7 +1629,7 @@ function renderLeads() {
     }
   }
 
-  // Render Mobile Quick Opportunity Filter Pills (Screen 1)
+  // Render Mobile Quick Opportunity Filter Pills (Scrollable left/right with ‹ / › arrows)
   const mobOppEl = $('#leads-mob-opp-pills');
   if (mobOppEl) {
     const curOpp = $('#filter-opportunity')?.value || '';
@@ -1642,8 +1642,23 @@ function renderLeads() {
       ['no-website', 'No Website'],
       ['no-socials', 'No Socials']
     ];
-    mobOppEl.replaceChildren(...pillsDef.map(([val, lbl]) => {
-      const b = create('button', lbl, 'mob-opp-pill' + (curOpp === val ? ' active' : ''));
+    const leftBtn = create('button', '', 'tabs-scroll-btn');
+    leftBtn.type = 'button';
+    leftBtn.setAttribute('aria-label', 'Scroll opportunity filters left');
+    leftBtn.append(iconEl('chevronLeft', 15));
+
+    const track = create('div', '', 'mob-opp-track');
+    track.setAttribute('role', 'tablist');
+
+    const rightBtn = create('button', '', 'tabs-scroll-btn');
+    rightBtn.type = 'button';
+    rightBtn.setAttribute('aria-label', 'Scroll opportunity filters right');
+    rightBtn.append(iconEl('chevronRight', 15));
+
+    let activePillEl = null;
+    pillsDef.forEach(([val, lbl]) => {
+      const isAct = curOpp === val;
+      const b = create('button', lbl, 'mob-opp-pill' + (isAct ? ' active' : ''));
       b.type = 'button';
       b.onclick = () => {
         if (val && !requireTier(2, 'Bad Ranking & Website Performance Filters', 'Filter saved leads by Rank #11+, Audit <75, missing website, or no social presence on Silver (Starter) and above.')) {
@@ -1653,8 +1668,34 @@ function renderLeads() {
         leadsPage = 1;
         renderLeads();
       };
-      return b;
-    }));
+      if (isAct) activePillEl = b;
+      track.append(b);
+    });
+
+    const syncOppArrows = () => {
+      const maxScroll = Math.max(0, track.scrollWidth - track.clientWidth);
+      leftBtn.disabled = track.scrollLeft <= 2;
+      rightBtn.disabled = track.scrollLeft >= maxScroll - 2;
+      leftBtn.style.opacity = leftBtn.disabled ? '0.35' : '1';
+      rightBtn.style.opacity = rightBtn.disabled ? '0.35' : '1';
+    };
+    leftBtn.onclick = () => { track.scrollBy({ left: -170, behavior: 'smooth' }); };
+    rightBtn.onclick = () => { track.scrollBy({ left: 170, behavior: 'smooth' }); };
+    track.addEventListener('scroll', syncOppArrows, { passive: true });
+    track.addEventListener('wheel', (e) => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        e.preventDefault();
+        track.scrollLeft += e.deltaY;
+      }
+    }, { passive: false });
+
+    mobOppEl.replaceChildren(leftBtn, track, rightBtn);
+    requestAnimationFrame(() => {
+      if (activePillEl && curOpp) {
+        activePillEl.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
+      }
+      syncOppArrows();
+    });
   }
 
   const filtered = getFilteredLeads();

@@ -675,8 +675,9 @@ dialog .heading{margin:0 0 16px}
   .folders-grid{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
   .folders-grid::-webkit-scrollbar{display:none}
   .folder-chip{flex-shrink:0;white-space:nowrap;padding:6px 11px;font-size:12px}
-  .mob-opp-pills{display:flex;align-items:center;gap:7px;overflow-x:auto;scrollbar-width:none;margin:0 0 10px;padding-bottom:2px}
-  .mob-opp-pills::-webkit-scrollbar{display:none}
+  .mob-opp-pills{display:flex;align-items:center;gap:6px;width:100%;max-width:100%;min-width:0;margin:0 0 10px}
+  .mob-opp-track{display:flex;align-items:center;gap:7px;flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;touch-action:pan-x;scroll-behavior:smooth;scrollbar-width:none;padding:2px 1px}
+  .mob-opp-track::-webkit-scrollbar{display:none}
   .mob-opp-pill{padding:6px 12px;border-radius:999px;font-size:12px;font-weight:650;background:white;color:var(--ink);border:1px solid var(--line);white-space:nowrap;flex-shrink:0}
   .mob-opp-pill.active{background:var(--green-soft);color:#065f46;border-color:var(--green)}
   #lead-filters{grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
