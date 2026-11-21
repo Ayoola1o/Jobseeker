@@ -2564,9 +2564,17 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
     .replace(/\s+/g, ' ')
     .trim();
 
+  const auditFindingDetails = [];
   if (Array.isArray(auditReport?.findings)) {
     const { primary: personaFindings } = filterAuditFindingsForPersona(auditReport.findings, senderSettings, tierLevel);
     for (const f of personaFindings) {
+      auditFindingDetails.push({
+        title: String(f.title || '').trim(),
+        severity: String(f.severity || 'warning').trim(),
+        detail: String(f.detail || '').trim(),
+        businessImpact: String(f.businessImpact || '').trim(),
+        recommendation: String(f.recommendation || '').trim()
+      });
       const fKey = normalizeGapKey(f.title);
       const isDup = gaps.some(existing => {
         const eKey = normalizeGapKey(existing);
@@ -2575,9 +2583,14 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
           (/https/i.test(f.title) && /https/i.test(existing));
       });
       if (!isDup) {
+        const cleanDetail = String(f.detail || '').trim();
         const cleanImpact = String(f.businessImpact || '').trim();
-        const label = cleanImpact ? `${f.title} — ${cleanImpact}` : f.title;
-        gaps.push(label);
+        const cleanRec = String(f.recommendation || '').trim();
+        const parts = [f.title];
+        if (cleanDetail) parts.push(cleanDetail);
+        if (cleanImpact) parts.push(`Impact: ${cleanImpact}`);
+        if (cleanRec) parts.push(`Fix: ${cleanRec}`);
+        gaps.push(parts.join(' — '));
       }
     }
   }
@@ -2659,31 +2672,37 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
       : null
   ].filter(Boolean).join('\n');
 
-  const bulletLines = combinedGaps.map(item => `• ${item.replace(/^\[Spotted Issue\]\s*/i, '')}`).join('\n');
+  const numberedDetailedFindings = combinedGaps.slice(0, 8).map((item, idx) => {
+    const cleanText = item.replace(/^\[Spotted Issue\]\s*/i, '');
+    return `${idx + 1}. ${cleanText}`;
+  }).join('\n\n');
   const extraParagraph = cleanExtra
     ? `${/[.!?]$/.test(cleanExtra) ? cleanExtra : cleanExtra + '.'}\n\n`
     : '';
 
   const pitchSubject = (hasExplicitPersona
-    ? `Quick idea for ${name}’s ${foundationPhrase.split(',')[0]} in ${city}`
-    : `360° online presence, social & website audit for ${name} in ${city}`
+    ? `Detailed ${persona.label} audit report for ${name} (${city})`
+    : `Detailed 360° website & digital audit report for ${name} (${city})`
   ).slice(0, 88);
 
   const pitchBody =
     `Hi ${name} team,\n\n` +
-    `${specificHook}.\n\n` +
-    `I’m ${senderName}, and I help ${cleanIndustryGroup} grow through ${senderService}.\n\n` +
-    `Here is a quick snapshot of what stood out (${activeLensLabel}):\n` +
+    `${specificHook}. I’m ${senderName}, and I help ${cleanIndustryGroup} grow through ${senderService}.\n\n` +
+    `I put together a concise, actionable audit report below so you can see exactly what is working and what is currently costing ${name} qualified leads:\n\n` +
+    `CURRENT SNAPSHOT (${activeLensLabel.toUpperCase()}):\n` +
     `${snapshotLines}\n\n` +
-    `A few specific issues are currently costing ${name} qualified inquiries and sales:\n\n` +
-    `${bulletLines}\n\n` +
-    `Fixing these targeted gaps ensures that when customers in ${city} find ${name}, your ${foundationPhrase} converts them smoothly into paying clients.\n\n` +
+    `KEY FINDINGS & RECOMMENDED FIXES (${Math.min(combinedGaps.length, 8)} ITEMS):\n\n` +
+    `${numberedDetailedFindings}\n\n` +
+    `RECOMMENDED QUICK-WIN ROADMAP:\n` +
+    `• Step 1 (Quick Wins): Resolve the highest-impact technical, visibility, or conversion blockers listed above.\n` +
+    `• Step 2 (Conversion Upgrade): Strengthen trust signals and streamline how visitors in ${city} inquire or book.\n` +
+    `• Step 3 (Tracking & Growth): Verify analytics and performance so every improvement drives measurable ROI.\n\n` +
     extraParagraph +
-    `I’ve already mapped out a practical step-by-step fix list for ${name}. Would you be open to me sending over a quick 2-minute walkthrough, or hopping on a brief 10-minute chat this week?\n\n` +
-    `Best regards,\n${senderName}`;
+    `If helpful, I can send over a short 2-minute walkthrough video showing each of these items live on your site, or we can hop on a quick 10-minute call this week.\n\n` +
+    `Best regards,\n${senderName}\n${senderService}`;
 
   const followUpMessage =
-    `Hi ${name} team — just floating this back to the top of your inbox in case it got buried. Happy to send over the 2-minute breakdown on improving ${name}’s ${foundationPhrase} whenever you have a moment.\n\nBest,\n${senderName}`;
+    `Hi ${name} team — just floating this back to the top of your inbox in case it got buried. Happy to send over the 2-minute walkthrough on the findings in the audit report for ${name} whenever you have a moment.\n\nBest,\n${senderName}`;
 
   return {
     personaId: persona.id,
@@ -2692,6 +2711,7 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
     aiSource: 'smart-engine',
     overview: overviewParts.join(' '),
     gaps: combinedGaps,
+    auditFindingDetails,
     angle,
     pitchSubject,
     pitchBody,
@@ -2738,15 +2758,27 @@ async function analyzeLeadWithAi(lead, senderSettings, userIssues = '', extraCon
 
     const prompt = `${blueprint}${addedToolsDirective}
 
-STRICT PERSONA & COPYWRITING RULES:
+STRICT PERSONA & DETAILED REPORT EMAIL RULES:
 1. Active Persona: "${persona.title}". Enabled Pitch Modules ONLY: ${activeModuleLabels}.
 ${excludedModuleLabels ? `2. STRICTLY EXCLUDED (DO NOT mention or pitch these topics): ${excludedModuleLabels}.` : '2. Use all enabled modules cleanly.'}
-3. Write in natural, warm, human B2B prose. NEVER include raw internal log tags like "[BUGS · Critical]" or "[SEO · Warning]". NEVER use placeholder brackets like [your name].
-4. Reference at least 1 real detail scraped from the company's actual website or listing (e.g., their exact headline, about summary, city, platform, or product) so the owner knows a human reviewed their business.
-5. Keep pitchSubject under 70 characters (natural, non-spammy). Keep pitchBody concise and punchy (180–280 words): Personalized Opener → 2–4 clean "• " bullets of verified persona-relevant issues & their revenue impact → Natural low-friction CTA → Sign-off as ${senderSettings?.senderName || 'Outreach Specialist'}.${userIssuesNote}${extraContextNote}
+3. Write in natural, warm, authoritative human B2B prose. NEVER include raw internal log tags like "[BUGS · Critical]" or "[SEO · Warning]". NEVER use placeholder brackets like [your name]. NEVER use markdown asterisks (**) — use clean plain-text section headers in UPPERCASE and numbered items so it looks crisp in Gmail.
+4. Reference real details scraped from the company's actual website or listing (e.g., their exact headline, about summary, city, platform, tech stack, health score, search rank, or social channels) so the owner immediately sees a real audit was performed.
+5. Keep pitchSubject under 75 characters (clear, executive, non-spammy).
+6. Make pitchBody a DETAILED, WELL-STRUCTURED CLIENT AUDIT REPORT EMAIL (320–480 words) using this exact scannable layout:
+   - Greeting & Personalized Opener (2–3 sentences referencing their business & what you reviewed)
+   - AUDIT SNAPSHOT FOR ${(lead.name || 'YOUR BUSINESS').toUpperCase()}: 3–5 concise "• " metric bullets (only for enabled modules: e.g. Platform/Health Score/Speed, Search Rank/Rating, Social Channels, Lead Capture/Tracking)
+   - DETAILED FINDINGS & RECOMMENDED FIXES: A clear numbered list (1., 2., 3., 4., up to 6–8 items covering EVERY major verified finding & any user-spotted issues). For EACH numbered item include:
+     • Exact finding & concrete evidence from their site/listing
+     • Why it matters (revenue, lead, trust, or visibility impact)
+     • Recommended fix (practical action)
+   - RECOMMENDED QUICK-WIN PLAN: 3 crisp "• Step 1 / Step 2 / Step 3" bullets showing the priority order to fix them
+   - Warm, low-friction CTA (offer a 2-minute walkthrough or brief 10-minute call) & clean sign-off as ${senderSettings?.senderName || 'Outreach Specialist'}.${userIssuesNote}${extraContextNote}
 
-Verified Persona-Filtered Findings (use ONLY these):
+Verified Persona-Filtered Findings (list and explain ALL key ones in the report):
 ${JSON.stringify(baseline.gaps, null, 2)}
+
+Detailed Technical Audit Evidence (use exact numbers, details & fix recommendations where relevant):
+${JSON.stringify((baseline.auditFindingDetails || []).slice(0, 8), null, 2)}
 
 Scraped Company Intelligence:
 ${JSON.stringify({
@@ -2764,6 +2796,10 @@ ${JSON.stringify({
       shopifyProducts: (lead.shopifyProducts || []).slice(0, 3),
       searchRank: lead.searchRank,
       rating: lead.rating,
+      ratingInfo: lead.ratingInfo,
+      openHours: lead.openHours,
+      socialChannels: [lead.facebook && 'Facebook', lead.instagram && 'Instagram', lead.twitter && 'X/Twitter', lead.linkedin && 'LinkedIn', lead.youtube && 'YouTube', lead.tiktok && 'TikTok'].filter(Boolean),
+      signals: lead.signals || {},
       auditScore: lead.auditReport?.overallScore ?? null,
       ttfbMs: lead.auditReport?.ttfbMs ?? null
     })}
@@ -2794,10 +2830,10 @@ Service Offered: ${senderSettings?.senderService || persona.defaultService}`;
         generationConfig: {
           responseMimeType: 'application/json',
           responseSchema,
-          temperature: 0.65
+          temperature: 0.6
         }
       }),
-      signal: AbortSignal.timeout(18000)
+      signal: AbortSignal.timeout(24000)
     });
     if (!response.ok) return baseline;
     const result = await response.json();
