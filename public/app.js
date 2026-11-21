@@ -4033,7 +4033,13 @@ function renderSettings() {
 
   const shell = create('div', '', 'settings-shell');
 
-  // Left vertical category nav
+  // Left vertical category nav on desktop; horizontally scrollable with ‹ / › arrows on tablet/mobile
+  const navShell = create('div', '', 'settings-nav-shell');
+  const navLeftBtn = create('button', '', 'tabs-scroll-btn');
+  navLeftBtn.type = 'button';
+  navLeftBtn.setAttribute('aria-label', 'Scroll settings tabs left');
+  navLeftBtn.append(iconEl('chevronLeft', 15));
+
   const nav = create('nav', '', 'settings-nav');
   nav.setAttribute('aria-label', 'Settings sections');
   const sections = [
@@ -4042,13 +4048,29 @@ function renderSettings() {
     ['data', 'database', 'Data & Workspace'],
     ['account', 'user', 'Account & Plan']
   ];
+  let activeSettingsTabEl = null;
   for (const [key, ico, lbl] of sections) {
     const b = create('button', '', 'settings-nav-btn' + (settingsTab === key ? ' active' : ''));
     b.type = 'button';
     b.append(iconEl(ico, 17), document.createTextNode(lbl));
     b.onclick = () => { settingsTab = key; renderSettings(); };
+    if (settingsTab === key) activeSettingsTabEl = b;
     nav.append(b);
   }
+
+  const navRightBtn = create('button', '', 'tabs-scroll-btn');
+  navRightBtn.type = 'button';
+  navRightBtn.setAttribute('aria-label', 'Scroll settings tabs right');
+  navRightBtn.append(iconEl('chevronRight', 15));
+
+  navLeftBtn.onclick = () => { nav.scrollBy({ left: -160, behavior: 'smooth' }); };
+  navRightBtn.onclick = () => { nav.scrollBy({ left: 160, behavior: 'smooth' }); };
+  navShell.append(navLeftBtn, nav, navRightBtn);
+  requestAnimationFrame(() => {
+    if (activeSettingsTabEl && window.innerWidth <= 1040) {
+      activeSettingsTabEl.scrollIntoView({ behavior: 'instant', inline: 'center', block: 'nearest' });
+    }
+  });
 
   const panel = create('div', '', 'settings-panel');
 
@@ -4281,7 +4303,7 @@ function renderSettings() {
     panel.append(accCard, secCard);
   }
 
-  shell.append(nav, panel);
+  shell.append(navShell, panel);
   container.replaceChildren(topHeader, shell);
 }
 

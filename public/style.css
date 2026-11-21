@@ -484,7 +484,9 @@ table.data-table tr:last-child td{border-bottom:0}
 
 /* Modern Settings Layout */
 .settings-shell{display:grid;grid-template-columns:230px minmax(0,1fr);gap:22px;align-items:start}
-.settings-nav{background:white;border:1px solid var(--line);border-radius:14px;padding:10px;display:grid;gap:4px;box-shadow:var(--shadow-sm);position:sticky;top:86px}
+.settings-nav-shell{position:sticky;top:86px;min-width:0}
+.settings-nav-shell .tabs-scroll-btn{display:none}
+.settings-nav{background:white;border:1px solid var(--line);border-radius:14px;padding:10px;display:grid;gap:4px;box-shadow:var(--shadow-sm)}
 .settings-nav-btn{display:flex;align-items:center;justify-content:flex-start;gap:10px;width:100%;padding:10px 13px;border-radius:10px;background:transparent;color:var(--muted);border:0;font-size:13.5px;font-weight:600;text-align:left}
 .settings-nav-btn:hover{background:#f3f8f6;color:var(--ink)}
 .settings-nav-btn.active{background:var(--green-soft);color:#065f46}
@@ -561,8 +563,11 @@ dialog .heading{margin:0 0 16px}
   .kpi-grid{grid-template-columns:1fr 1fr}
   .dash-mid,.dash-bot,.dossier-header-grid,.dossier-grid,.broadcast-grid,.inbox-shell,.settings-shell,.profile-mid-grid,.phases-grid{grid-template-columns:1fr}
   .plan-cards-grid{grid-template-columns:1fr 1fr}
-  .settings-nav{position:static;display:flex;overflow-x:auto;gap:6px;padding:8px}
-  .settings-nav-btn{width:auto;white-space:nowrap}
+  .settings-nav-shell{position:static;display:flex;align-items:center;gap:6px;background:white;border:1px solid var(--line);border-radius:14px;padding:6px 8px;box-shadow:var(--shadow-sm);max-width:100%}
+  .settings-nav-shell .tabs-scroll-btn{display:inline-flex}
+  .settings-nav{position:static;display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;touch-action:pan-x;scroll-behavior:smooth;gap:6px;padding:2px;border:0;box-shadow:none;background:transparent;flex:1;min-width:0;scrollbar-width:none}
+  .settings-nav::-webkit-scrollbar{display:none}
+  .settings-nav-btn{width:auto;white-space:nowrap;flex-shrink:0}
   .inbox-list-pane{border-right:0;border-bottom:1px solid var(--line)}
   .search-bar-card{grid-template-columns:1fr 1fr;gap:8px;padding:12px}
   .search-seg{border-right:0;padding:4px 6px}
