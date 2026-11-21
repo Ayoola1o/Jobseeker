@@ -1869,7 +1869,13 @@ function renderBusinessPage() {
   pbRight.append(dossierPersonaSelect, configToolsBtn);
   personaBar.append(pbLeft, pbRight);
 
-  // Sub-Navigation Tabs
+  // Sub-Navigation Tabs (Horizontally scrollable left/right via swipe or chevron buttons)
+  const tabsShell = create('div', '', 'dossier-tabs-shell');
+  const scrollLeftBtn = create('button', '', 'tabs-scroll-btn');
+  scrollLeftBtn.type = 'button';
+  scrollLeftBtn.setAttribute('aria-label', 'Scroll tabs left');
+  scrollLeftBtn.append(iconEl('chevronLeft', 15));
+
   const tabsBar = create('div', '', 'dossier-tabs');
   const tabDefs = [
     ['overview', 'Overview'],
@@ -1880,12 +1886,26 @@ function renderBusinessPage() {
     ['insights', 'Insights & History'],
     ['ai', 'AI Analysis']
   ];
+  let activeTabEl = null;
   for (const [key, label] of tabDefs) {
     const t = create('button', label, 'dossier-tab' + (dossierTab === key ? ' active' : ''));
     t.type = 'button';
     t.onclick = () => { dossierTab = key; renderBusinessPage(); };
+    if (dossierTab === key) activeTabEl = t;
     tabsBar.append(t);
   }
+
+  const scrollRightBtn = create('button', '', 'tabs-scroll-btn');
+  scrollRightBtn.type = 'button';
+  scrollRightBtn.setAttribute('aria-label', 'Scroll tabs right');
+  scrollRightBtn.append(iconEl('chevronRight', 15));
+
+  scrollLeftBtn.onclick = () => { tabsBar.scrollBy({ left: -180, behavior: 'smooth' }); };
+  scrollRightBtn.onclick = () => { tabsBar.scrollBy({ left: 180, behavior: 'smooth' }); };
+  tabsShell.append(scrollLeftBtn, tabsBar, scrollRightBtn);
+  requestAnimationFrame(() => {
+    if (activeTabEl) activeTabEl.scrollIntoView({ behavior: 'instant', inline: 'center', block: 'nearest' });
+  });
 
   const contentWrap = create('div');
 
@@ -2724,7 +2744,7 @@ function renderBusinessPage() {
     }, '', 14)
   );
 
-  container.replaceChildren(mobDossierBar, navBar, headerGrid, personaBar, tabsBar, contentWrap, mobDossierCta);
+  container.replaceChildren(mobDossierBar, navBar, headerGrid, personaBar, tabsShell, contentWrap, mobDossierCta);
 }
 
 /* ---------------- EMAIL BROADCAST (Figma Email Broadcast) ---------------- */
