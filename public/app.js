@@ -3883,7 +3883,7 @@ function renderProfile() {
   );
   heroLeft.append(avatarBtn, heroText);
 
-  const heroActs = create('div', '', 'actions');
+  const heroActs = create('div', '', 'actions profile-hero-actions');
   heroActs.append(
     btnWithIcon('camera', settings.avatarUrl ? 'Change Photo' : 'Upload Photo', triggerProfilePhotoUpload, 'hero-btn-ghost'),
     ...(settings.avatarUrl ? [button('Remove Photo', () => {
@@ -3892,7 +3892,7 @@ function renderProfile() {
       report('Removed profile picture.');
     }, 'hero-btn-ghost')] : []),
     btnWithIcon('settings', 'Edit Profile', () => { settingsTab = 'outreach'; location.hash = '#settings'; }, 'hero-btn-ghost'),
-    btnWithIcon('search', 'Find Businesses', () => { location.hash = '#discover'; })
+    btnWithIcon('search', 'Find Businesses', () => { location.hash = '#discover'; }, 'hero-btn-white')
   );
   hero.append(heroLeft, heroActs);
 
@@ -4019,8 +4019,7 @@ function renderProfile() {
     addMeter('Verified Email Coverage', withEmailCount, Math.max(1, leads.length), 'leads'),
     addMeter('AI Brief Enrichment Coverage', aiBriefCount, Math.max(1, leads.length), 'leads')
   );
-  const usageFoot = create('div', '', 'actions');
-  usageFoot.style.marginTop = '4px';
+  const usageFoot = create('div', '', 'actions profile-usage-acts');
   usageFoot.append(
     btnWithIcon('search', 'New Search', () => { location.hash = '#discover'; }, 'btn-soft'),
     btnWithIcon('send', 'Open Broadcast', () => { location.hash = '#broadcast'; }, true)
