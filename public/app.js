@@ -293,6 +293,430 @@ function getCurrentPersonaState() {
   return getActivePersonaModules(settings, getUserTierLevel());
 }
 
+function collectLeadResearchAssets(lead = {}) {
+  const images = [];
+  const seenImg = new Set();
+  const pushImg = (url, label, sub = '', warn = false, contain = false) => {
+    if (!url || !/^https?:\/\//i.test(url) || seenImg.has(url)) return;
+    seenImg.add(url);
+    images.push({ url, label, sub, warn, contain });
+  };
+
+  if (lead.logoUrl) pushImg(lead.logoUrl, 'Brand Logo', 'Extracted from website header / touch icon', false, true);
+  if (lead.ogImage) pushImg(lead.ogImage, 'Social Share Preview (og:image)', 'Open Graph social card image');
+  if (lead.imageUrl) pushImg(lead.imageUrl, 'Map / Listing Photo', 'Business listing thumbnail');
+  for (const img of lead.siteImages || []) {
+    pushImg(
+      img.url,
+      img.missingAlt ? 'Website Image (Missing Alt)' : 'Website Visual',
+      img.alt ? `Alt: "${img.alt}"` : 'No alt text attribute found on <img>',
+      Boolean(img.missingAlt)
+    );
+  }
+  for (const prod of lead.shopifyProducts || []) {
+    if (prod.image) {
+      pushImg(prod.image, `Product: ${prod.title}`, prod.price ? `Price: $${prod.price}` : 'Store catalog item');
+    }
+  }
+
+  const links = [];
+  const seenLinks = new Set();
+  const pushLink = (category, url, note = '', broken = false) => {
+    if (!url || !/^https?:\/\//i.test(url)) return;
+    const key = `${category}|${url}`;
+    if (seenLinks.has(key)) return;
+    seenLinks.add(key);
+    links.push({ category, url, note, broken });
+  };
+
+  if (lead.website) pushLink('Official Website', lead.website, lead.platform || 'Primary homepage');
+  if (lead.contactPage) pushLink('Contact Page', lead.contactPage, 'Crawled for direct contact details');
+  if (lead.contactFormSource && lead.contactFormSource !== lead.contactPage) {
+    pushLink('Lead / Contact Form', lead.contactFormSource, 'Form detected on page');
+  }
+  for (const pg of lead.crawledPages || []) {
+    if (pg !== lead.website && pg !== lead.contactPage) pushLink('Crawled Subpage', pg, 'Scanned by Job Hunta crawler');
+  }
+  if (lead.source) {
+    pushLink(lead.redditMeta ? `Reddit Post (r/${lead.redditMeta.subreddit})` : 'Discovery Source / Map', lead.source, lead.searchRank ? `Rank #${lead.searchRank}` : 'Original listing');
+  }
+  if (lead.emailSources && typeof lead.emailSources === 'object') {
+    for (const [em, srcUrl] of Object.entries(lead.emailSources)) {
+      pushLink(`Email Proof (${em})`, srcUrl, 'Page where email was verified');
+    }
+  }
+  if (lead.phone && lead.phoneSource) {
+    pushLink(`Phone Proof (${lead.phone})`, lead.phoneSource, 'Page where phone number was found');
+  }
+  const socialDefs = [
+    ['Instagram', lead.instagram],
+    ['Facebook', lead.facebook],
+    ['LinkedIn', lead.linkedin],
+    ['TikTok', lead.tiktok],
+    ['X / Twitter', lead.twitter],
+    ['YouTube', lead.youtube]
+  ];
+  for (const [sName, sUrl] of socialDefs) {
+    if (sUrl) pushLink(`Social · ${sName}`, sUrl, 'Linked social profile');
+  }
+  for (const kl of (lead.keyLinks || []).slice(0, 5)) {
+    pushLink(`Site Link · ${kl.label}`, kl.url, 'Navigation / CTA link');
+  }
+  if (lead.robotsTxtUrl) {
+    pushLink('SEO · robots.txt', lead.robotsTxtUrl, lead.robotsTxtOk === false ? 'Missing / Error' : '200 OK', lead.robotsTxtOk === false);
+  }
+  if (lead.sitemapXmlUrl) {
+    pushLink('SEO · sitemap.xml', lead.sitemapXmlUrl, lead.sitemapXmlOk === false ? 'Missing / Error' : '200 OK', lead.sitemapXmlOk === false);
+  }
+  for (const bl of lead.brokenLinks || []) {
+    pushLink(`Broken Link (HTTP ${bl.status || 404})`, bl.url, 'Broken internal link spotted', true);
+  }
+  for (const ba of lead.brokenAssets || []) {
+    pushLink(`Broken Image (HTTP ${ba.status || 404})`, ba.url, 'Broken image asset spotted', true);
+  }
+
+  return { images, links };
+}
+
+function buildResearchEvidenceText(lead = {}) {
+  const { images, links } = collectLeadResearchAssets(lead);
+  const lines = [
+    `RESEARCH & VERIFIED SOURCE EVIDENCE — ${(lead.name || 'Business').toUpperCase()}`,
+    `Location / Market: ${[lead.industry, lead.city].filter(Boolean).join(' · ') || 'N/A'}`,
+    lead.website ? `Website Reviewed: ${lead.website}` : 'Website Reviewed: No official website linked',
+    lead.auditReport?.overallScore !== undefined ? `Website Audit Health Score: ${lead.auditReport.overallScore}/100${lead.auditReport.ttfbMs ? ` (${lead.auditReport.ttfbMs}ms response)` : ''}` : '',
+    lead.platform ? `Detected Platform & Stack: ${lead.platform}${lead.techStack?.length ? ` (${lead.techStack.join(', ')})` : ''}` : ''
+  ].filter(Boolean);
+
+  if (lead.siteTitle || lead.metaDescription || lead.headings?.length) {
+    lines.push('\n1. ON-PAGE POSITIONING & HEADINGS REVIEWED:');
+    if (lead.siteTitle) lines.push(`• Page Title (<title>): "${lead.siteTitle}"`);
+    if (lead.metaDescription) lines.push(`• Meta Description: "${lead.metaDescription}"`);
+    if (lead.headings?.length) lines.push(`• Main Headings (H1/H2): ${lead.headings.slice(0, 5).join(' | ')}`);
+  }
+
+  if (links.length) {
+    lines.push(`\n2. VERIFIED LINKS, PAGES & SOURCES (${links.length}):`);
+    for (const l of links) {
+      lines.push(`• [${l.category}] ${l.url}${l.note ? ` — ${l.note}` : ''}`);
+    }
+  }
+
+  if (images.length) {
+    lines.push(`\n3. VISUAL ASSETS & PICTURES CAPTURED (${images.length}):`);
+    for (const img of images) {
+      lines.push(`• [${img.label}] ${img.url}${img.sub ? ` (${img.sub})` : ''}`);
+    }
+  }
+
+  if (lead.aiBrief?.gaps?.length) {
+    lines.push(`\n4. KEY AUDIT FINDINGS IDENTIFIED:`);
+    lead.aiBrief.gaps.slice(0, 8).forEach((g, idx) => {
+      lines.push(`${idx + 1}. ${g.replace(/^\[Spotted Issue\]\s*/i, '')}`);
+    });
+  }
+
+  return lines.join('\n');
+}
+
+function buildResearchEvidenceHtml(lead = {}) {
+  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const { images, links } = collectLeadResearchAssets(lead);
+  const senderName = esc(settings.senderName || currentUser?.name || 'Digital Specialist');
+  const senderService = esc(settings.senderService || getCurrentPersonaState().persona.defaultService || '');
+  const score = lead.auditReport?.overallScore;
+
+  const imgCards = images.map(img => `
+    <div class="img-card">
+      <div class="thumb"><img src="${esc(img.url)}" alt="${esc(img.label)}"></div>
+      <div class="meta">
+        <span class="tag ${img.warn ? 'warn' : ''}">${esc(img.label)}</span>
+        <p>${esc(img.sub || '')}</p>
+        <a href="${esc(img.url)}" target="_blank" rel="noreferrer">Open Full Image ↗</a>
+      </div>
+    </div>`).join('');
+
+  const linkRows = links.map(l => `
+    <tr class="${l.broken ? 'broken' : ''}">
+      <td><strong>${esc(l.category)}</strong></td>
+      <td><a href="${esc(l.url)}" target="_blank" rel="noreferrer">${esc(l.url)}</a></td>
+      <td>${esc(l.note || '')}</td>
+    </tr>`).join('');
+
+  const findingsList = (lead.aiBrief?.gaps || (lead.auditReport?.findings || []).map(f => `${f.title} — ${f.businessImpact || f.detail || ''}`)).slice(0, 8)
+    .map(g => `<li>${esc(String(g).replace(/^\[Spotted Issue\]\s*/i, ''))}</li>`).join('');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Research &amp; Audit Evidence — ${esc(lead.name || 'Business')}</title>
+<style>
+  body{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f4f8f6;color:#0f172a;margin:0;padding:28px 16px;line-height:1.55}
+  .wrap{max-width:920px;margin:0 auto;display:grid;gap:20px}
+  .hero{background:linear-gradient(135deg,#042e2a,#065f46);color:#fff;padding:28px;border-radius:18px}
+  .hero h1{margin:0 0 6px;font-size:26px}
+  .hero p{margin:0;color:#d1fae5;font-size:14px}
+  .pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .pill{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.24);padding:4px 12px;border-radius:99px;font-size:12px;font-weight:600}
+  .card{background:#fff;border:1px solid #dce8e3;border-radius:16px;padding:22px}
+  .card h2{margin:0 0 12px;font-size:17px;color:#065f46}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
+  .img-card{border:1px solid #e2ece8;border-radius:12px;overflow:hidden;background:#fafcfb}
+  .thumb{height:130px;background:#eef3f1;display:grid;place-items:center;overflow:hidden}
+  .thumb img{width:100%;height:100%;object-fit:cover}
+  .meta{padding:10px 12px;font-size:12px}
+  .meta p{margin:6px 0;color:#475569}
+  .meta a{color:#059669;font-weight:600;text-decoration:none}
+  .tag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700;background:#d1fae5;color:#065f46}
+  .tag.warn{background:#fef3c7;color:#b45309}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #edf3f0;word-break:break-word}
+  th{font-size:11px;text-transform:uppercase;color:#64748b}
+  tr.broken td{background:#fef2f2;color:#991b1b}
+  a{color:#059669}
+  ul{margin:0;padding-left:20px;display:grid;gap:8px;font-size:14px}
+  .foot{text-align:center;font-size:12.5px;color:#64748b;padding:8px}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>Research &amp; Digital Audit Evidence: ${esc(lead.name || 'Client')}</h1>
+      <p>Compiled by ${senderName}${senderService ? ` · ${senderService}` : ''}</p>
+      <div class="pills">
+        ${lead.website ? `<span class="pill">Website: ${esc(lead.website)}</span>` : ''}
+        ${lead.platform ? `<span class="pill">Platform: ${esc(lead.platform)}</span>` : ''}
+        ${score !== undefined ? `<span class="pill">Health Score: ${esc(score)}/100</span>` : ''}
+        ${lead.searchRank ? `<span class="pill">Search Rank: #${esc(lead.searchRank)}</span>` : ''}
+      </div>
+    </section>
+    ${(lead.siteTitle || lead.metaDescription || lead.headings?.length) ? `
+    <section class="card">
+      <h2>1. On-Page Copy &amp; Positioning Reviewed</h2>
+      ${lead.siteTitle ? `<p><strong>Page Title (&lt;title&gt;):</strong> ${esc(lead.siteTitle)}</p>` : ''}
+      ${lead.metaDescription ? `<p><strong>Meta Description:</strong> ${esc(lead.metaDescription)}</p>` : ''}
+      ${lead.headings?.length ? `<p><strong>Key Headings (H1/H2):</strong> ${esc(lead.headings.slice(0, 6).join(' · '))}</p>` : ''}
+      ${lead.techStack?.length ? `<p><strong>Detected Tech Stack:</strong> ${esc(lead.techStack.join(', '))}</p>` : ''}
+    </section>` : ''}
+    ${images.length ? `
+    <section class="card">
+      <h2>2. Visual Assets, Screenshots &amp; Pictures Reviewed (${images.length})</h2>
+      <div class="grid">${imgCards}</div>
+    </section>` : ''}
+    ${links.length ? `
+    <section class="card">
+      <h2>3. Verified Links, Crawled Pages &amp; Sources (${links.length})</h2>
+      <table>
+        <thead><tr><th>Source Type</th><th>Verified URL</th><th>Notes</th></tr></thead>
+        <tbody>${linkRows}</tbody>
+      </table>
+    </section>` : ''}
+    ${findingsList ? `
+    <section class="card">
+      <h2>4. Key Findings &amp; Growth Opportunities</h2>
+      <ul>${findingsList}</ul>
+    </section>` : ''}
+    <div class="foot">Prepared for ${esc(lead.name || 'your team')} by ${senderName}</div>
+  </div>
+</body>
+</html>`;
+}
+
+function makeResearchHtmlAttachment(lead = {}) {
+  const htmlDoc = buildResearchEvidenceHtml(lead);
+  const slug = (lead.name || 'business').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'business';
+  const bytes = new TextEncoder().encode(htmlDoc);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return {
+    filename: `${slug}-research-evidence.html`,
+    mimeType: 'text/html',
+    dataBase64: btoa(binary),
+    size: bytes.length,
+    htmlDoc
+  };
+}
+
+function renderResearchEvidenceSection(lead) {
+  const { images, links } = collectLeadResearchAssets(lead);
+  const wrap = create('section', '', 'evidence-dossier');
+
+  const head = create('div', '', 'heading');
+  head.style.margin = '0';
+  const titleBox = create('div');
+  const titleLine = create('div', '', 'actions');
+  const hlBadge = create('span', '', 'pill');
+  hlBadge.append(iconEl('sparkles', 12), document.createTextNode(`${images.length} Picture${images.length === 1 ? '' : 's'} · ${links.length} Verified Link${links.length === 1 ? '' : 's'}`));
+  titleLine.append(create('h3', 'Highlighted Business Research & Evidence (Used by AI)'), hlBadge);
+  titleBox.append(
+    titleLine,
+    create('p', 'Every picture, crawled page, contact source, and on-page signal below was extracted from this business and fed to the AI — send or attach it anytime a client asks for proof.', 'small')
+  );
+
+  const shareActs = create('div', '', 'actions');
+  if (lead.website && !images.length && !(lead.crawledPages || []).length) {
+    shareActs.append(btnWithIcon('refresh', 'Scan Website for Pictures & Links', async e => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Scanning website…';
+      try {
+        const enriched = await api('/api/enrich', { website: lead.website });
+        lead.scanned = true;
+        applyEnrichmentToItem(lead, enriched);
+        persist();
+        renderBusinessPage();
+        report(`Extracted pictures, links, and signals from ${lead.name}.`);
+      } catch (err) {
+        report(err.message, true);
+        btn.disabled = false;
+        btn.textContent = 'Scan Website for Pictures & Links';
+      }
+    }, 'btn-soft', 13));
+  }
+  shareActs.append(
+    btnWithIcon('mail', 'Attach & Send Research Report', () => {
+      if (!requireTier(2, 'Attach Visual Research Evidence Report', 'Attach visual research reports and files directly in Gmail on Silver (Starter) and above.')) return;
+      const att = makeResearchHtmlAttachment(lead);
+      const defaultSubj = lead.aiBrief?.pitchSubject || `Research & Website Audit Evidence for ${lead.name}`;
+      const defaultBody = lead.aiBrief?.pitchBody ||
+        `Hi ${lead.name} team,\n\nAs promised, I’ve attached the visual Research & Audit Evidence Dossier we compiled while reviewing ${lead.name} (including the pages, links, and visual assets we checked).\n\nLet me know if you’d like to walk through any item together!\n\nBest regards,\n${settings.senderName || currentUser?.name || ''}`;
+      compose(lead, null, null, {
+        subject: defaultSubj,
+        body: defaultBody,
+        attachments: [att]
+      });
+      report(`Attached ${att.filename} to your Gmail draft.`);
+    }, '', 13),
+    btnWithIcon('copy', 'Copy Research Links & Proof', async () => {
+      try {
+        await navigator.clipboard.writeText(buildResearchEvidenceText(lead));
+        report('Copied formatted research documentation & links to clipboard.');
+      } catch {}
+    }, 'btn-soft', 13),
+    btnWithIcon('fileText', 'Download Evidence (.html)', () => {
+      const { filename, htmlDoc } = makeResearchHtmlAttachment(lead);
+      const url = URL.createObjectURL(new Blob([htmlDoc], { type: 'text/html;charset=utf-8' }));
+      const a = create('a');
+      a.href = url;
+      a.download = filename;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      report(`Downloaded ${filename}.`);
+    }, 'btn-soft', 13)
+  );
+  head.append(titleBox, shareActs);
+  wrap.append(head);
+
+  // 1. Highlighted Scraped Copy & Technical Signals Block
+  if (lead.siteTitle || lead.metaDescription || lead.headings?.length || lead.techStack?.length || lead.redditMeta) {
+    const sigBlock = create('div', '', 'evidence-block');
+    const h4 = create('h4');
+    h4.append(iconEl('checkCircle', 14), document.createTextNode('Scraped Positioning, Headings & Tech Signals'));
+    const qGrid = create('div', '', 'evidence-quotes-grid');
+    const addQuote = (lbl, val) => {
+      if (!val) return;
+      const qb = create('div', '', 'evidence-quote-box');
+      qb.append(create('small', lbl), create('div', val));
+      qGrid.append(qb);
+    };
+    if (lead.redditMeta) {
+      addQuote(`Reddit Post (r/${lead.redditMeta.subreddit})`, `${lead.redditMeta.postTitle}${lead.redditMeta.budgetHint ? ` · ${lead.redditMeta.budgetHint}` : ''}`);
+    }
+    addQuote('Website <title>', lead.siteTitle);
+    addQuote('Meta Description', lead.metaDescription || (lead.website ? 'Missing on homepage (flagged by AI)' : ''));
+    if (lead.headings?.length) addQuote('H1 / H2 Headings', lead.headings.slice(0, 4).join(' · '));
+    if (lead.platform || lead.techStack?.length) {
+      addQuote('Platform & Tech Stack', [lead.platform, ...(lead.techStack || [])].filter(Boolean).join(' · '));
+    }
+    if (lead.auditReport?.overallScore !== undefined) {
+      addQuote('Audit Health & Response', `${lead.auditReport.overallScore}/100 Health Score${lead.auditReport.ttfbMs ? ` · ${lead.auditReport.ttfbMs}ms TTFB` : ''}`);
+    }
+    sigBlock.append(h4, qGrid);
+    wrap.append(sigBlock);
+  }
+
+  // 2. Highlighted Pictures & Visual Assets Block
+  const picBlock = create('div', '', 'evidence-block');
+  const picH4 = create('h4');
+  picH4.append(iconEl('camera', 14), document.createTextNode(`Captured Pictures, Logos & Store Visuals (${images.length})`));
+  picBlock.append(picH4);
+  if (images.length) {
+    const mGrid = create('div', '', 'evidence-media-grid');
+    for (const img of images) {
+      const card = create('div', '', 'evidence-img-card');
+      const thumb = create('div', '', 'evidence-img-thumb' + (img.contain ? ' contain' : ''));
+      const imgEl = create('img');
+      imgEl.src = img.url;
+      imgEl.alt = img.label;
+      imgEl.loading = 'lazy';
+      imgEl.onerror = () => { card.style.display = 'none'; };
+      const tag = create('span', img.label, 'evidence-img-tag' + (img.warn ? ' warn' : ''));
+      thumb.append(imgEl, tag);
+
+      const meta = create('div', '', 'evidence-img-meta');
+      meta.append(create('strong', img.label), create('small', img.sub || img.url));
+      const acts = create('div', '', 'evidence-img-acts');
+      const openLink = create('a', 'View ↗');
+      openLink.href = img.url;
+      openLink.target = '_blank';
+      openLink.rel = 'noreferrer';
+      const copyBtn = create('button', 'Copy Link');
+      copyBtn.type = 'button';
+      copyBtn.onclick = async () => {
+        try { await navigator.clipboard.writeText(img.url); report('Copied image link to clipboard.'); } catch {}
+      };
+      acts.append(openLink, copyBtn);
+      meta.append(acts);
+      card.append(thumb, meta);
+      mGrid.append(card);
+    }
+    picBlock.append(mGrid);
+  } else {
+    picBlock.append(create('p', lead.website ? 'Click "Scan Website for Pictures & Links" or "Regenerate AI" to extract visual assets from their site.' : 'No official website linked — no website images available.', 'small'));
+  }
+  wrap.append(picBlock);
+
+  // 3. Highlighted Verified Links & Crawled Pages Block
+  const linkBlock = create('div', '', 'evidence-block');
+  const linkH4 = create('h4');
+  linkH4.append(iconEl('globe', 14), document.createTextNode(`Verified Links, Crawled Pages & Contact Proof (${links.length})`));
+  linkBlock.append(linkH4);
+  if (links.length) {
+    const lGrid = create('div', '', 'evidence-links-list');
+    for (const l of links) {
+      const row = create('div', '', 'evidence-link-item' + (l.broken ? ' broken' : ''));
+      const main = create('div', '', 'evidence-link-main');
+      const catSpan = create('span', `${l.category}${l.note ? ` · ${l.note}` : ''}`);
+      const a = create('a', l.url.replace(/^https?:\/\/(www\.)?/, ''));
+      a.href = l.url;
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      a.title = l.url;
+      main.append(catSpan, a);
+
+      const cp = create('button', '', 'icon-ghost');
+      cp.type = 'button';
+      cp.title = 'Copy URL';
+      cp.append(iconEl('copy', 13));
+      cp.onclick = async () => {
+        try { await navigator.clipboard.writeText(l.url); report(`Copied ${l.url}`); } catch {}
+      };
+      row.append(main, cp);
+      lGrid.append(row);
+    }
+    linkBlock.append(lGrid);
+  } else {
+    linkBlock.append(create('p', 'No external links recorded for this lead yet.', 'small'));
+  }
+  wrap.append(linkBlock);
+
+  return wrap;
+}
+
 function getPersonaSettingsPayload() {
   return {
     persona: settings.persona || 'web_dev',
@@ -840,10 +1264,21 @@ function applyEnrichmentToItem(item, found) {
   if (Array.isArray(found.emails) && found.emails.length) {
     item.emails = [...new Set([...(item.emails || []), ...found.emails])];
   }
-  for (const fieldName of ['logoUrl', 'facebook', 'instagram', 'twitter', 'linkedin', 'youtube', 'tiktok', 'siteTitle', 'metaDescription', 'aboutSummary', 'platform']) {
+  for (const fieldName of ['logoUrl', 'ogImage', 'contactPage', 'contactFormSource', 'phoneSource', 'robotsTxtUrl', 'sitemapXmlUrl', 'facebook', 'instagram', 'twitter', 'linkedin', 'youtube', 'tiktok', 'siteTitle', 'metaDescription', 'aboutSummary', 'platform']) {
     if (found[fieldName] && !item[fieldName]) item[fieldName] = found[fieldName];
   }
   if (found.logoUrl) item.logoUrl = found.logoUrl;
+  if (found.ogImage) item.ogImage = found.ogImage;
+  if (Array.isArray(found.siteImages) && found.siteImages.length) item.siteImages = found.siteImages;
+  if (Array.isArray(found.keyLinks) && found.keyLinks.length) item.keyLinks = found.keyLinks;
+  if (Array.isArray(found.crawledPages) && found.crawledPages.length) item.crawledPages = found.crawledPages;
+  if (typeof found.robotsTxtOk === 'boolean') item.robotsTxtOk = found.robotsTxtOk;
+  if (typeof found.sitemapXmlOk === 'boolean') item.sitemapXmlOk = found.sitemapXmlOk;
+  if (Array.isArray(found.brokenLinks)) item.brokenLinks = found.brokenLinks;
+  if (Array.isArray(found.brokenAssets)) item.brokenAssets = found.brokenAssets;
+  if (found.emailSources && typeof found.emailSources === 'object') {
+    item.emailSources = { ...(item.emailSources || {}), ...found.emailSources };
+  }
   if (found.platform && found.platform !== 'Custom / Website') {
     item.platform = found.platform;
   }
@@ -2935,7 +3370,7 @@ function renderBusinessPage() {
         btn.disabled = true;
         btn.textContent = 'Generating with AI…';
         try {
-          if (lead.website && (!lead.aboutSummary || !lead.auditReport)) {
+          if (lead.website && (!lead.aboutSummary || !lead.auditReport || !Array.isArray(lead.crawledPages))) {
             try {
               const enriched = await api('/api/enrich', { website: lead.website });
               lead.scanned = true;
@@ -2943,6 +3378,7 @@ function renderBusinessPage() {
             } catch {}
           }
           const aiRes = await api('/api/analyze', { lead, userIssues, extraContext, senderSettings: getPersonaSettingsPayload() });
+          if (aiRes.enrichedData) applyEnrichmentToItem(lead, aiRes.enrichedData);
           if (aiRes.auditReport && !lead.auditReport) lead.auditReport = aiRes.auditReport;
           lead.aiBrief = aiRes;
           persist();
@@ -2974,7 +3410,7 @@ function renderBusinessPage() {
         }
       }
       aiHeader.append(aiTitleWrap, genBtn);
-      aiCard.append(aiHeader, issuesBox);
+      aiCard.append(aiHeader, issuesBox, renderResearchEvidenceSection(lead));
 
       if (lead.aiBrief) {
         const ovSec = create('div', '', 'ai-section');
@@ -3648,7 +4084,17 @@ function renderInbox() {
       replyBox.focus();
       report(`Loaded 4-phase Solution Pack proposal for ${lead.name} into reply box.`);
     }, 'btn-soft', 13);
-    chipsRow.append(loadSolutionBtn);
+    const attachProofBtn = btnWithIcon('fileText', 'Attach Research Proof', () => {
+      if (!requireTier(2, 'Attach Visual Research Evidence Report', 'Attach visual research reports and files directly in Gmail on Silver (Starter) and above.')) return;
+      const att = makeResearchHtmlAttachment(lead);
+      replyAtts.addFilePayload(att);
+      if (!replyBox.value.trim()) {
+        replyBox.value = `Hi ${lead.name} team,\n\nI’ve attached our visual Research & Audit Evidence report (${att.filename}) showing the exact pages, links, and visuals we reviewed on your site.\n\nLet me know if you have any questions!\n\nBest,\n${settings.senderName || currentUser?.name || ''}`;
+      }
+      replyBox.focus();
+      report(`Attached ${att.filename} to reply.`);
+    }, 'btn-soft', 13);
+    chipsRow.append(loadSolutionBtn, attachProofBtn);
 
     const inputRow = create('div', '', 'reply-input-row');
     const replyBox = create('textarea');
@@ -4825,6 +5271,18 @@ function createAttachmentPicker() {
   return {
     el: box,
     getAttachments: () => attached.map(({ filename, mimeType, dataBase64 }) => ({ filename, mimeType, dataBase64 })),
+    addFilePayload: ({ filename, mimeType, dataBase64, size }) => {
+      if (attached.length >= 5) return false;
+      attached.push({
+        filename,
+        mimeType,
+        size: size || Math.round((dataBase64.length * 3) / 4),
+        dataBase64,
+        previewUrl: mimeType.startsWith('image/') ? `data:${mimeType};base64,${dataBase64}` : ''
+      });
+      renderChips();
+      return true;
+    },
     clear: () => { attached.length = 0; renderChips(); }
   };
 }
@@ -4921,6 +5379,9 @@ function compose(lead, conversation, parent, customPitch = null) {
   const body = field('Message', 'body', customPitch?.body || interpolateTemplate(defaultTpl?.body || '', lead), { type: 'textarea', required: true, maxLength: 16000 });
   body.lastChild.style.minHeight = '190px';
   const picker = createAttachmentPicker();
+  if (Array.isArray(customPitch?.attachments)) {
+    for (const att of customPitch.attachments) picker.addFilePayload(att);
+  }
   tplSelect.onchange = () => {
     const chosen = settings.templates.find(t => t.id === tplSelect.value);
     if (!chosen) return;

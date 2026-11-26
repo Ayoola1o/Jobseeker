@@ -2724,13 +2724,54 @@ export function extractWebsiteInsights(html = '', urlStr = '') {
     html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
     html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
 
+  const ogImage = resolveAsset(ogImgMatch?.[1]) || '';
   const logoUrl =
     resolveAsset(appleIconMatch?.[1]) ||
     resolveAsset(jsonLdLogoMatch?.[1] || jsonLdLogoMatch?.[2]) ||
     resolveAsset(imgLogoMatch?.[1]) ||
     resolveAsset(faviconMatch?.[1]) ||
-    resolveAsset(ogImgMatch?.[1]) ||
+    ogImage ||
     '';
+
+  // Extract up to 6 meaningful website images (hero banners, portfolio/product photos, content visuals)
+  const siteImages = [];
+  const seenImgUrls = new Set([logoUrl, ogImage].filter(Boolean));
+  for (const imgTagMatch of html.matchAll(/<img\b([^>]+)>/gi)) {
+    const attrs = imgTagMatch[1] || '';
+    const rawSrc = attrs.match(/\b(?:src|data-src|data-lazy-src)\s*=\s*["']([^"']+)["']/i)?.[1] || '';
+    const resolved = resolveAsset(rawSrc);
+    if (!resolved || seenImgUrls.has(resolved)) continue;
+    if (/(1x1|pixel|spacer|blank\.gif|gravatar|wp-smiley|emoji|\.svg(?:\?|$)|badge|icon[-_])/i.test(resolved)) continue;
+    const widthAttr = Number(attrs.match(/\bwidth\s*=\s*["']?(\d+)/i)?.[1] || 0);
+    const heightAttr = Number(attrs.match(/\bheight\s*=\s*["']?(\d+)/i)?.[1] || 0);
+    if ((widthAttr > 0 && widthAttr < 48) || (heightAttr > 0 && heightAttr < 48)) continue;
+    const altRaw = attrs.match(/\balt\s*=\s*["']([^"']*)["']/i)?.[1];
+    const alt = decodeHtmlEntities((altRaw || '').replace(/\s+/g, ' ').trim()).slice(0, 120);
+    seenImgUrls.add(resolved);
+    siteImages.push({
+      url: resolved,
+      alt: alt || '',
+      missingAlt: !alt
+    });
+    if (siteImages.length >= 6) break;
+  }
+
+  // Extract up to 8 key navigation / action links on the website
+  const keyLinks = [];
+  const seenLinkUrls = new Set();
+  for (const aMatch of html.matchAll(/<a\b[^>]*href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+    const rawHref = aMatch[1];
+    const label = decodeHtmlEntities(aMatch[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 60);
+    if (!label || label.length < 2) continue;
+    try {
+      const u = new URL(rawHref, urlStr || 'https://example.com');
+      if (!['http:', 'https:'].includes(u.protocol) || seenLinkUrls.has(u.href)) continue;
+      if (/(javascript:|mailto:|tel:|facebook\.com|instagram\.com|twitter\.com|x\.com|linkedin\.com|tiktok\.com|youtube\.com)/i.test(u.href)) continue;
+      seenLinkUrls.add(u.href);
+      keyLinks.push({ label, url: u.href });
+      if (keyLinks.length >= 8) break;
+    } catch {}
+  }
 
   const { platform, techStack, shopifyMeta, platformEvidence, platformConfidence } = detectPlatformAndTech(html, urlStr);
 
@@ -2747,6 +2788,9 @@ export function extractWebsiteInsights(html = '', urlStr = '') {
     siteTitle,
     brandName,
     logoUrl,
+    ogImage,
+    siteImages,
+    keyLinks,
     metaDescription,
     headings,
     aboutSummary,
@@ -2773,7 +2817,9 @@ async function fetchShopifyProducts(originUrl) {
       title: String(p.title || '').slice(0, 100),
       type: String(p.product_type || '').slice(0, 60),
       vendor: String(p.vendor || '').slice(0, 60),
-      price: String(p.variants?.[0]?.price || '')
+      price: String(p.variants?.[0]?.price || ''),
+      image: String(p.images?.[0]?.src || ''),
+      url: p.handle ? new URL('/products/' + p.handle, originUrl).href : ''
     })).filter(p => p.title);
   } catch {
     return [];
@@ -2850,6 +2896,7 @@ async function fetchWebsiteEmails(websiteUrl) {
     shopifyProducts = await fetchShopifyProducts(base.origin);
   }
 
+  const crawledPages = homepageHtml ? [base.href] : [];
   if (homepageHtml) {
     const subLinks = [...homepageHtml.matchAll(/href\s*=\s*["']([^"'#]+)["']/gi)]
       .map(match => match[1])
@@ -2873,6 +2920,7 @@ async function fetchWebsiteEmails(websiteUrl) {
     for (const subHref of uniqueSubUrls) {
       try {
         const subHtml = await fetchHtml(subHref);
+        if (subHtml) crawledPages.push(subHref);
         collectContactDetails(subHtml, subHref);
         if (subHtml && /contact|get-in-touch|reach-us|impressum/i.test(subHref)) contactPage ||= subHref;
         for (const email of extractEmailsFromHtml(subHtml, base.hostname)) {
@@ -2986,6 +3034,16 @@ async function fetchWebsiteEmails(websiteUrl) {
     website: base.href,
     brandName: insights.brandName || insights.siteTitle?.split(/[|\-–—]/)[0]?.trim() || base.hostname.replace(/^www\./, ''),
     logoUrl: insights.logoUrl || '',
+    ogImage: insights.ogImage || '',
+    siteImages: insights.siteImages || [],
+    keyLinks: insights.keyLinks || [],
+    crawledPages,
+    robotsTxtUrl: new URL('/robots.txt', base.origin).href,
+    robotsTxtOk,
+    sitemapXmlUrl: new URL('/sitemap.xml', base.origin).href,
+    sitemapXmlOk,
+    brokenLinks,
+    brokenAssets,
     emails: rankedEmails,
     emailSources,
     contactPage,
@@ -3898,15 +3956,16 @@ export async function handleRequest(req, res) {
         fail(403, 'Custom AI instructions & prompt refinement require the Gold (Pro) plan or higher.');
       }
       let enrichedLead = { ...lead };
-      if (enrichedLead.website && !enrichedLead.auditReport) {
+      let combedSnapshot = null;
+      if (enrichedLead.website && (!enrichedLead.auditReport || !Array.isArray(enrichedLead.crawledPages))) {
         try {
-          const combed = await fetchWebsiteEmails(enrichedLead.website);
+          combedSnapshot = await fetchWebsiteEmails(enrichedLead.website);
           enrichedLead = {
             ...enrichedLead,
-            ...combed,
-            name: enrichedLead.name || combed.brandName,
-            email: enrichedLead.email || combed.email,
-            phone: enrichedLead.phone || combed.phone
+            ...combedSnapshot,
+            name: enrichedLead.name || combedSnapshot.brandName,
+            email: enrichedLead.email || combedSnapshot.email,
+            phone: enrichedLead.phone || combedSnapshot.phone
           };
         } catch {}
       }
@@ -3929,7 +3988,8 @@ export async function handleRequest(req, res) {
       );
       return json({
         ...brief,
-        auditReport: enrichedLead.auditReport || null
+        auditReport: enrichedLead.auditReport || null,
+        enrichedData: combedSnapshot
       });
     }
     if (req.method === 'POST' && path === '/api/send') {

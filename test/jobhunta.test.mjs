@@ -601,3 +601,32 @@ test('Bing RSS, DuckDuckGo Lite, Platform Footprints, Reddit Buyer Filter, and G
   assert.equal(ownerPain.intentType, 'Business Pain Point');
   assert.equal(ownerPain.externalWebsite, 'https://nordicgear.shop');
 });
+
+test('extractWebsiteInsights captures ogImage, siteImages with missing-alt flags, and keyLinks for AI Research Evidence', () => {
+  const sampleHtml = `
+    <html>
+      <head>
+        <title>Bright Smile Dental | Austin TX</title>
+        <meta property="og:image" content="https://brightsmile.example/assets/social-share.jpg">
+        <link rel="apple-touch-icon" href="/apple-icon.png">
+      </head>
+      <body>
+        <h1>Modern Cosmetic Dentistry in Austin</h1>
+        <a href="/book-online">Book Appointment</a>
+        <a href="/pricing">Services & Pricing</a>
+        <img src="/images/clinic-hero.jpg" alt="Bright Smile Reception">
+        <img src="/images/before-after.jpg">
+        <img src="/images/pixel.gif" width="1" height="1">
+      </body>
+    </html>
+  `;
+  const info = extractWebsiteInsights(sampleHtml, 'https://brightsmile.example');
+  assert.equal(info.logoUrl, 'https://brightsmile.example/apple-icon.png');
+  assert.equal(info.ogImage, 'https://brightsmile.example/assets/social-share.jpg');
+  assert.equal(info.siteImages.length, 2);
+  assert.equal(info.siteImages[0].url, 'https://brightsmile.example/images/clinic-hero.jpg');
+  assert.equal(info.siteImages[0].missingAlt, false);
+  assert.equal(info.siteImages[1].url, 'https://brightsmile.example/images/before-after.jpg');
+  assert.equal(info.siteImages[1].missingAlt, true);
+  assert.ok(info.keyLinks.some(l => l.url === 'https://brightsmile.example/book-online' && l.label === 'Book Appointment'));
+});
