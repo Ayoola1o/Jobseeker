@@ -539,8 +539,139 @@ function makeResearchHtmlAttachment(lead = {}) {
   };
 }
 
-function renderResearchEvidenceSection(lead) {
+function getSelectedEvidenceForLead(lead = {}) {
   const { images, links } = collectLeadResearchAssets(lead);
+  const selectedImgUrls = Array.isArray(lead.selectedProofImages)
+    ? lead.selectedProofImages
+    : images.slice(0, 3).map(i => i.url);
+  const selectedLinkUrls = Array.isArray(lead.selectedProofLinks)
+    ? lead.selectedProofLinks
+    : links.slice(0, 6).map(l => l.url);
+
+  const chosenImages = images.filter(i => selectedImgUrls.includes(i.url));
+  const chosenLinks = links.filter(l => selectedLinkUrls.includes(l.url));
+  return { images, links, chosenImages, chosenLinks, selectedImgUrls, selectedLinkUrls };
+}
+
+function makeSolutionPackAttachment(lead = {}) {
+  const { persona, addedTools } = getCurrentPersonaState();
+  if (isSolutionPackStale(lead.solutionPack, persona, addedTools)) {
+    lead.solutionPack = generateLeadSolutionPack(lead, settings, getUserTierLevel());
+  }
+  const htmlDoc = buildSolutionPackHtml(lead.solutionPack, lead, settings);
+  const slug = (lead.name || 'business').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'business';
+  const bytes = new TextEncoder().encode(htmlDoc);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return {
+    filename: `${slug}-4-phase-solution-pack.html`,
+    mimeType: 'text/html',
+    dataBase64: btoa(binary),
+    size: bytes.length
+  };
+}
+
+function buildRichHtmlEmailWithEvidence(plainBody = '', lead = {}, includeProofCard = true) {
+  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const linkify = escapedText => escapedText.replace(/(https?:\/\/[^\s<)]+)/g, '<a href="$1" style="color:#059669;font-weight:600">$1</a>');
+  const paragraphsHtml = String(plainBody || '')
+    .split(/\n{2,}/)
+    .map(block => `<p style="margin:0 0 14px;white-space:pre-line">${linkify(esc(block))}</p>`)
+    .join('');
+
+  if (!includeProofCard) {
+    return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14.5px;line-height:1.6;color:#0f172a;max-width:680px">${paragraphsHtml}</div>`;
+  }
+
+  const { chosenImages, chosenLinks } = getSelectedEvidenceForLead(lead);
+  const score = lead.auditReport?.overallScore;
+  const imgRow = chosenImages.slice(0, 3).map(img => `
+    <td style="width:33%;padding:4px;vertical-align:top">
+      <div style="border:1px solid #dce8e3;border-radius:10px;overflow:hidden;background:#ffffff">
+        <a href="${esc(img.url)}" target="_blank" style="display:block;text-decoration:none">
+          <img src="${esc(img.url)}" alt="${esc(img.label)}" style="width:100%;height:96px;object-fit:cover;display:block;background:#f1f5f9">
+        </a>
+        <div style="padding:6px 8px;font-size:11px;color:#334155">
+          <strong style="display:block;color:#065f46">${esc(img.label)}</strong>
+          <span>${esc((img.sub || '').slice(0, 56))}</span>
+        </div>
+      </div>
+    </td>`).join('');
+
+  const linkItems = chosenLinks.slice(0, 7).map(l =>
+    `<li style="margin:0 0 5px"><strong>${esc(l.category)}:</strong> <a href="${esc(l.url)}" style="color:#059669">${esc(l.url)}</a>${l.note ? ` <span style="color:#64748b">(${esc(l.note)})</span>` : ''}</li>`
+  ).join('');
+
+  const appendix = (imgRow || linkItems) ? `
+    <div style="margin-top:22px;border:1px solid #b7ebd3;border-radius:14px;background:#f4fbf8;padding:16px 18px">
+      <div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#065f46;margin-bottom:8px">
+        Verified Research &amp; Audit Proof — ${esc(lead.name || 'Website Review')}${score !== undefined ? ` (Health Score: ${esc(score)}/100)` : ''}
+      </div>
+      ${imgRow ? `<table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:10px"><tr>${imgRow}</tr></table>` : ''}
+      ${linkItems ? `<div style="font-size:12.5px;color:#1e293b"><strong>Pages &amp; Sources Checked:</strong><ul style="margin:6px 0 0;padding-left:18px">${linkItems}</ul></div>` : ''}
+    </div>` : '';
+
+  return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14.5px;line-height:1.6;color:#0f172a;max-width:680px">${paragraphsHtml}${appendix}</div>`;
+}
+
+async function launchComposeWithFullAiBundle(lead, triggerBtn = null, overridePitch = null) {
+  if (!requireTier(2, 'Send AI Email with Attached Research Docs & Pictures', 'Attach visual research dossiers, captured site pictures, and clickable link proof directly in Gmail on Silver (Starter) and above.')) {
+    return;
+  }
+  const origLabel = triggerBtn ? [...triggerBtn.childNodes] : null;
+  if (triggerBtn) {
+    triggerBtn.disabled = true;
+    triggerBtn.textContent = 'Bundling docs, pictures & links…';
+  }
+  try {
+    if (lead.website && !(lead.crawledPages || []).length && !(lead.siteImages || []).length) {
+      try {
+        const enriched = await api('/api/enrich', { website: lead.website });
+        lead.scanned = true;
+        applyEnrichmentToItem(lead, enriched);
+        persist();
+      } catch {}
+    }
+    const { chosenImages, chosenLinks } = getSelectedEvidenceForLead(lead);
+    const bundledAttachments = [makeResearchHtmlAttachment(lead)];
+
+    if (chosenImages.length) {
+      try {
+        const imgRes = await api('/api/evidence-assets', {
+          items: chosenImages.slice(0, 3).map(i => ({ url: i.url, label: i.label }))
+        });
+        for (const att of imgRes.attachments || []) {
+          if (bundledAttachments.length < 5) bundledAttachments.push(att);
+        }
+      } catch {}
+    }
+
+    const baseSubj = overridePitch?.subject || lead.aiBrief?.pitchSubject || `Audit Report & Research Documentation for ${lead.name}`;
+    let baseBody = overridePitch?.body || lead.aiBrief?.pitchBody ||
+      `Hi ${lead.name} team,\n\nI’ve put together a detailed review of ${lead.name} along with our visual Research & Audit Documentation attached to this email.\n\nBest regards,\n${settings.senderName || currentUser?.name || ''}`;
+
+    if (chosenLinks.length && !/VERIFIED PAGES & LINKS REVIEWED:/i.test(baseBody)) {
+      const linksSnippet = chosenLinks.slice(0, 5).map(l => `• ${l.category}: ${l.url}${l.note ? ` (${l.note})` : ''}`).join('\n');
+      baseBody = `${baseBody.trim()}\n\nVERIFIED PAGES & LINKS REVIEWED:\n${linksSnippet}\n\n(Attached: Visual Research & Audit Dossier${bundledAttachments.length > 1 ? ` + ${bundledAttachments.length - 1} captured site image(s)` : ''})`;
+    }
+
+    compose(lead, null, null, {
+      subject: baseSubj,
+      body: baseBody,
+      attachments: bundledAttachments,
+      richProofDefault: true
+    });
+    report(`Prepared Gmail draft with ${bundledAttachments.length} attachment(s) (Research Document + captured pictures & links).`);
+  } finally {
+    if (triggerBtn && origLabel) {
+      triggerBtn.disabled = false;
+      triggerBtn.replaceChildren(...origLabel);
+    }
+  }
+}
+
+function renderResearchEvidenceSection(lead) {
+  const { images, links, chosenImages, chosenLinks, selectedImgUrls, selectedLinkUrls } = getSelectedEvidenceForLead(lead);
   const wrap = create('section', '', 'evidence-dossier');
 
   const head = create('div', '', 'heading');
@@ -548,11 +679,11 @@ function renderResearchEvidenceSection(lead) {
   const titleBox = create('div');
   const titleLine = create('div', '', 'actions');
   const hlBadge = create('span', '', 'pill');
-  hlBadge.append(iconEl('sparkles', 12), document.createTextNode(`${images.length} Picture${images.length === 1 ? '' : 's'} · ${links.length} Verified Link${links.length === 1 ? '' : 's'}`));
+  hlBadge.append(iconEl('sparkles', 12), document.createTextNode(`${chosenImages.length}/${images.length} Picture${images.length === 1 ? '' : 's'} · ${chosenLinks.length}/${links.length} Link${links.length === 1 ? '' : 's'} Selected`));
   titleLine.append(create('h3', 'Highlighted Business Research & Evidence (Used by AI)'), hlBadge);
   titleBox.append(
     titleLine,
-    create('p', 'Every picture, crawled page, contact source, and on-page signal below was extracted from this business and fed to the AI — send or attach it anytime a client asks for proof.', 'small')
+    create('p', 'Check or uncheck any picture or link below — click "Bundle & Send Docs, Pictures + Links" to attach the Research Document, real picture files, and verified links directly to your outgoing email.', 'small')
   );
 
   const shareActs = create('div', '', 'actions');
@@ -567,7 +698,7 @@ function renderResearchEvidenceSection(lead) {
         applyEnrichmentToItem(lead, enriched);
         persist();
         renderBusinessPage();
-        report(`Extracted pictures, links, and signals from ${lead.name}.`);
+        report(`Extracted pictures, links, and technical signals from ${lead.name}.`);
       } catch (err) {
         report(err.message, true);
         btn.disabled = false;
@@ -576,19 +707,7 @@ function renderResearchEvidenceSection(lead) {
     }, 'btn-soft', 13));
   }
   shareActs.append(
-    btnWithIcon('mail', 'Attach & Send Research Report', () => {
-      if (!requireTier(2, 'Attach Visual Research Evidence Report', 'Attach visual research reports and files directly in Gmail on Silver (Starter) and above.')) return;
-      const att = makeResearchHtmlAttachment(lead);
-      const defaultSubj = lead.aiBrief?.pitchSubject || `Research & Website Audit Evidence for ${lead.name}`;
-      const defaultBody = lead.aiBrief?.pitchBody ||
-        `Hi ${lead.name} team,\n\nAs promised, I’ve attached the visual Research & Audit Evidence Dossier we compiled while reviewing ${lead.name} (including the pages, links, and visual assets we checked).\n\nLet me know if you’d like to walk through any item together!\n\nBest regards,\n${settings.senderName || currentUser?.name || ''}`;
-      compose(lead, null, null, {
-        subject: defaultSubj,
-        body: defaultBody,
-        attachments: [att]
-      });
-      report(`Attached ${att.filename} to your Gmail draft.`);
-    }, '', 13),
+    btnWithIcon('mail', 'Bundle & Send Docs, Pictures + Links', e => launchComposeWithFullAiBundle(lead, e.currentTarget), '', 13),
     btnWithIcon('copy', 'Copy Research Links & Proof', async () => {
       try {
         await navigator.clipboard.writeText(buildResearchEvidenceText(lead));
@@ -611,11 +730,11 @@ function renderResearchEvidenceSection(lead) {
   head.append(titleBox, shareActs);
   wrap.append(head);
 
-  // 1. Highlighted Scraped Copy & Technical Signals Block
-  if (lead.siteTitle || lead.metaDescription || lead.headings?.length || lead.techStack?.length || lead.redditMeta) {
+  // 1. Highlighted Scraped Copy & Deep Technical Signals Block
+  if (lead.siteTitle || lead.metaDescription || lead.headings?.length || lead.techStack?.length || lead.redditMeta || lead.schemaTypes?.length || lead.ctaButtons?.length || lead.serverMeta) {
     const sigBlock = create('div', '', 'evidence-block');
     const h4 = create('h4');
-    h4.append(iconEl('checkCircle', 14), document.createTextNode('Scraped Positioning, Headings & Tech Signals'));
+    h4.append(iconEl('checkCircle', 14), document.createTextNode('Documented Positioning, Schema, CTAs & Server Telemetry'));
     const qGrid = create('div', '', 'evidence-quotes-grid');
     const addQuote = (lbl, val) => {
       if (!val) return;
@@ -629,25 +748,36 @@ function renderResearchEvidenceSection(lead) {
     addQuote('Website <title>', lead.siteTitle);
     addQuote('Meta Description', lead.metaDescription || (lead.website ? 'Missing on homepage (flagged by AI)' : ''));
     if (lead.headings?.length) addQuote('H1 / H2 Headings', lead.headings.slice(0, 4).join(' · '));
+    if (lead.ctaButtons?.length) addQuote('CTA Buttons Found', lead.ctaButtons.join(' · '));
+    if (lead.website) addQuote('Schema.org JSON-LD', lead.schemaTypes?.length ? lead.schemaTypes.join(', ') : 'No JSON-LD structured schema detected');
     if (lead.platform || lead.techStack?.length) {
       addQuote('Platform & Tech Stack', [lead.platform, ...(lead.techStack || [])].filter(Boolean).join(' · '));
     }
-    if (lead.auditReport?.overallScore !== undefined) {
-      addQuote('Audit Health & Response', `${lead.auditReport.overallScore}/100 Health Score${lead.auditReport.ttfbMs ? ` · ${lead.auditReport.ttfbMs}ms TTFB` : ''}`);
+    if (lead.auditReport?.overallScore !== undefined || lead.serverMeta) {
+      const sm = lead.serverMeta || {};
+      const secFlags = [sm.hasHsts && 'HSTS', sm.hasCsp && 'CSP', sm.hasXFrameOptions && 'X-Frame'].filter(Boolean);
+      addQuote(
+        'HTTP & Security Telemetry',
+        `${lead.auditReport?.overallScore !== undefined ? `${lead.auditReport.overallScore}/100 Health · ` : ''}${sm.ttfbMs || lead.auditReport?.ttfbMs ? `${sm.ttfbMs || lead.auditReport?.ttfbMs}ms TTFB · ` : ''}${secFlags.length ? `Headers: ${secFlags.join(', ')}` : 'Missing HSTS/CSP headers'}`
+      );
+    }
+    if (lead.blockingScriptUrls?.length) {
+      addQuote('Render-Blocking <head> Scripts', `${lead.blockingScriptUrls.length} script(s): ${lead.blockingScriptUrls.map(u => u.split('/').pop()?.split('?')[0] || u).slice(0, 3).join(', ')}`);
     }
     sigBlock.append(h4, qGrid);
     wrap.append(sigBlock);
   }
 
-  // 2. Highlighted Pictures & Visual Assets Block
+  // 2. Selectable Highlighted Pictures & Visual Assets Block
   const picBlock = create('div', '', 'evidence-block');
   const picH4 = create('h4');
-  picH4.append(iconEl('camera', 14), document.createTextNode(`Captured Pictures, Logos & Store Visuals (${images.length})`));
+  picH4.append(iconEl('camera', 14), document.createTextNode(`Captured Pictures, Logos & Store Visuals (${images.length} — check up to 3 to attach as files)`));
   picBlock.append(picH4);
   if (images.length) {
     const mGrid = create('div', '', 'evidence-media-grid');
     for (const img of images) {
-      const card = create('div', '', 'evidence-img-card');
+      const isSelected = selectedImgUrls.includes(img.url);
+      const card = create('div', '', 'evidence-img-card' + (isSelected ? ' selected' : ''));
       const thumb = create('div', '', 'evidence-img-thumb' + (img.contain ? ' contain' : ''));
       const imgEl = create('img');
       imgEl.src = img.url;
@@ -658,7 +788,29 @@ function renderResearchEvidenceSection(lead) {
       thumb.append(imgEl, tag);
 
       const meta = create('div', '', 'evidence-img-meta');
-      meta.append(create('strong', img.label), create('small', img.sub || img.url));
+      const selLabel = create('label', '', 'evidence-select-row');
+      const selCb = create('input');
+      selCb.type = 'checkbox';
+      selCb.checked = isSelected;
+      selCb.onchange = () => {
+        const next = new Set(Array.isArray(lead.selectedProofImages) ? lead.selectedProofImages : selectedImgUrls);
+        if (selCb.checked) {
+          if (next.size >= 3) {
+            selCb.checked = false;
+            report('Select up to 3 pictures per email so attachments stay fast and lightweight.', true);
+            return;
+          }
+          next.add(img.url);
+        } else {
+          next.delete(img.url);
+        }
+        lead.selectedProofImages = [...next];
+        persist();
+        renderBusinessPage();
+      };
+      selLabel.append(selCb, document.createTextNode('Attach to Email'));
+
+      meta.append(selLabel, create('strong', img.label), create('small', img.sub || img.url));
       const acts = create('div', '', 'evidence-img-acts');
       const openLink = create('a', 'View ↗');
       openLink.href = img.url;
@@ -680,15 +832,30 @@ function renderResearchEvidenceSection(lead) {
   }
   wrap.append(picBlock);
 
-  // 3. Highlighted Verified Links & Crawled Pages Block
+  // 3. Selectable Highlighted Verified Links & Crawled Pages Block
   const linkBlock = create('div', '', 'evidence-block');
   const linkH4 = create('h4');
-  linkH4.append(iconEl('globe', 14), document.createTextNode(`Verified Links, Crawled Pages & Contact Proof (${links.length})`));
+  linkH4.append(iconEl('globe', 14), document.createTextNode(`Verified Links, Crawled Pages & Contact Proof (${links.length} — check to include in email)`));
   linkBlock.append(linkH4);
   if (links.length) {
     const lGrid = create('div', '', 'evidence-links-list');
     for (const l of links) {
-      const row = create('div', '', 'evidence-link-item' + (l.broken ? ' broken' : ''));
+      const isSelected = selectedLinkUrls.includes(l.url);
+      const row = create('div', '', 'evidence-link-item' + (l.broken ? ' broken' : '') + (isSelected ? ' selected' : ''));
+      const cb = create('input');
+      cb.type = 'checkbox';
+      cb.checked = isSelected;
+      cb.title = 'Include this link in email proof';
+      cb.style.cssText = 'width:15px;height:15px;margin:0;accent-color:var(--green);flex-shrink:0;cursor:pointer';
+      cb.onchange = () => {
+        const next = new Set(Array.isArray(lead.selectedProofLinks) ? lead.selectedProofLinks : selectedLinkUrls);
+        if (cb.checked) next.add(l.url);
+        else next.delete(l.url);
+        lead.selectedProofLinks = [...next];
+        persist();
+        renderBusinessPage();
+      };
+
       const main = create('div', '', 'evidence-link-main');
       const catSpan = create('span', `${l.category}${l.note ? ` · ${l.note}` : ''}`);
       const a = create('a', l.url.replace(/^https?:\/\/(www\.)?/, ''));
@@ -705,7 +872,7 @@ function renderResearchEvidenceSection(lead) {
       cp.onclick = async () => {
         try { await navigator.clipboard.writeText(l.url); report(`Copied ${l.url}`); } catch {}
       };
-      row.append(main, cp);
+      row.append(cb, main, cp);
       lGrid.append(row);
     }
     linkBlock.append(lGrid);
@@ -1271,6 +1438,10 @@ function applyEnrichmentToItem(item, found) {
   if (found.ogImage) item.ogImage = found.ogImage;
   if (Array.isArray(found.siteImages) && found.siteImages.length) item.siteImages = found.siteImages;
   if (Array.isArray(found.keyLinks) && found.keyLinks.length) item.keyLinks = found.keyLinks;
+  if (Array.isArray(found.schemaTypes) && found.schemaTypes.length) item.schemaTypes = found.schemaTypes;
+  if (Array.isArray(found.ctaButtons) && found.ctaButtons.length) item.ctaButtons = found.ctaButtons;
+  if (Array.isArray(found.blockingScriptUrls) && found.blockingScriptUrls.length) item.blockingScriptUrls = found.blockingScriptUrls;
+  if (found.serverMeta && typeof found.serverMeta === 'object') item.serverMeta = found.serverMeta;
   if (Array.isArray(found.crawledPages) && found.crawledPages.length) item.crawledPages = found.crawledPages;
   if (typeof found.robotsTxtOk === 'boolean') item.robotsTxtOk = found.robotsTxtOk;
   if (typeof found.sitemapXmlOk === 'boolean') item.sitemapXmlOk = found.sitemapXmlOk;
@@ -3467,10 +3638,17 @@ function renderBusinessPage() {
 
         const pitchActions = create('div', '', 'dossier-action-grid');
         pitchActions.append(
-          btnWithIcon('mail', 'Use this email & Attach Files / Send', () => {
+          btnWithIcon('mail', 'Send Email + Attach Docs, Pictures & Links', e => {
+            savePitchEdits();
+            launchComposeWithFullAiBundle(lead, e.currentTarget, {
+              subject: lead.aiBrief.pitchSubject,
+              body: lead.aiBrief.pitchBody
+            });
+          }),
+          btnWithIcon('send', 'Send Plain Email Only', () => {
             savePitchEdits();
             compose(lead, null, null, { subject: lead.aiBrief.pitchSubject, body: lead.aiBrief.pitchBody });
-          }),
+          }, 'btn-soft'),
           btnWithIcon('copy', 'Copy Edited Email', async () => {
             savePitchEdits();
             try {
@@ -5382,6 +5560,72 @@ function compose(lead, conversation, parent, customPitch = null) {
   if (Array.isArray(customPitch?.attachments)) {
     for (const att of customPitch.attachments) picker.addFilePayload(att);
   }
+
+  // AI Research Proof, Pictures & Documents Quick-Bundle Bar inside Composer
+  const proofBar = create('div', '', 'composer-proof-bar');
+  const proofHead = create('div', '', 'composer-proof-head');
+  const richCbLabel = create('label', '', 'evidence-select-row');
+  const richCb = create('input');
+  richCb.type = 'checkbox';
+  richCb.checked = Boolean(customPitch?.richProofDefault);
+  richCbLabel.append(richCb, document.createTextNode('Embed Rich Clickable Links & Visual Proof Card inside Email (HTML)'));
+  proofHead.append(create('strong', 'AI Research Proof & Attachments'), richCbLabel);
+
+  const proofBtns = create('div', '', 'composer-proof-btns');
+  proofBtns.append(
+    btnWithIcon('fileText', '+ Research Doc (.html)', () => {
+      if (!requireTier(2, 'Attach Visual Research Evidence Report', 'Attach visual research reports and files directly in Gmail on Silver (Starter) and above.')) return;
+      const att = makeResearchHtmlAttachment(lead);
+      if (picker.addFilePayload(att)) report(`Attached ${att.filename}.`);
+    }, 'btn-soft', 12),
+    btnWithIcon('camera', '+ Captured Pictures', async e => {
+      if (!requireTier(2, 'Attach Captured Website Pictures', 'Attach captured site visuals and files directly in Gmail on Silver (Starter) and above.')) return;
+      const btn = e.currentTarget;
+      const prev = [...btn.childNodes];
+      btn.disabled = true;
+      btn.textContent = 'Fetching pictures…';
+      try {
+        const { chosenImages, images } = getSelectedEvidenceForLead(lead);
+        const targets = (chosenImages.length ? chosenImages : images).slice(0, 3);
+        if (!targets.length) {
+          report('No website pictures captured yet — scan the business website first.', true);
+          return;
+        }
+        const res = await api('/api/evidence-assets', {
+          items: targets.map(i => ({ url: i.url, label: i.label }))
+        });
+        let added = 0;
+        for (const att of res.attachments || []) {
+          if (picker.addFilePayload(att)) added++;
+        }
+        report(added ? `Attached ${added} captured picture(s) to email.` : 'Could not fetch downloadable image files from this site; inline links will still work.');
+      } catch (err) {
+        report(err.message, true);
+      } finally {
+        btn.disabled = false;
+        btn.replaceChildren(...prev);
+      }
+    }, 'btn-soft', 12),
+    btnWithIcon('folder', '+ 4-Phase Solution Pack', () => {
+      if (!requireTier(4, 'Attach 4-Phase Client Solution Pack', 'Attach standalone 4-phase turnaround proposals on Premium (Agency) and Diamond plans.')) return;
+      const att = makeSolutionPackAttachment(lead);
+      if (picker.addFilePayload(att)) report(`Attached ${att.filename}.`);
+    }, 'btn-soft', 12),
+    btnWithIcon('globe', '+ Insert Verified Links', () => {
+      const { chosenLinks, links } = getSelectedEvidenceForLead(lead);
+      const list = (chosenLinks.length ? chosenLinks : links).slice(0, 6);
+      if (!list.length) {
+        report('No verified links recorded for this lead yet.', true);
+        return;
+      }
+      const block = `\n\nVERIFIED PAGES & LINKS REVIEWED:\n` + list.map(l => `• ${l.category}: ${l.url}${l.note ? ` (${l.note})` : ''}`).join('\n');
+      body.lastChild.value = body.lastChild.value.trimEnd() + block;
+      richCb.checked = true;
+      report('Inserted verified links into email message.');
+    }, 'btn-soft', 12)
+  );
+  proofBar.append(proofHead, proofBtns);
+
   tplSelect.onchange = () => {
     const chosen = settings.templates.find(t => t.id === tplSelect.value);
     if (!chosen) return;
@@ -5393,7 +5637,7 @@ function compose(lead, conversation, parent, customPitch = null) {
   submit.disabled = !account.mailbox;
   const requestId = crypto.randomUUID();
   if (!account.mailbox) feedback.textContent = 'Connect Gmail in Settings before sending.';
-  form.append(tplWrapper, to, subject, body, picker.el, feedback, submit);
+  form.append(tplWrapper, to, subject, body, proofBar, picker.el, feedback, submit);
   form.onsubmit = async event => {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(form));
@@ -5403,8 +5647,10 @@ function compose(lead, conversation, parent, customPitch = null) {
     if (blocked(values.to)) { feedback.textContent = 'Address is unsubscribed or bounced.'; return; }
     submit.disabled = true; feedback.textContent = 'Sending…';
     try {
+      const htmlBody = richCb.checked ? buildRichHtmlEmailWithEvidence(values.body, lead, true) : '';
       const sent = await api('/api/send', {
         ...values,
+        ...(htmlBody ? { htmlBody } : {}),
         leadId: lead.id,
         attachments: picker.getAttachments(),
         requestId,

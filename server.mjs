@@ -995,7 +995,7 @@ async function savedOutreachLead(userId, id) {
   }
 }
 
-export function buildRawMimeMessage({ from, to, encodedSubject, extraHeaders = [], body, attachments = [] }) {
+export function buildRawMimeMessage({ from, to, encodedSubject, extraHeaders = [], body, htmlBody = '', attachments = [] }) {
   const safeAttachments = Array.isArray(attachments) ? attachments : [];
   if (safeAttachments.length > 5) fail(400, 'Attach up to 5 files per email.');
   let totalDecodedBytes = 0;
@@ -1012,17 +1012,40 @@ export function buildRawMimeMessage({ from, to, encodedSubject, extraHeaders = [
 
   const headers = ['From: ' + from, 'To: ' + to, ...extraHeaders, 'Subject: ' + encodedSubject, 'MIME-Version: 1.0'];
   const encodedBody = (Buffer.from(body).toString('base64').match(/.{1,76}/g) || ['']).join('\r\n');
+  const cleanHtml = typeof htmlBody === 'string' && htmlBody.trim().length <= 150000 ? htmlBody.trim() : '';
+  const encodedHtml = cleanHtml ? (Buffer.from(cleanHtml).toString('base64').match(/.{1,76}/g) || ['']).join('\r\n') : '';
 
-  if (!normalizedAtts.length) {
+  if (!normalizedAtts.length && !encodedHtml) {
     headers.push('Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64');
     return Buffer.from(headers.join('\r\n') + '\r\n\r\n' + encodedBody).toString('base64url');
   }
 
+  if (!normalizedAtts.length && encodedHtml) {
+    const altBoundary = 'jobhunta_alt_' + randomBytes(12).toString('hex');
+    headers.push(`Content-Type: multipart/alternative; boundary="${altBoundary}"`);
+    const altParts = [
+      `--${altBoundary}\r\nContent-Type: text/plain; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${encodedBody}`,
+      `--${altBoundary}\r\nContent-Type: text/html; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${encodedHtml}`,
+      `--${altBoundary}--`
+    ];
+    return Buffer.from(headers.join('\r\n') + '\r\n\r\n' + altParts.join('\r\n')).toString('base64url');
+  }
+
   const boundary = 'jobhunta_' + randomBytes(12).toString('hex');
   headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
-  const parts = [
-    `--${boundary}\r\nContent-Type: text/plain; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${encodedBody}`
-  ];
+  let firstBodyPart;
+  if (encodedHtml) {
+    const altBoundary = 'jobhunta_alt_' + randomBytes(12).toString('hex');
+    firstBodyPart =
+      `--${boundary}\r\nContent-Type: multipart/alternative; boundary="${altBoundary}"\r\n\r\n` +
+      `--${altBoundary}\r\nContent-Type: text/plain; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${encodedBody}\r\n` +
+      `--${altBoundary}\r\nContent-Type: text/html; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${encodedHtml}\r\n` +
+      `--${altBoundary}--`;
+  } else {
+    firstBodyPart = `--${boundary}\r\nContent-Type: text/plain; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${encodedBody}`;
+  }
+
+  const parts = [firstBodyPart];
   for (const att of normalizedAtts) {
     const wrapped = (att.b64.match(/.{1,76}/g) || ['']).join('\r\n');
     parts.push(
@@ -1037,7 +1060,7 @@ export function buildRawMimeMessage({ from, to, encodedSubject, extraHeaders = [
 }
 
 async function send(session, data) {
-  const { to, body, threadId, requestId, attachments = [], direct = false } = data;
+  const { to, body, htmlBody = '', threadId, requestId, attachments = [], direct = false } = data;
   let { subject } = data;
   if (!validEmail(to) || typeof body !== 'string' || !body.trim() || body.length > 16000 ||
       typeof subject !== 'string' || !subject.trim() || /[\r\n]/.test(subject) || subject.length > 160 ||
@@ -1090,6 +1113,7 @@ async function send(session, data) {
       encodedSubject,
       extraHeaders,
       body,
+      htmlBody,
       attachments
     });
     const chargedOn = await consumeQuota(session.userId, 'email');
@@ -2773,6 +2797,36 @@ export function extractWebsiteInsights(html = '', urlStr = '') {
     } catch {}
   }
 
+  // Extract Schema.org JSON-LD @type entities, CTA buttons, and render-blocking head scripts for deep audit documentation
+  const schemaTypes = [];
+  for (const sm of html.matchAll(/"@type"\s*:\s*"([A-Za-z0-9_-]{3,40})"/g)) {
+    if (!schemaTypes.includes(sm[1])) schemaTypes.push(sm[1]);
+    if (schemaTypes.length >= 6) break;
+  }
+
+  const ctaButtons = [];
+  const ctaPattern = /\b(book|schedule|appointment|quote|estimate|shop|order|buy|subscribe|join|contact|call|demo|trial|consult|enquire|inquire)\b/i;
+  for (const bm of html.matchAll(/<(?:a|button)\b[^>]*>([\s\S]*?)<\/(?:a|button)>/gi)) {
+    const label = decodeHtmlEntities(bm[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    if (label.length >= 4 && label.length <= 42 && ctaPattern.test(label) && !ctaButtons.includes(label)) {
+      ctaButtons.push(label);
+      if (ctaButtons.length >= 6) break;
+    }
+  }
+
+  const headBlock = html.match(/<head\b[^>]*>([\s\S]*?)<\/head>/i)?.[1] || '';
+  const blockingScriptUrls = [];
+  for (const sc of headBlock.matchAll(/<script\b([^>]+)>/gi)) {
+    const tagAttrs = sc[1] || '';
+    if (/\b(?:async|defer|type\s*=\s*["']module["']|type\s*=\s*["']application\/ld\+json["'])\b/i.test(tagAttrs)) continue;
+    const srcRaw = tagAttrs.match(/\bsrc\s*=\s*["']([^"']+)["']/i)?.[1] || '';
+    const resolvedSrc = resolveAsset(srcRaw);
+    if (resolvedSrc && !blockingScriptUrls.includes(resolvedSrc)) {
+      blockingScriptUrls.push(resolvedSrc);
+      if (blockingScriptUrls.length >= 5) break;
+    }
+  }
+
   const { platform, techStack, shopifyMeta, platformEvidence, platformConfidence } = detectPlatformAndTech(html, urlStr);
 
   const signals = {
@@ -2791,6 +2845,9 @@ export function extractWebsiteInsights(html = '', urlStr = '') {
     ogImage,
     siteImages,
     keyLinks,
+    schemaTypes,
+    ctaButtons,
+    blockingScriptUrls,
     metaDescription,
     headings,
     aboutSummary,
@@ -3037,6 +3094,19 @@ async function fetchWebsiteEmails(websiteUrl) {
     ogImage: insights.ogImage || '',
     siteImages: insights.siteImages || [],
     keyLinks: insights.keyLinks || [],
+    schemaTypes: insights.schemaTypes || [],
+    ctaButtons: insights.ctaButtons || [],
+    blockingScriptUrls: insights.blockingScriptUrls || [],
+    serverMeta: {
+      status: homepageMeta.status,
+      ttfbMs: homepageMeta.ttfbMs,
+      serverHeader: homepageMeta.headers?.server || '',
+      cacheControl: homepageMeta.headers?.['cache-control'] || '',
+      hasHsts: Boolean(homepageMeta.headers?.['strict-transport-security']),
+      hasCsp: Boolean(homepageMeta.headers?.['content-security-policy']),
+      hasXFrameOptions: Boolean(homepageMeta.headers?.['x-frame-options']),
+      auditedAt: new Date().toISOString()
+    },
     crawledPages,
     robotsTxtUrl: new URL('/robots.txt', base.origin).href,
     robotsTxtOk,
@@ -3903,6 +3973,52 @@ export async function handleRequest(req, res) {
       const { website } = await readJson(req);
       if (typeof website !== 'string' || !website.trim()) fail(400, 'Provide a website URL to scan.');
       return json(await fetchWebsiteEmails(website.trim()));
+    }
+    if (req.method === 'POST' && path === '/api/evidence-assets') {
+      if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');
+      const userRecord = await findUserById(session.userId);
+      const quotaStatus = getUserQuotaStatus(userRecord);
+      if ((quotaStatus.level || 1) < 2) {
+        fail(403, 'Attaching captured research pictures requires the Silver (Starter) plan or higher.');
+      }
+      const { items = [] } = await readJson(req);
+      const safeItems = Array.isArray(items) ? items.slice(0, 3) : [];
+      const fetched = [];
+      for (let i = 0; i < safeItems.length; i++) {
+        const entry = safeItems[i];
+        const rawUrl = typeof entry === 'string' ? entry : entry?.url;
+        const labelSlug = String((typeof entry === 'object' && entry?.label) || `evidence-${i + 1}`)
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '')
+          .slice(0, 36) || `evidence-${i + 1}`;
+        if (!rawUrl) continue;
+        try {
+          const safeTarget = await assertSafePublicUrl(rawUrl);
+          const r = await fetch(safeTarget, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (compatible; JobHuntaEvidence/1.2)',
+              Accept: 'image/jpeg,image/png,image/webp,image/gif,*/*;q=0.5'
+            },
+            redirect: 'follow',
+            signal: AbortSignal.timeout(6000)
+          });
+          if (!r.ok) continue;
+          const ct = (r.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+          if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(ct)) continue;
+          const ab = await r.arrayBuffer();
+          if (!ab.byteLength || ab.byteLength > 900 * 1024) continue;
+          const ext = ct === 'image/png' ? 'png' : ct === 'image/webp' ? 'webp' : ct === 'image/gif' ? 'gif' : 'jpg';
+          fetched.push({
+            url: rawUrl,
+            filename: `${labelSlug}.${ext}`,
+            mimeType: ct,
+            size: ab.byteLength,
+            dataBase64: Buffer.from(ab).toString('base64')
+          });
+        } catch {}
+      }
+      return json({ attachments: fetched });
     }
     if (req.method === 'POST' && path === '/api/audit') {
       if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');

@@ -629,4 +629,39 @@ test('extractWebsiteInsights captures ogImage, siteImages with missing-alt flags
   assert.equal(info.siteImages[1].url, 'https://brightsmile.example/images/before-after.jpg');
   assert.equal(info.siteImages[1].missingAlt, true);
   assert.ok(info.keyLinks.some(l => l.url === 'https://brightsmile.example/book-online' && l.label === 'Book Appointment'));
+  assert.ok(info.ctaButtons.includes('Book Appointment'));
+
+  // Verify deep schemaTypes + blockingScriptUrls + rich multipart/alternative + attachment MIME
+  const deepHtml = `
+    <html>
+      <head>
+        <script type="application/ld+json">{"@type":"DentalClinic","name":"Bright Smile"}</script>
+        <script src="https://brightsmile.example/js/render-blocker.js"></script>
+        <script src="https://brightsmile.example/js/async-bundle.js" defer></script>
+      </head>
+      <body><a href="/quote">Get a Free Quote</a></body>
+    </html>
+  `;
+  const deep = extractWebsiteInsights(deepHtml, 'https://brightsmile.example');
+  assert.deepEqual(deep.schemaTypes, ['DentalClinic']);
+  assert.deepEqual(deep.blockingScriptUrls, ['https://brightsmile.example/js/render-blocker.js']);
+  assert.ok(deep.ctaButtons.includes('Get a Free Quote'));
+
+  const rawRich = buildRawMimeMessage({
+    from: 'sender@example.com',
+    to: 'client@brightsmile.example',
+    encodedSubject: 'Audit Report',
+    body: 'Plain text audit summary',
+    htmlBody: '<div><p>Rich HTML audit summary with <a href="https://brightsmile.example">clickable link</a></p></div>',
+    attachments: [
+      { filename: 'research-evidence.html', mimeType: 'text/html', dataBase64: Buffer.from('<h1>Proof</h1>').toString('base64') },
+      { filename: 'hero-shot.png', mimeType: 'image/png', dataBase64: Buffer.from('fakepng').toString('base64') }
+    ]
+  });
+  const decodedMime = Buffer.from(rawRich, 'base64url').toString('utf8');
+  assert.match(decodedMime, /Content-Type: multipart\/mixed/);
+  assert.match(decodedMime, /Content-Type: multipart\/alternative/);
+  assert.match(decodedMime, /Content-Type: text\/html; charset="UTF-8"/);
+  assert.match(decodedMime, /filename="research-evidence\.html"/);
+  assert.match(decodedMime, /filename="hero-shot\.png"/);
 });
