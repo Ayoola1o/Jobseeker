@@ -1,5 +1,6 @@
 import { readBusinessCsv, writeBusinessCsv } from './csv.mjs';
 import { iconEl, iconSvg, planBadgeEl } from './icons.mjs';
+import { PLATFORM_DISCOVERY_GROUPS, REDDIT_SUBREDDIT_PACKS } from './discovery.mjs';
 import {
   generateClientOutreach,
   generateLeadSolutionPack,
@@ -48,6 +49,7 @@ let settings = {
   avatarUrl: '',
   persona: 'web_dev',
   addedTools: [],
+  autoEnrichDiscovery: false,
   defaultFollowUpDays: 4,
   templates: defaultTemplates
 };
@@ -162,11 +164,12 @@ const TIER_CATALOG = [
     dailySearchLimit: 150,
     dailyResultLimit: 1000,
     dailyEmailLimit: 400,
+    dailyAdvancedSearchLimit: 1,
     maxBroadcastRecipients: 50,
     features: [
       '150 searches & 1,000 leads discovered / day',
       '400 outreach emails / day + Broadcast (50/run)',
-      'Shopify Store Discovery (site:myshopify.com)',
+      '1/day Multi-Engine Store, Email-Platform & Reddit Lead Search',
       'Full 4-Layer Audit (Bugs, SEO, Speed, Security Hygiene)',
       'Custom AI Prompt Refinement + 4 Outreach Variants',
       'Full 4-Phase Solution Pack, ROI Matrix & CSV Import/Export'
@@ -185,12 +188,13 @@ const TIER_CATALOG = [
     dailySearchLimit: 500,
     dailyResultLimit: 4000,
     dailyEmailLimit: 2000,
+    dailyAdvancedSearchLimit: null,
     maxBroadcastRecipients: 250,
     features: [
       '500 searches & 4,000 leads discovered / day',
       '2,000 outreach emails / day + Broadcast (250/run)',
-      'State-Wide Multi-City Expansion Scraping',
-      'Bulk Combing All Websites (Find missing emails)',
+      'Unlimited Multi-Engine Store, Email-Stack & Reddit Discovery',
+      'State-Wide Multi-City Scraping + Auto-Comb Enrichment',
       'Downloadable .html Client Solution Pack Proposal',
       '1-Click Solution Pack Insertion in Outreach Inbox'
     ]
@@ -208,11 +212,12 @@ const TIER_CATALOG = [
     dailySearchLimit: null,
     dailyResultLimit: null,
     dailyEmailLimit: null,
+    dailyAdvancedSearchLimit: null,
     maxBroadcastRecipients: null,
     features: [
       'Unlimited searches & leads discovered / day',
       'Unlimited outreach emails & Broadcast batch size',
-      'All Discovery Modes + Priority Multi-City Expansion',
+      'Unlimited Multi-Engine, Email-Platform & Reddit Lead Mining',
       'Full 4-Layer Audit, Custom AI Prompts & Bulk Combing',
       'White-Label Downloadable Client Solution Packs'
     ]
@@ -931,7 +936,8 @@ async function enrichItemEmail(item, triggerButton) {
 
 let activeWorkers = 0;
 function triggerEnrichmentWorkers(generation) {
-  const maxWorkers = 3;
+  if (!settings.autoEnrichDiscovery) return;
+  const maxWorkers = 4;
   while (activeWorkers < maxWorkers && generation === searchGeneration) {
     const nextItem = results.find(item => item.website && !item.email && !item.scanned && !item.scanning);
     if (!nextItem) break;
@@ -1309,7 +1315,8 @@ function renderDashboard() {
 function getVisibleSearchResults() {
   const mode = $('#results-filter')?.value || '';
   if (mode === 'shopify') return results.filter(item => item.platform === 'Shopify');
-  if (mode === 'ecommerce') return results.filter(item => item.platform === 'Shopify' || item.platform === 'WooCommerce');
+  if (mode === 'ecommerce') return results.filter(item => item.platform && item.platform !== 'Custom / Website' && item.platform !== 'Reddit Lead' || item.targetPlatform);
+  if (mode === 'reddit') return results.filter(item => Boolean(item.redditMeta) || item.platform === 'Reddit Lead');
   if (mode === 'low') return results.filter(item => (item.searchRank || 0) >= 21);
   return results;
 }
@@ -1369,13 +1376,18 @@ function renderResults() {
     tdInd.append(create('div', item.industry || 'Local business'));
     const badges = create('div', '', 'actions');
     if (item.searchRank) badges.append(create('span', `Rank #${item.searchRank}`, item.searchRank >= 21 ? 'pill wait' : 'pill neutral'));
+    if (item.redditMeta?.intentType) badges.append(create('span', item.redditMeta.intentType, 'pill'));
+    if (item.redditMeta?.budgetHint) badges.append(create('span', item.redditMeta.budgetHint, 'pill neutral'));
     if (item.platform && item.platform !== 'Custom / Website') badges.append(create('span', item.platform, 'pill'));
+    else if (item.targetPlatform) badges.append(create('span', item.targetPlatform, 'pill neutral'));
+    if (item.discoveryProvider) badges.append(create('span', item.discoveryProvider, 'pill neutral'));
     tdInd.append(badges);
 
     const tdLoc = create('td', [item.city, item.address].filter(Boolean).join(' · ') || '—');
 
     const tdWeb = create('td');
     if (item.website) tdWeb.append(website(item.website, item.website.replace(/^https?:\/\/(www\.)?/, '').slice(0, 34)));
+    else if (item.redditMeta?.permalink) tdWeb.append(website(item.redditMeta.permalink, `reddit.com/r/${item.redditMeta.subreddit}`));
     else tdWeb.append(create('span', 'No website', 'small'));
     const emailRow = create('div');
     if (item.email) emailRow.append(create('span', item.email, 'pill'));
@@ -1408,8 +1420,11 @@ function renderResults() {
 }
 
 /* ---------------- SAVED LEADS (Figma KPI Grid + Clean Table) ---------------- */
-function buildSearchFolderName(industry = '', city = '', rankMode = 'all') {
-  const base = [String(industry).trim(), String(city).trim()].filter(Boolean).join(' · ') || 'Search Results';
+function buildSearchFolderName(industry = '', city = '', rankMode = 'all', sourceType = 'local', extraLabel = '') {
+  const cleanCity = String(city || '').trim() || (sourceType === 'reddit' ? 'Reddit' : 'Online');
+  const base = [String(industry).trim(), cleanCity].filter(Boolean).join(' · ') || 'Search Results';
+  if (sourceType === 'reddit') return `${base} (Reddit Leads)`;
+  if (sourceType === 'platform') return `${base} (${extraLabel || 'Platform'})`;
   if (rankMode === 'shopify') return `${base} (Shopify)`;
   if (rankMode === 'low') return `${base} (Low-Ranked)`;
   return base;
@@ -2080,7 +2095,12 @@ function renderBusinessPage() {
     mapLink.href = lead.source;
     mapLink.target = '_blank';
     mapLink.rel = 'noreferrer';
-    mapLink.append(iconEl('mapPin', 14), document.createTextNode('Open Listing'), iconEl('externalLink', 12));
+    const isRedditSrc = Boolean(lead.redditMeta) || /reddit\.com/i.test(lead.source);
+    mapLink.append(
+      iconEl(isRedditSrc ? 'send' : 'mapPin', 14),
+      document.createTextNode(isRedditSrc ? `Open Reddit Post (r/${lead.redditMeta?.subreddit || 'post'})` : 'Open Listing'),
+      iconEl('externalLink', 12)
+    );
     quickContactStrip.append(mapLink);
   }
 
@@ -4432,6 +4452,47 @@ function renderSettings() {
     });
     panel.append(personaCard, idCard, autoCard);
   } else if (settingsTab === 'data') {
+    const scraperCard = create('article', '', 'surface card-pad');
+    const tierLevel = getUserTierLevel();
+    const autoBadge = create('span', settings.autoEnrichDiscovery ? 'Enabled' : 'Off by default', settings.autoEnrichDiscovery ? 'pill' : 'pill neutral');
+    scraperCard.append(cardHead(
+      'sparkles',
+      '',
+      'Discovery Scraper & Auto-Enrichment',
+      'Control automatic background website combing for emails, Cloudflare-protected addresses, logos, and ESP tech stacks during live discovery.',
+      autoBadge
+    ));
+
+    const toggleWrap = create('label', '', 'toggle-switch');
+    const toggleInput = create('input');
+    toggleInput.type = 'checkbox';
+    toggleInput.checked = Boolean(settings.autoEnrichDiscovery);
+    toggleInput.onchange = () => {
+      if (toggleInput.checked && tierLevel < 3) {
+        toggleInput.checked = false;
+        requireTier(3, 'Auto-Comb Websites During Discovery', 'Automatically crawl discovered websites for Cloudflare-decoded emails, JSON-LD contacts, business logos, and email-marketing stacks on Gold (Pro), Premium, and Diamond plans.');
+        return;
+      }
+      settings.autoEnrichDiscovery = Boolean(toggleInput.checked);
+      autoSaveSettings();
+      renderDiscoverMetaBar();
+      renderSettings();
+      report(settings.autoEnrichDiscovery
+        ? 'Enabled Auto-Comb Websites during live discovery.'
+        : 'Disabled Auto-Comb Websites (leads will scrape fast; enrich on demand anytime).');
+    };
+    const slider = create('span', '', 'toggle-slider');
+    const toggleTxt = create('span', settings.autoEnrichDiscovery ? 'ON' : 'OFF');
+    toggleWrap.append(toggleInput, slider, toggleTxt);
+
+    scraperCard.append(
+      actionRow(
+        'Auto-Comb Websites During Discovery (Gold+)',
+        'Off by default. Turn ON to automatically extract obfuscated/Cloudflare emails, social links, logos, and Klaviyo/Mailchimp/Shopify stacks as leads stream in.',
+        toggleWrap
+      )
+    );
+
     const dataCard = create('article', '', 'surface card-pad');
     dataCard.append(cardHead('folder', 'blue', 'Lead Data & Enrichment', 'Import, export, or bulk-enrich your saved business leads.'));
 
@@ -4451,7 +4512,7 @@ function renderSettings() {
     const toolsCard = create('article', '', 'surface card-pad');
     toolsCard.append(cardHead('settings', 'slate', 'Workspace Tools', 'Quick shortcuts and local cache controls.'));
     toolsCard.append(
-      actionRow('Business Discovery', 'Jump straight to the Bing Maps & Shopify scraper to find new leads.', btnWithIcon('search', 'Find Businesses', () => { location.hash = '#discover'; })),
+      actionRow('Business Discovery', 'Jump straight to the multi-engine, store/ESP & Reddit scraper to find new leads.', btnWithIcon('search', 'Find Businesses', () => { location.hash = '#discover'; })),
       actionRow('Reset Local Browser Cache', 'Clears cached browser data and reloads your latest workspace from Supabase.', button('Clear Local Cache', () => {
         if (currentUser?.id) {
           localStorage.removeItem(userLeadsKey(currentUser.id));
@@ -4462,7 +4523,7 @@ function renderSettings() {
       }, true))
     );
 
-    panel.append(dataCard, toolsCard);
+    panel.append(scraperCard, dataCard, toolsCard);
   } else if (settingsTab === 'account') {
     const tierLabel = currentUser?.usage?.label || 'Basic';
     const accCard = create('article', '', 'surface card-pad');
@@ -5179,40 +5240,209 @@ $('#stop-search').onclick = () => {
   renderResults(); updateScrapeBanner();
 };
 
+function initDiscoverControls() {
+  const platSelect = $('#target-platform');
+  if (platSelect && !platSelect.options.length) {
+    for (const grp of PLATFORM_DISCOVERY_GROUPS) {
+      const og = document.createElement('optgroup');
+      og.label = grp.group;
+      for (const item of grp.items) {
+        const opt = document.createElement('option');
+        opt.value = item.key;
+        opt.textContent = item.label;
+        og.append(opt);
+      }
+      platSelect.append(og);
+    }
+  }
+  const redditSelect = $('#reddit-pack');
+  if (redditSelect && !redditSelect.options.length) {
+    for (const pack of Object.values(REDDIT_SUBREDDIT_PACKS)) {
+      const opt = document.createElement('option');
+      opt.value = pack.key;
+      opt.textContent = pack.label;
+      redditSelect.append(opt);
+    }
+  }
+  const tabsWrap = $('#discover-source-tabs');
+  if (tabsWrap && !tabsWrap.dataset.wired) {
+    tabsWrap.dataset.wired = '1';
+    for (const btn of tabsWrap.querySelectorAll('.discover-tab')) {
+      btn.onclick = () => setDiscoverSourceTab(btn.dataset.source || 'local');
+    }
+  }
+  renderDiscoverMetaBar();
+}
+
+function setDiscoverSourceTab(source = 'local') {
+  const valid = ['local', 'platform', 'reddit'].includes(source) ? source : 'local';
+  if ($('#source-type-input')) $('#source-type-input').value = valid;
+  for (const btn of document.querySelectorAll('#discover-source-tabs .discover-tab')) {
+    const active = btn.dataset.source === valid;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', String(active));
+  }
+  if ($('#seg-rank-mode')) $('#seg-rank-mode').hidden = valid !== 'local';
+  if ($('#seg-platform')) $('#seg-platform').hidden = valid !== 'platform';
+  if ($('#seg-reddit')) $('#seg-reddit').hidden = valid !== 'reddit';
+
+  const indLabel = $('#industry-label');
+  const indInput = $('#industry-input');
+  const cityLabel = $('#city-label');
+  const cityInput = $('#city-input');
+  const submitBtn = $('#search-submit-btn');
+
+  if (valid === 'reddit') {
+    if (indLabel) indLabel.textContent = 'Service / Niche Keyword';
+    if (indInput) indInput.placeholder = 'e.g. shopify developer, seo, website redesign, facebook ads';
+    if (cityLabel) cityLabel.textContent = 'Location Filter (Optional)';
+    if (cityInput) {
+      cityInput.required = false;
+      cityInput.placeholder = 'Online / Remote (or e.g. Austin, UK)';
+    }
+    if (submitBtn) submitBtn.textContent = 'Scan Reddit Leads';
+  } else if (valid === 'platform') {
+    if (indLabel) indLabel.textContent = 'Niche / Industry';
+    if (indInput) indInput.placeholder = 'e.g. Skincare, Fitness, SaaS, Coffee';
+    if (cityLabel) cityLabel.textContent = 'City / Country (Optional)';
+    if (cityInput) {
+      cityInput.required = false;
+      cityInput.placeholder = 'Global Web (or e.g. London, Lagos, Texas)';
+    }
+    if (submitBtn) submitBtn.textContent = 'Find Platform Leads';
+  } else {
+    if (indLabel) indLabel.textContent = 'Industry';
+    if (indInput) indInput.placeholder = 'e.g. Clothing & Fashion, Dentists';
+    if (cityLabel) cityLabel.textContent = 'City or State';
+    if (cityInput) {
+      cityInput.required = true;
+      cityInput.placeholder = 'e.g. Lagos, Ikeja, Texas';
+    }
+    if (submitBtn) submitBtn.textContent = 'Search Businesses';
+  }
+  renderDiscoverMetaBar();
+}
+
+function renderDiscoverMetaBar() {
+  const bar = $('#discover-meta-bar');
+  if (!bar) return;
+  const tierLevel = getUserTierLevel();
+  const usage = currentUser?.usage || {};
+  const advUsed = Number(usage.advancedSearchesToday) || 0;
+  const advLimit = usage.dailyAdvancedSearchLimit;
+
+  const leftPill = create('span', '', 'discover-meta-pill');
+  leftPill.append(
+    iconEl('sparkles', 13),
+    document.createTextNode(`Auto-Comb Websites: ${settings.autoEnrichDiscovery ? 'ON' : 'OFF (Default)'} · `)
+  );
+  const cfgBtn = create('button', 'Toggle in Settings →', 'discover-meta-link');
+  cfgBtn.type = 'button';
+  cfgBtn.onclick = () => {
+    settingsTab = 'data';
+    location.hash = '#settings';
+  };
+  leftPill.append(cfgBtn);
+
+  const rightPill = create('span', '', 'discover-meta-pill');
+  if (tierLevel < 3) {
+    rightPill.textContent = 'Stores/ESP & Reddit Search: Gold (1/day) · Premium & Diamond (Unlimited)';
+  } else if (tierLevel === 3) {
+    const left = Math.max(0, (advLimit ?? 1) - advUsed);
+    rightPill.textContent = `Gold Plan: ${left} / ${advLimit ?? 1} Advanced Store/Reddit Search left today`;
+  } else {
+    rightPill.textContent = `${getActiveTier().displayLabel}: Unlimited Multi-Engine, ESP & Reddit Discovery`;
+  }
+  bar.replaceChildren(leftPill, rightPill);
+}
+
+function checkAdvancedDiscoveryAllowance(featureTitle, featureDesc) {
+  const tierLevel = getUserTierLevel();
+  if (tierLevel < 3) {
+    return requireTier(3, featureTitle, featureDesc);
+  }
+  if (tierLevel === 3) {
+    const used = Number(currentUser?.usage?.advancedSearchesToday) || 0;
+    const limit = currentUser?.usage?.dailyAdvancedSearchLimit ?? 1;
+    if (used >= limit) {
+      showUpgradeModal(
+        4,
+        'Unlimited Store, Email-Platform & Reddit Discovery',
+        `Your Gold (Pro) plan includes ${limit} Advanced Multi-Engine / Reddit search per day (resets at 00:00 UTC). Upgrade to Premium (Agency) or Diamond for unlimited daily access.`
+      );
+      return false;
+    }
+  }
+  return true;
+}
+
 $('#search').onsubmit = async event => {
   event.preventDefault();
   const form = event.currentTarget;
-  const submit = form.querySelector('button');
+  const submit = form.querySelector('#search-submit-btn') || form.querySelector('button[type="submit"]');
   const formData = new FormData(form);
+  const sourceType = String(formData.get('sourceType') || 'local');
   const chosenMode = String(formData.get('rankMode') || 'all');
-  if (chosenMode === 'low' && !requireTier(2, 'Low-Ranking Business Discovery (Rank #11+)', 'Target businesses buried on Pages 2–8 of search results on Silver (Starter) and above.')) {
+  const targetPlatform = String(formData.get('targetPlatform') || 'Shopify');
+  const redditPack = String(formData.get('redditPack') || 'hiring');
+
+  if (sourceType === 'local' && chosenMode === 'low' && !requireTier(2, 'Low-Ranking Business Discovery (Rank #11+)', 'Target businesses buried on Pages 2–8 of search results on Silver (Starter) and above.')) {
     if ($('#rank-mode')) $('#rank-mode').value = 'all';
     return;
   }
-  if (chosenMode === 'shopify' && !requireTier(3, 'Shopify & E-Commerce Store Discovery (site:myshopify.com)', 'Scrape live Shopify stores and custom e-commerce domains on Gold (Pro) and above.')) {
-    if ($('#rank-mode')) $('#rank-mode').value = 'all';
-    return;
+  const isAdvanced = sourceType === 'platform' || sourceType === 'reddit' || (sourceType === 'local' && chosenMode === 'shopify');
+  if (isAdvanced) {
+    const title = sourceType === 'reddit'
+      ? 'Reddit Business & Hiring Lead Discovery'
+      : `Multi-Engine ${sourceType === 'platform' ? targetPlatform : 'Shopify'} Discovery`;
+    const desc = 'Search E-Commerce stores, Email Marketing platforms (Klaviyo, Mailchimp, Beehiiv, Substack, Kit), and high-intent Reddit hiring threads. Gold (Pro) includes 1 run/day; Premium (Agency) & Diamond get unlimited access.';
+    if (!checkAdvancedDiscoveryAllowance(title, desc)) {
+      if (sourceType === 'local' && $('#rank-mode')) $('#rank-mode').value = 'all';
+      return;
+    }
   }
+
   if (searchController) searchController.abort();
   searchController = new AbortController();
   const generation = ++searchGeneration;
-  activeSearchFolder = buildSearchFolderName(formData.get('industry'), formData.get('city'), formData.get('rankMode'));
+  const cityVal = String(formData.get('city') || '').trim() || (sourceType === 'reddit' ? 'Remote' : sourceType === 'platform' ? 'Online' : '');
+  const extraFolderLabel = sourceType === 'platform' ? targetPlatform : '';
+  activeSearchFolder = buildSearchFolderName(formData.get('industry'), cityVal, chosenMode, sourceType, extraFolderLabel);
   activeWorkers = 0; results = []; resultsPage = 1; streamActive = true;
-  currentScrapeStep = 'Connecting to Bing Maps…';
+  currentScrapeStep = sourceType === 'reddit'
+    ? 'Scanning Reddit buyer & hiring boards…'
+    : sourceType === 'platform'
+      ? `Searching Bing RSS, DuckDuckGo & Web for ${targetPlatform} leads…`
+      : 'Connecting to multi-engine business search…';
   submit.disabled = true; report(); updateScrapeBanner();
   $('#save-all').hidden = true; $('#results-pagination').hidden = true; $('#results-count').textContent = '';
-  $('#results').replaceChildren(empty('search', 'Scraping live from Bing Maps…', 'Businesses will appear here in real time and auto-save into your search folder in Saved Leads.'));
+  $('#results').replaceChildren(empty(
+    'search',
+    currentScrapeStep,
+    'Discovered leads will stream in real time and auto-save into your search folder in Saved Leads.'
+  ));
 
   let autoSavedCount = 0;
   try {
     const params = new URLSearchParams(formData);
+    if (!params.get('city')) params.set('city', cityVal || 'Online');
+    if (sourceType === 'reddit') {
+      params.set('redditIntent', REDDIT_SUBREDDIT_PACKS[redditPack]?.defaultIntent || 'all_buyers');
+    }
     params.set('stream', '1');
     const response = await fetch('/api/search?' + params, { signal: searchController.signal });
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
       throw new Error(errData.error || 'Search failed.');
     }
-    if (currentUser?.usage) { currentUser.usage.searchesToday = (currentUser.usage.searchesToday || 0) + 1; renderProfile(); }
+    if (currentUser?.usage) {
+      currentUser.usage.searchesToday = (currentUser.usage.searchesToday || 0) + 1;
+      if (isAdvanced) {
+        currentUser.usage.advancedSearchesToday = (currentUser.usage.advancedSearchesToday || 0) + 1;
+      }
+      renderDiscoverMetaBar();
+      renderProfile();
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -5463,9 +5693,11 @@ function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMai
     for (const localLead of cachedLeads) if (!duplicate(localLead)) leads.push(localLead);
   }
   settings = {
-    senderName: user.name || '', senderService: '', defaultFollowUpDays: 4, templates: defaultTemplates,
+    senderName: user.name || '', senderService: '', autoEnrichDiscovery: false, defaultFollowUpDays: 4, templates: defaultTemplates,
     ...cachedSettings, ...(serverSettings && typeof serverSettings === 'object' ? serverSettings : {})
   };
+  if (getUserTierLevel() < 3) settings.autoEnrichDiscovery = false;
+  initDiscoverControls();
   if (!Array.isArray(settings.templates) || !settings.templates.length) settings.templates = defaultTemplates;
 
   if (!isHydration) {

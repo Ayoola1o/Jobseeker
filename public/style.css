@@ -226,6 +226,23 @@ form.stack,.stack{display:grid;gap:14px}
 .search-seg input:focus,.search-seg select:focus{outline:none}
 .search-submit-btn{padding:12px 22px;border-radius:10px;margin-left:8px;font-size:14px}
 .popular-chips{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px;font-size:12.5px;color:#bfe0d8}
+.discover-source-tabs{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-radius:14px;padding:5px;margin-bottom:14px;max-width:100%;overflow-x:auto;scrollbar-width:none}
+.discover-source-tabs::-webkit-scrollbar{display:none}
+.discover-tab{display:inline-flex;align-items:center;gap:7px;padding:8px 14px;border-radius:10px;border:0;background:transparent;color:#d1fae5;font-size:13px;font-weight:650;white-space:nowrap;cursor:pointer;transition:background .15s,color .15s}
+.discover-tab:hover{background:rgba(255,255,255,.12);color:#fff}
+.discover-tab.active{background:#fff;color:#065f46;box-shadow:0 4px 12px rgba(0,0,0,.14)}
+.tab-pro-tag{font-size:10px;font-weight:800;padding:2px 6px;border-radius:99px;background:rgba(251,191,36,.24);color:#fde68a;letter-spacing:.02em}
+.discover-tab.active .tab-pro-tag{background:#fef3c7;color:#b45309}
+.discover-meta-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:12px;font-size:12.5px;color:#d1fae5}
+.discover-meta-pill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.11);border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:4px 11px;font-size:12px;color:#ecfdf5}
+.discover-meta-link{background:transparent;border:0;padding:0;color:#6ee7b7;font-size:12px;font-weight:700;text-decoration:underline;cursor:pointer}
+.discover-meta-link:hover{color:#a7f3d0}
+.toggle-switch{position:relative;display:inline-flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;font-weight:650;color:var(--ink);user-select:none}
+.toggle-switch input{position:absolute;opacity:0;width:0;height:0}
+.toggle-slider{width:42px;height:24px;border-radius:999px;background:#cbd5e1;position:relative;transition:background .18s ease;flex-shrink:0}
+.toggle-slider::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.22);transition:transform .18s ease}
+.toggle-switch input:checked + .toggle-slider{background:var(--green)}
+.toggle-switch input:checked + .toggle-slider::after{transform:translateX(18px)}
 .chip-pill{background:rgba(255,255,255,.11);color:white;border:1px solid rgba(255,255,255,.16);padding:5px 13px;border-radius:20px;font-size:12.5px;font-weight:500}
 .chip-pill:hover{background:rgba(255,255,255,.22)}
 .search{display:grid;grid-template-columns:1fr 1fr auto;align-items:end;gap:14px;padding:16px 20px;margin-bottom:16px}

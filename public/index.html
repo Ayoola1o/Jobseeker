@@ -181,26 +181,50 @@
         <div class="discover-hero">
           <div class="discover-hero-copy">
             <h1>Discover Businesses.<br>Find New Opportunities.</h1>
-            <p>Search Bing Maps &amp; Shopify stores, discover emails, and enrich leads automatically.</p>
+            <p>Search Bing, DuckDuckGo, Google/OSM, E-Commerce &amp; Email Marketing platforms, and high-intent Reddit leads.</p>
+          </div>
+          <div class="discover-source-tabs" id="discover-source-tabs" role="tablist" aria-label="Discovery source">
+            <button type="button" class="discover-tab active" data-source="local" role="tab" aria-selected="true">
+              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>
+              <span>Local &amp; Multi-Engine</span>
+            </button>
+            <button type="button" class="discover-tab" data-source="platform" role="tab" aria-selected="false">
+              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+              <span>Stores &amp; Email Platforms</span>
+              <small class="tab-pro-tag">Gold+</small>
+            </button>
+            <button type="button" class="discover-tab" data-source="reddit" role="tab" aria-selected="false">
+              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>
+              <span>Reddit Leads &amp; Hiring</span>
+              <small class="tab-pro-tag">Gold+</small>
+            </button>
           </div>
           <form id="search" class="surface search-bar-card">
-            <label class="search-seg"><span>Industry</span>
-              <input name="industry" id="industry-input" list="industries" placeholder="e.g. Clothing &amp; Fashion, Dentists" minlength="2" maxlength="50" required>
+            <input type="hidden" name="sourceType" id="source-type-input" value="local">
+            <label class="search-seg"><span id="industry-label">Industry</span>
+              <input name="industry" id="industry-input" list="industries" placeholder="e.g. Clothing &amp; Fashion, Dentists" minlength="2" maxlength="60" required>
               <datalist id="industries"></datalist>
             </label>
-            <label class="search-seg"><span>City or State</span>
+            <label class="search-seg"><span id="city-label">City or State</span>
               <input name="city" id="city-input" placeholder="e.g. Lagos, Ikeja, Texas" minlength="2" maxlength="75" required>
             </label>
-            <label class="search-seg no-div"><span>Mode</span>
+            <label class="search-seg no-div" id="seg-rank-mode"><span>Mode</span>
               <select name="rankMode" id="rank-mode">
                 <option value="all">All Ranks (Pages 1–8)</option>
                 <option value="low">Low-Ranked (Pages 3–8)</option>
-                <option value="shopify">Low-Ranked Shopify Stores</option>
+                <option value="shopify">Shopify Stores (Gold+)</option>
               </select>
             </label>
-            <button type="submit" class="search-submit-btn">Search Businesses</button>
+            <label class="search-seg no-div" id="seg-platform" hidden><span>Store / Email Stack</span>
+              <select name="targetPlatform" id="target-platform"></select>
+            </label>
+            <label class="search-seg no-div" id="seg-reddit" hidden><span>Reddit Board Pack</span>
+              <select name="redditPack" id="reddit-pack"></select>
+            </label>
+            <button type="submit" class="search-submit-btn" id="search-submit-btn">Search Businesses</button>
           </form>
-          <div class="popular-chips">
+          <div class="discover-meta-bar" id="discover-meta-bar"></div>
+          <div class="popular-chips" id="popular-chips-row">
             <span>Popular Searches:</span>
             <button type="button" class="chip-pill" data-industry="Clothing & Fashion">Clothing &amp; Fashion</button>
             <button type="button" class="chip-pill" data-industry="Cosmetics & Skincare">Skincare</button>
@@ -233,7 +257,8 @@
               <select id="results-filter" class="inline-select" aria-label="Filter search results">
                 <option value="">All scraped results</option>
                 <option value="shopify">Shopify stores only</option>
-                <option value="ecommerce">Shopify &amp; WooCommerce</option>
+                <option value="ecommerce">Stores &amp; Email Platforms</option>
+                <option value="reddit">Reddit Buyer Leads</option>
                 <option value="low">Low-ranked (Rank #21+)</option>
               </select>
               <button id="stop-search" class="danger" type="button" hidden>Stop</button>

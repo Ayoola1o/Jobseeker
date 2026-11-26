@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { assessLead, industryAngle, normalizeLeadProfiles } from '../public/qualification.mjs';
-import { googleQueries, businessKeys } from '../public/discovery.mjs';
+import { googleQueries, platformFootprintQueries, businessKeys, PLATFORM_DISCOVERY_GROUPS, REDDIT_SUBREDDIT_PACKS } from '../public/discovery.mjs';
 import assert from 'node:assert/strict';
 import { readBusinessCsv, writeBusinessCsv } from '../public/csv.mjs';
 import {
@@ -23,6 +23,11 @@ import {
   buildRawMimeMessage,
   parseBingMapsHtml,
   parseBingWebSearchHtml,
+  parseBingRssXml,
+  parseDuckDuckGoHtml,
+  classifyRedditPostIntent,
+  decodeCloudflareEmail,
+  rankDiscoveredEmails,
   resolveSearchLocations,
   hashPassword,
   verifyPassword,
@@ -515,4 +520,84 @@ test('6 Personas filter AI pitches, audit outreach, and solution packs to person
     addedTools: ['social_brand']
   }, '', '', 2);
   assert.ok(webDevPlusSocial.pitchBody.includes('Lack of Social Media Presence'));
+});
+
+test('Cloudflare cfemail, obfuscated [at]/[dot], JSON-LD, and email ranking work accurately', () => {
+  // Encode "founder@glowbrand.co" with XOR key 0x2a -> "2a4c455f444e4f586a4d46455d48584b444e044945"
+  const plain = 'founder@glowbrand.co';
+  const key = 0x2a;
+  const hex = key.toString(16).padStart(2, '0') + [...plain].map(ch => (ch.charCodeAt(0) ^ key).toString(16).padStart(2, '0')).join('');
+  assert.equal(decodeCloudflareEmail(hex), plain);
+
+  const html = `
+    <html>
+      <script type="application/ld+json">{"@type":"LocalBusiness","email":"sales@glowbrand.co"}</script>
+      <a class="__cf_email__" data-cfemail="${hex}">[email&#160;protected]</a>
+      <p>Contact us at noreply@glowbrand.co or hello [at] glowbrand [dot] co or user@sentry.io</p>
+    </html>
+  `;
+  const extracted = extractEmailsFromHtml(html, 'glowbrand.co');
+  assert.ok(extracted.includes('founder@glowbrand.co'));
+  assert.ok(extracted.includes('sales@glowbrand.co'));
+  assert.ok(extracted.includes('hello@glowbrand.co'));
+  assert.ok(!extracted.includes('user@sentry.io'));
+  // noreply@ must rank last behind founder/sales/hello
+  assert.equal(extracted.at(-1), 'noreply@glowbrand.co');
+  assert.ok(['founder@glowbrand.co', 'sales@glowbrand.co', 'hello@glowbrand.co'].includes(extracted[0]));
+});
+
+test('Bing RSS, DuckDuckGo Lite, Platform Footprints, Reddit Buyer Filter, and Gold 1/day quota rules work cleanly', () => {
+  // 1. Tier Advanced Discovery Limits: Basic=0, Silver=0, Gold=1/day, Premium=null, Diamond=null
+  assert.equal(USER_TIERS.basic.dailyAdvancedSearchLimit, 0);
+  assert.equal(USER_TIERS.silver.dailyAdvancedSearchLimit, 0);
+  assert.equal(USER_TIERS.gold.dailyAdvancedSearchLimit, 1);
+  assert.equal(USER_TIERS.premium.dailyAdvancedSearchLimit, null);
+  assert.equal(USER_TIERS.diamond.dailyAdvancedSearchLimit, null);
+
+  // 2. Bing RSS XML parser filters directories & extracts clean stores
+  const rssXml = `<?xml version="1.0"?><rss><channel>
+    <item><title>Aura Skincare | Official Store</title><link>https://auraskincare.myshopify.com/collections/all</link><description>Organic skincare in Austin.</description></item>
+    <item><title>Top 10 Skincare on Yelp</title><link>https://www.yelp.com/search?find_desc=skincare</link><description>Directory noise</description></item>
+  </channel></rss>`;
+  const rssItems = parseBingRssXml(rssXml, 'Skincare', 'Austin', 1, 'site:myshopify.com skincare');
+  assert.equal(rssItems.length, 1);
+  assert.equal(rssItems[0].platform, 'Shopify');
+  assert.equal(rssItems[0].website, 'https://auraskincare.myshopify.com');
+
+  // 3. DuckDuckGo HTML Lite parser decodes uddg= redirect links and skips Yelp/directories
+  const ddgHtml = `
+    <div class="result__body">
+      <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fvelvetcoffee.co%2Fshop&amp;rut=123">Velvet Coffee Roasters - Shop</a>
+      <a class="result__snippet">Specialty coffee roasters with Klaviyo newsletter.</a>
+    </div>
+    <div class="result__body">
+      <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.tripadvisor.com%2FRestaurant">TripAdvisor</a>
+    </div>
+  `;
+  const ddgItems = parseDuckDuckGoHtml(ddgHtml, 'Coffee', 'Denver', 1, 'coffee klaviyo');
+  assert.equal(ddgItems.length, 1);
+  assert.equal(ddgItems[0].website, 'https://velvetcoffee.co');
+  assert.equal(ddgItems[0].discoveryProvider, 'DuckDuckGo');
+
+  // 4. Platform & Email-Marketing footprint queries
+  assert.ok(PLATFORM_DISCOVERY_GROUPS.length >= 2);
+  assert.ok(Object.keys(REDDIT_SUBREDDIT_PACKS).includes('hiring'));
+  const klaviyoQueries = platformFootprintQueries('skincare', 'London', 'Klaviyo');
+  assert.ok(klaviyoQueries.some(q => /klaviyo/i.test(q)));
+
+  // 5. Reddit Buyer-Intent Classifier accepts [Hiring] & owner pain points, rejects [For Hire] sellers
+  const seller = classifyRedditPostIntent('[For Hire] Experienced Shopify & Web Developer ($40/hr)', 'Check my portfolio...', 'For Hire', 'forhire');
+  assert.equal(seller.validBuyer, false);
+
+  const buyer = classifyRedditPostIntent('[Hiring] Looking for a Shopify developer to redesign our store ($1,500 budget)', 'Our site is https://lumina-pets.com and email founder@lumina-pets.com', 'Hiring', 'forhire');
+  assert.equal(buyer.validBuyer, true);
+  assert.equal(buyer.intentType, 'Hiring Now');
+  assert.equal(buyer.budgetHint, '$1,500 budget');
+  assert.equal(buyer.externalWebsite, 'https://lumina-pets.com');
+  assert.equal(buyer.extractedEmail, 'founder@lumina-pets.com');
+
+  const ownerPain = classifyRedditPostIntent('Why is my Shopify store getting traffic from Facebook ads but not converting?', 'We get 400 clicks a day to my store https://nordicgear.shop but 0 sales.', '', 'smallbusiness');
+  assert.equal(ownerPain.validBuyer, true);
+  assert.equal(ownerPain.intentType, 'Business Pain Point');
+  assert.equal(ownerPain.externalWebsite, 'https://nordicgear.shop');
 });

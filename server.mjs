@@ -1,5 +1,15 @@
 import { normalizeLeadProfiles } from './public/qualification.mjs';
-import { platformDomains, searchList, googleQueries, publicWebsite, businessKeys, websiteIdentity } from './public/discovery.mjs';
+import {
+  platformDomains,
+  PLATFORM_DISCOVERY_GROUPS,
+  REDDIT_SUBREDDIT_PACKS,
+  searchList,
+  googleQueries,
+  platformFootprintQueries,
+  publicWebsite,
+  businessKeys,
+  websiteIdentity
+} from './public/discovery.mjs';
 import {
   detectPlatform,
   analyzePageAudit,
@@ -143,6 +153,7 @@ function createEmptyWorkspace(name = '', service = '') {
       avatarUrl: '',
       persona: 'web_dev',
       addedTools: [],
+      autoEnrichDiscovery: false,
       defaultFollowUpDays: 4,
       templates: defaultTemplates
     },
@@ -288,6 +299,7 @@ export const USER_TIERS = {
     dailySearchLimit: 10,
     dailyResultLimit: 50,
     dailyEmailLimit: 20,
+    dailyAdvancedSearchLimit: 0,
     features: {
       searchModes: ['all'],
       stateExpansion: false,
@@ -314,6 +326,7 @@ export const USER_TIERS = {
     dailySearchLimit: 40,
     dailyResultLimit: 300,
     dailyEmailLimit: 100,
+    dailyAdvancedSearchLimit: 0,
     features: {
       searchModes: ['all', 'low'],
       stateExpansion: false,
@@ -340,6 +353,7 @@ export const USER_TIERS = {
     dailySearchLimit: 150,
     dailyResultLimit: 1000,
     dailyEmailLimit: 400,
+    dailyAdvancedSearchLimit: 1,
     features: {
       searchModes: ['all', 'low', 'shopify'],
       stateExpansion: false,
@@ -366,6 +380,7 @@ export const USER_TIERS = {
     dailySearchLimit: 500,
     dailyResultLimit: 4000,
     dailyEmailLimit: 2000,
+    dailyAdvancedSearchLimit: null,
     features: {
       searchModes: ['all', 'low', 'shopify'],
       stateExpansion: true,
@@ -392,6 +407,7 @@ export const USER_TIERS = {
     dailySearchLimit: null,
     dailyResultLimit: null,
     dailyEmailLimit: null,
+    dailyAdvancedSearchLimit: null,
     features: {
       searchModes: ['all', 'low', 'shopify'],
       stateExpansion: true,
@@ -442,11 +458,43 @@ export function getUserQuotaStatus(userRecord = {}) {
     dailySearchLimit: tier.dailySearchLimit,
     dailyEmailLimit: tier.dailyEmailLimit,
     dailyResultLimit: tier.dailyResultLimit,
+    dailyAdvancedSearchLimit: tier.dailyAdvancedSearchLimit,
     searchesToday,
     resultsToday,
     emailsToday,
     usageDate: today
   };
+}
+
+function getAdvancedSearchUsage(userId, quotaStatus) {
+  const ws = getWorkspace(userId || 'default');
+  const today = todayUsageDate();
+  const raw = ws.settings?._advancedUsage;
+  const used = raw && raw.date === today ? Math.max(0, Number(raw.count) || 0) : 0;
+  const limit = quotaStatus?.dailyAdvancedSearchLimit ?? 0;
+  return { used, limit, date: today };
+}
+
+async function consumeAdvancedSearchQuota(userId, quotaStatus, refundDate = null) {
+  const tierLevel = quotaStatus?.level || 1;
+  if (tierLevel < 3) {
+    fail(403, 'Multi-Engine Platform/Email-Stack & Reddit Lead Discovery requires Gold (Pro — 1/day), Premium (Agency), or Diamond.');
+  }
+  const ws = getWorkspace(userId || 'default');
+  const { used, limit, date } = getAdvancedSearchUsage(userId, quotaStatus);
+  if (refundDate) {
+    if (refundDate === date && used > 0) {
+      ws.settings._advancedUsage = { date, count: Math.max(0, used - 1) };
+      await saveStore(userId).catch(() => {});
+    }
+    return date;
+  }
+  if (limit !== null && used >= limit) {
+    fail(429, `Gold (Pro) includes ${limit} Advanced Multi-Engine / Reddit search per day (resets at 00:00 UTC). Upgrade to Premium (Agency) or Diamond for unlimited access.`);
+  }
+  ws.settings._advancedUsage = { date, count: used + 1 };
+  await saveStore(userId).catch(() => {});
+  return date;
 }
 
 async function findUserById(userId) {
@@ -618,6 +666,10 @@ async function loadFromSupabase(userId = 'default') {
           addedTools: Array.isArray(row.settings.addedTools)
             ? row.settings.addedTools.map(String).filter(k => Object.hasOwn(PERSONA_TOOL_MODULES, k))
             : [],
+          autoEnrichDiscovery: Boolean(row.settings.autoEnrichDiscovery),
+          _advancedUsage: row.settings._advancedUsage && typeof row.settings._advancedUsage === 'object'
+            ? { date: String(row.settings._advancedUsage.date || ''), count: Math.max(0, Number(row.settings._advancedUsage.count) || 0) }
+            : undefined,
           savedSearches: normalizeSavedSearches(row.settings.savedSearches),
           leadProfiles: normalizeLeadProfiles(row.settings.leadProfiles),
           defaultFollowUpDays: Number(row.settings.defaultFollowUpDays) || 4,
@@ -695,7 +747,9 @@ const files = {
   '/business-import.csv': ['business-import.csv', 'text/csv; charset=utf-8'],
   '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
   '/favicon.ico': ['logo.png', 'image/png'],
-  '/logo.png': ['logo.png', 'image/png']
+  '/logo.png': ['logo.png', 'image/png'],
+  '/logo-full.jpg': ['logo-full.jpg', 'image/jpeg'],
+  '/logo-splash.jpg': ['logo-splash.jpg', 'image/jpeg']
 };
 const nonce = () => randomBytes(32).toString('base64url');
 const emailPattern = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
@@ -1344,56 +1398,425 @@ export function parseBingWebSearchHtml(html = '', industry = '', city = '', firs
   return items;
 }
 
-async function searchShopifySiteWeb(cleanIndustry, subCity) {
-  const siteQueries = [
-    ...googleQueries(cleanIndustry, subCity, 'Shopify', 'online'),
-    `site:myshopify.com ${cleanIndustry} ${subCity}`
-  ];
-  const uniqueQueries = [...new Set(siteQueries)];
-  const discovered = [];
+const DIRECTORY_NOISE_DOMAINS = new Set([
+  'yelp.com', 'yellowpages.com', 'tripadvisor.com', 'bbb.org', 'angi.com',
+  'thumbtack.com', 'mapquest.com', 'foursquare.com', 'wikipedia.org',
+  'youtube.com', 'facebook.com', 'instagram.com', 'tiktok.com', 'x.com',
+  'twitter.com', 'pinterest.com', 'linkedin.com', 'reddit.com', 'amazon.com',
+  'ebay.com', 'walmart.com', 'etsy.com', 'trustpilot.com', 'clutch.co', 'g2.com'
+]);
 
-  for (const q of uniqueQueries) {
-    // Use Tavily or Serper if configured, plus direct Bing Web Search for site:myshopify.com
-    if (process.env.TAVILY_API_KEY?.trim()) {
-      try {
-        const tItems = await tavilyDiscovery(q, cleanIndustry, subCity);
-        for (const it of tItems) {
-          if (it.website?.includes('.myshopify.com')) it.platform = 'Shopify';
-          discovered.push(it);
-        }
-      } catch {}
-    } else if (process.env.SERPER_API_KEY?.trim()) {
-      try {
-        const gItems = await googleDiscovery(q, cleanIndustry, subCity);
-        for (const it of gItems) {
-          if (it.website?.includes('.myshopify.com')) it.platform = 'Shopify';
-          discovered.push(it);
-        }
-      } catch {}
-    }
+function isNoiseDirectoryDomain(hostname = '') {
+  const clean = String(hostname || '').toLowerCase().replace(/^www\./, '');
+  if (!clean) return true;
+  if (DIRECTORY_NOISE_DOMAINS.has(clean)) return true;
+  for (const d of DIRECTORY_NOISE_DOMAINS) {
+    if (clean.endsWith('.' + d)) return true;
+  }
+  return false;
+}
 
-    for (const { first, page } of [{ first: 1, page: 1 }, { first: 11, page: 2 }, { first: 21, page: 3 }]) {
-      try {
-        const webUrl = `https://www.bing.com/search?q=${encodeURIComponent(q)}&first=${first}&count=10`;
-        const response = await fetch(webUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9'
-          },
-          signal: AbortSignal.timeout(8000)
-        });
-        if (!response.ok) break;
-        const html = await response.text();
-        const parsed = parseBingWebSearchHtml(html, cleanIndustry, subCity, first, page, q);
-        discovered.push(...parsed);
-        if (!parsed.length) break;
-      } catch {
-        break;
+export function parseBingRssXml(xml = '', fallbackIndustry = '', city = '', startRank = 1, query = '') {
+  const items = [];
+  const seenHosts = new Set();
+  let rank = startRank;
+  for (const match of String(xml || '').matchAll(/<item>([\s\S]*?)<\/item>/gi)) {
+    const block = match[1];
+    const rawTitle = block.match(/<title>([\s\S]*?)<\/title>/i)?.[1] || '';
+    const rawLink = block.match(/<link>([\s\S]*?)<\/link>/i)?.[1] || '';
+    const rawDesc = block.match(/<description>([\s\S]*?)<\/description>/i)?.[1] || '';
+    const linkStr = decodeHtmlEntities(rawLink.replace(/<!\[CDATA\[|\]\]>/g, '').trim());
+    const url = publicWebsite(linkStr);
+    if (!url || isNoiseDirectoryDomain(url.hostname)) continue;
+    const identity = websiteIdentity(url);
+    if (!identity || seenHosts.has(identity)) continue;
+    seenHosts.add(identity);
+    const title = decodeHtmlEntities(rawTitle.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    const snippet = decodeHtmlEntities(rawDesc.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 260);
+    const isMyShopify = url.hostname.endsWith('.myshopify.com');
+    const cleanName = (title.split(/\s+[|\-–—:]\s+/)[0] || title || identity).slice(0, 100);
+    const currentRank = rank++;
+    items.push({
+      id: `rss-${identity}`,
+      name: cleanName,
+      industry: fallbackIndustry,
+      city: city || 'Online',
+      address: '',
+      about: [
+        `Bing RSS #${currentRank}`,
+        isMyShopify ? 'Shopify Store (.myshopify.com)' : '',
+        snippet
+      ].filter(Boolean).join(' · '),
+      website: identity.includes('/') ? url.href : url.origin,
+      phone: '',
+      email: '',
+      source: url.href,
+      platform: isMyShopify ? 'Shopify' : '',
+      searchRank: currentRank,
+      searchPage: Math.ceil(currentRank / 10),
+      discoveryProvider: 'Bing RSS',
+      discoveryQuery: query
+    });
+  }
+  return items;
+}
+
+export function parseDuckDuckGoHtml(html = '', fallbackIndustry = '', city = '', startRank = 1, query = '') {
+  const items = [];
+  const seenHosts = new Set();
+  let rank = startRank;
+  const resultBlocks = String(html || '').split(/class=["'][^"']*\bresult__body\b[^"']*["']/i).slice(1);
+  for (const block of resultBlocks) {
+    const linkMatch = block.match(/class=["'][^"']*\bresult__a\b[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i)
+      || block.match(/href=["']([^"']+)["'][^>]*class=["'][^"']*\bresult__a\b[^"']*["'][^>]*>([\s\S]*?)<\/a>/i);
+    if (!linkMatch) continue;
+    let rawHref = decodeHtmlEntities(linkMatch[1].trim());
+    if (rawHref.includes('uddg=')) {
+      const uddg = rawHref.match(/[?&]uddg=([^&]+)/)?.[1];
+      if (uddg) {
+        try { rawHref = decodeURIComponent(uddg); } catch {}
       }
+    } else if (rawHref.startsWith('//')) {
+      rawHref = 'https:' + rawHref;
     }
+    if (/duckduckgo\.com\/y\.js/i.test(rawHref)) continue;
+    const url = publicWebsite(rawHref);
+    if (!url || isNoiseDirectoryDomain(url.hostname)) continue;
+    const identity = websiteIdentity(url);
+    if (!identity || seenHosts.has(identity)) continue;
+    seenHosts.add(identity);
+    const title = decodeHtmlEntities(linkMatch[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    const snippetMatch = block.match(/class=["'][^"']*\bresult__snippet\b[^"']*["'][^>]*>([\s\S]*?)<\/(?:a|div|span)>/i);
+    const snippet = snippetMatch
+      ? decodeHtmlEntities(snippetMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 260)
+      : '';
+    const isMyShopify = url.hostname.endsWith('.myshopify.com');
+    const cleanName = (title.split(/\s+[|\-–—:]\s+/)[0] || title || identity).slice(0, 100);
+    const currentRank = rank++;
+    items.push({
+      id: `ddg-${identity}`,
+      name: cleanName,
+      industry: fallbackIndustry,
+      city: city || 'Online',
+      address: '',
+      about: [
+        `DuckDuckGo #${currentRank}`,
+        isMyShopify ? 'Shopify Store (.myshopify.com)' : '',
+        snippet
+      ].filter(Boolean).join(' · '),
+      website: identity.includes('/') ? url.href : url.origin,
+      phone: '',
+      email: '',
+      source: url.href,
+      platform: isMyShopify ? 'Shopify' : '',
+      searchRank: currentRank,
+      searchPage: Math.ceil(currentRank / 10),
+      discoveryProvider: 'DuckDuckGo',
+      discoveryQuery: query
+    });
+  }
+  return items;
+}
+
+async function searchBingRss(query, cleanIndustry, subCity, startRank = 1) {
+  try {
+    const rssUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&format=rss&count=20`;
+    const response = await fetch(rssUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        Accept: 'application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.8'
+      },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!response.ok) return [];
+    const xml = await response.text();
+    return parseBingRssXml(xml, cleanIndustry, subCity, startRank, query);
+  } catch {
+    return [];
+  }
+}
+
+async function searchDuckDuckGoLite(query, cleanIndustry, subCity, startRank = 1) {
+  try {
+    const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const response = await fetch(ddgUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9'
+      },
+      signal: AbortSignal.timeout(8500)
+    });
+    if (!response.ok) return [];
+    const html = await response.text();
+    if (/anomaly-modal|captcha|challenge-form/i.test(html)) return [];
+    return parseDuckDuckGoHtml(html, cleanIndustry, subCity, startRank, query);
+  } catch {
+    return [];
+  }
+}
+
+async function searchSerperMaps(cleanIndustry, city) {
+  const key = process.env.SERPER_API_KEY?.trim();
+  if (!key) return [];
+  try {
+    const response = await fetch('https://google.serper.dev/maps', {
+      method: 'POST',
+      headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: `${cleanIndustry} in ${city}` }),
+      signal: AbortSignal.timeout(8500)
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return (data.places || []).map((p, idx) => ({
+      id: `gmaps-${p.cid || p.placeId || idx}-${(p.title || '').slice(0, 24)}`,
+      name: p.title || 'Unnamed Business',
+      industry: p.type || cleanIndustry,
+      city,
+      address: p.address || '',
+      about: [`Google Maps #${p.position || (idx + 1)}`, p.rating ? `★ ${p.rating} (${p.ratingCount || 0} reviews)` : '', p.type].filter(Boolean).join(' · '),
+      website: p.website || '',
+      phone: p.phoneNumber || '',
+      email: '',
+      source: p.cid ? `https://www.google.com/maps?cid=${p.cid}` : 'https://www.google.com/maps',
+      rating: p.rating ? String(p.rating) : '',
+      ratingInfo: p.ratingCount ? `${p.ratingCount} Google reviews` : '',
+      searchRank: p.position || (idx + 1),
+      searchPage: 1,
+      discoveryProvider: 'Google Maps'
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function searchPlatformAndStackWeb(cleanIndustry, subCity, targetPlatform = 'Shopify') {
+  const queries = platformFootprintQueries(cleanIndustry, subCity, targetPlatform);
+  const discovered = [];
+  const seenDomains = new Set();
+
+  const pushUnique = list => {
+    for (const it of list) {
+      const u = publicWebsite(it.website);
+      const key = u ? websiteIdentity(u) : it.id;
+      if (!key || seenDomains.has(key)) continue;
+      seenDomains.add(key);
+      if (!it.platform && targetPlatform) {
+        const hostDomain = platformDomains[targetPlatform];
+        if (hostDomain && u?.hostname.endsWith(hostDomain)) it.platform = targetPlatform;
+        else it.targetPlatform = targetPlatform;
+      }
+      discovered.push(it);
+    }
+  };
+
+  for (const q of queries) {
+    if (process.env.TAVILY_API_KEY?.trim()) {
+      try { pushUnique(await tavilyDiscovery(q, cleanIndustry, subCity || 'Online')); } catch {}
+    } else if (process.env.SERPER_API_KEY?.trim()) {
+      try { pushUnique(await googleDiscovery(q, cleanIndustry, subCity || 'Online')); } catch {}
+    }
+
+    const [rssItems, ddgItems] = await Promise.all([
+      searchBingRss(q, cleanIndustry, subCity || 'Online', 1),
+      searchDuckDuckGoLite(q, cleanIndustry, subCity || 'Online', 1)
+    ]);
+    pushUnique(rssItems);
+    pushUnique(ddgItems);
+
+    try {
+      const webUrl = `https://www.bing.com/search?q=${encodeURIComponent(q)}&first=1&count=15`;
+      const response = await fetch(webUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9'
+        },
+        signal: AbortSignal.timeout(7500)
+      });
+      if (response.ok) {
+        const html = await response.text();
+        pushUnique(parseBingWebSearchHtml(html, cleanIndustry, subCity || 'Online', 1, 1, q));
+      }
+    } catch {}
   }
   return discovered;
+}
+
+export function classifyRedditPostIntent(title = '', selftext = '', flair = '', subreddit = '') {
+  const t = String(title || '').trim();
+  const body = String(selftext || '').trim();
+  const fl = String(flair || '').trim();
+  const combined = `${fl} ${t} ${body}`;
+
+  // Strictly reject freelancer self-promotion posts ([For Hire], offering my services, etc.)
+  if (/^\s*\[?\s*for\s*hire\s*\]?/i.test(t) || /^\s*\[?\s*for\s*hire\s*\]?/i.test(fl)) {
+    return { validBuyer: false, reason: 'for_hire_seller' };
+  }
+  if (/\b(i am for hire|available for hire|offering my services|hire me for|dm me to hire me|my freelance services)\b/i.test(combined) &&
+      !/^\s*\[?\s*hiring\s*\]?/i.test(t)) {
+    return { validBuyer: false, reason: 'seller_pitch' };
+  }
+
+  const isDirectHiring = /^\s*\[?\s*hiring\s*\]?/i.test(t) || /^\s*\[?\s*hiring\s*\]?/i.test(fl) ||
+    /\b(hiring a|looking to hire|want to hire|budget is \$|paying \$|need a freelancer|looking for a developer|looking for an? agency|looking for seo|looking for a marketer)\b/i.test(combined);
+
+  const isPainPointOwner = /\b(my website|our website|my store|my shopify|our business|my small business|roast my|review my site|not converting|low conversion|need help with|struggling with|losing customers|how do i get more leads|facebook ads|google ads)\b/i.test(combined);
+
+  const subLower = String(subreddit || '').toLowerCase();
+  const isHiringSub = ['forhire', 'designjobs', 'hireawriter', 'jobbit'].includes(subLower);
+  if (isHiringSub && !isDirectHiring) {
+    return { validBuyer: false, reason: 'non_hiring_in_job_board' };
+  }
+  if (!isDirectHiring && !isPainPointOwner) {
+    return { validBuyer: false, reason: 'low_buyer_intent' };
+  }
+
+  const budgetMatch = combined.match(/(?:\$|USD\s*|€|£)\s?\d{1,6}(?:[.,]\d{1,3})?(?:\s*(?:\/hr|\/mo|\/month|k|per month|budget))?/i);
+  const externalUrls = [...combined.matchAll(/https?:\/\/([a-z0-9.-]+\.[a-z]{2,})([^\s)"'<>]*)/gi)]
+    .map(m => m[0].replace(/[.,;:'")\]}>]+$/, ''))
+    .filter(u => !/(reddit\.com|redd\.it|imgur\.com|gyazo\.com|prnt\.sc|loom\.com|docs\.google\.com|drive\.google\.com|github\.com)/i.test(u));
+  const emails = extractEmailsFromHtml(combined);
+
+  return {
+    validBuyer: true,
+    intentType: isDirectHiring ? 'Hiring Now' : 'Business Pain Point',
+    budgetHint: budgetMatch ? budgetMatch[0].trim() : '',
+    externalWebsite: externalUrls[0] || '',
+    extractedEmail: emails[0] || ''
+  };
+}
+
+function redditSubmissionToLead(post = {}, fallbackKeyword = '', locationFilter = '') {
+  const subreddit = post.subreddit || '';
+  const title = decodeHtmlEntities(String(post.title || '').replace(/\s+/g, ' ').trim());
+  const selftext = decodeHtmlEntities(String(post.selftext || '').trim());
+  const author = String(post.author || '').trim();
+  if (!title || !author || author === '[deleted]' || author === 'AutoModerator') return null;
+
+  const check = classifyRedditPostIntent(title, selftext, post.link_flair_text || '', subreddit);
+  if (!check.validBuyer) return null;
+
+  if (locationFilter && !/^(online|global|worldwide|remote|any)$/i.test(locationFilter)) {
+    const locNorm = locationFilter.toLowerCase();
+    if (!`${title} ${selftext}`.toLowerCase().includes(locNorm)) {
+      // Allow remote hiring posts, only filter if user specified a strict non-matching geo on non-hiring posts
+      if (check.intentType !== 'Hiring Now') return null;
+    }
+  }
+
+  const permalink = post.permalink
+    ? (post.permalink.startsWith('http') ? post.permalink : `https://www.reddit.com${post.permalink}`)
+    : (post.url || `https://www.reddit.com/r/${subreddit}`);
+  const cleanSnippet = selftext.replace(/\s+/g, ' ').slice(0, 320);
+  let websiteHost = '';
+  if (check.externalWebsite) {
+    try { websiteHost = new URL(check.externalWebsite).hostname.replace(/^www\./, ''); } catch {}
+  }
+  const leadName = websiteHost
+    ? `${websiteHost} (u/${author})`
+    : `u/${author} · ${title.replace(/^\s*\[[^\]]+\]\s*/, '').slice(0, 58)}`;
+
+  return {
+    id: `reddit-${post.id || Buffer.from(permalink).toString('base64url').slice(0, 18)}`,
+    name: leadName,
+    industry: fallbackKeyword || `r/${subreddit}`,
+    city: locationFilter || 'Remote / Reddit',
+    address: `r/${subreddit} · Posted by u/${author}`,
+    about: [
+      `[${check.intentType}] r/${subreddit}`,
+      check.budgetHint ? `Budget: ${check.budgetHint}` : '',
+      title,
+      cleanSnippet ? `— "${cleanSnippet}"` : ''
+    ].filter(Boolean).join(' · ').slice(0, 600),
+    website: check.externalWebsite || '',
+    phone: '',
+    email: check.extractedEmail || '',
+    source: permalink,
+    platform: check.externalWebsite?.includes('myshopify.com') ? 'Shopify' : 'Reddit Lead',
+    discoveryProvider: `Reddit r/${subreddit}`,
+    redditMeta: {
+      subreddit,
+      author,
+      postTitle: title,
+      postSnippet: cleanSnippet,
+      permalink,
+      intentType: check.intentType,
+      budgetHint: check.budgetHint
+    }
+  };
+}
+
+async function searchRedditSubreddit(subreddit, keyword, intentFilter = 'all_buyers', locationFilter = '') {
+  const qParts = [keyword];
+  if (intentFilter === 'hiring') qParts.push('hiring OR budget OR looking');
+  const query = qParts.filter(Boolean).join(' ').trim();
+  const results = [];
+  const headers = {
+    'User-Agent': 'web:com.jobhunta.leadfinder:v1.2 (B2B Lead Discovery)',
+    Accept: 'application/json, text/xml, */*'
+  };
+
+  // 1. Primary: Reddit Public JSON Search
+  try {
+    const jsonUrl = `https://www.reddit.com/r/${encodeURIComponent(subreddit)}/search.json?q=${encodeURIComponent(query)}&restrict_sr=1&sort=new&t=month&limit=25`;
+    const res = await fetch(jsonUrl, { headers, signal: AbortSignal.timeout(7500) });
+    if (res.ok) {
+      const payload = await res.json();
+      const children = payload?.data?.children || [];
+      for (const child of children) {
+        const lead = redditSubmissionToLead(child?.data || {}, keyword, locationFilter);
+        if (lead && (intentFilter !== 'hiring' || lead.redditMeta?.intentType === 'Hiring Now')) {
+          results.push(lead);
+        }
+      }
+      if (results.length) return results;
+    }
+  } catch {}
+
+  // 2. Secondary: Reddit Public RSS Feed
+  try {
+    const rssUrl = `https://www.reddit.com/r/${encodeURIComponent(subreddit)}/search.rss?q=${encodeURIComponent(query)}&restrict_sr=1&sort=new&t=month`;
+    const res = await fetch(rssUrl, { headers, signal: AbortSignal.timeout(7500) });
+    if (res.ok) {
+      const xml = await res.text();
+      for (const entry of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)) {
+        const block = entry[1];
+        const title = block.match(/<title>([\s\S]*?)<\/title>/i)?.[1] || '';
+        const author = (block.match(/<name>\/?u\/([^<]+)<\/name>/i)?.[1] || 'redditor').trim();
+        const link = block.match(/<link[^>]+href=["']([^"']+)["']/i)?.[1] || '';
+        const contentRaw = block.match(/<content[^>]*>([\s\S]*?)<\/content>/i)?.[1] || '';
+        const selftext = decodeHtmlEntities(contentRaw).replace(/<[^>]+>/g, ' ');
+        const idMatch = block.match(/<id>([^<]+)<\/id>/i)?.[1] || link;
+        const lead = redditSubmissionToLead({ id: idMatch, subreddit, title, selftext, author, permalink: link }, keyword, locationFilter);
+        if (lead && (intentFilter !== 'hiring' || lead.redditMeta?.intentType === 'Hiring Now')) {
+          results.push(lead);
+        }
+      }
+      if (results.length) return results;
+    }
+  } catch {}
+
+  // 3. Tertiary Zero-Key Fallback: PullPush Community Archive API
+  try {
+    const ppUrl = `https://api.pullpush.io/reddit/search/submission/?subreddit=${encodeURIComponent(subreddit)}&q=${encodeURIComponent(keyword)}&size=25&sort=desc`;
+    const res = await fetch(ppUrl, { headers, signal: AbortSignal.timeout(8500) });
+    if (res.ok) {
+      const payload = await res.json();
+      for (const post of payload?.data || []) {
+        const lead = redditSubmissionToLead(post, keyword, locationFilter);
+        if (lead && (intentFilter !== 'hiring' || lead.redditMeta?.intentType === 'Hiring Now')) {
+          results.push(lead);
+        }
+      }
+    }
+  } catch {}
+
+  return results;
+}
+
+async function searchShopifySiteWeb(cleanIndustry, subCity) {
+  return searchPlatformAndStackWeb(cleanIndustry, subCity, 'Shopify');
 }
 
 async function searchBingMaps(cleanIndustry, city, rankMode = 'all') {
@@ -1488,11 +1911,13 @@ async function searchOverpassFallback(cleanIndustry, city) {
   }));
 }
 
-async function streamSearch(res, industry, city, rankMode = 'all', reserveResults, onFailure, tierLevel = 5) {
+async function streamSearch(res, industry, city, rankMode = 'all', reserveResults, onFailure, tierLevel = 5, extraOpts = {}) {
   const cleanIndustry = (industry || '').trim();
-  if (!/^[\p{L}\p{M}\p{N} .,'’&/()-]{2,50}$/u.test(cleanIndustry) ||
-      !/^[\p{L}\p{M}\p{N} .,'’()-]{2,75}$/u.test(city)) {
-    fail(400, 'Choose or enter an industry and enter a city or state.');
+  const sourceType = ['local', 'platform', 'reddit'].includes(extraOpts.sourceType) ? extraOpts.sourceType : 'local';
+  const cleanCity = (city || '').trim() || (sourceType !== 'local' ? 'Online' : '');
+  if (!/^[\p{L}\p{M}\p{N} .,'’&/+()-]{2,60}$/u.test(cleanIndustry) ||
+      !/^[\p{L}\p{M}\p{N} .,'’/()-]{2,75}$/u.test(cleanCity)) {
+    fail(400, 'Choose or enter a keyword/industry and enter a city, state, or Online.');
   }
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -1509,47 +1934,125 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
     }
   };
 
-  let subLocations = await resolveSearchLocations(city);
-  if (subLocations.length > 1 && tierLevel < 4) {
-    subLocations = [city];
-    sendEvent({
-      type: 'status',
-      totalFound: 0,
-      message: `Searching "${city}" (State-wide multi-city expansion unlocks on Premium / Agency & Diamond plans)…`
-    });
-  }
-  const isStateBreakdown = subLocations.length > 1;
-  const offsetConfigs = getSearchOffsets(rankMode === 'shopify' ? 'low' : rankMode, isStateBreakdown);
   const seen = new Set();
+  const seenDomains = new Set();
   let stopped = false;
   const emitBusinesses = async items => {
-    const fresh = [...new Map(items.filter(item => !seen.has(item.id)).map(item => [item.id, item])).values()];
-    if (closed || !fresh.length) return 0;
+    const deduped = [];
+    for (const item of items) {
+      if (!item || seen.has(item.id)) continue;
+      const host = item.website ? websiteIdentity(publicWebsite(item.website)) : '';
+      if (host && seenDomains.has(host) && !item.redditMeta) continue;
+      seen.add(item.id);
+      if (host && !item.redditMeta) seenDomains.add(host);
+      deduped.push(item);
+    }
+    if (closed || !deduped.length) return 0;
     let granted;
     try {
-      granted = await reserveResults(fresh.length);
+      granted = await reserveResults(deduped.length);
     } catch (error) {
       stopped = true;
       sendEvent({ type: 'error', error: error.message || 'Usage is temporarily unavailable.' });
       return 0;
     }
-    for (const item of fresh.slice(0, granted)) {
-      seen.add(item.id);
+    for (const item of deduped.slice(0, granted)) {
       sendEvent({ type: 'business', item, totalFound: seen.size });
     }
-    if (granted < fresh.length) {
+    if (granted < deduped.length) {
       stopped = true;
       sendEvent({ type: 'limit', message: 'Daily search result limit reached. Your allowance resets at midnight UTC.' });
     }
     return granted;
   };
 
+  // MODE A: REDDIT BUSINESS & HIRING LEAD ENGINE
+  if (sourceType === 'reddit') {
+    const packKey = Object.hasOwn(REDDIT_SUBREDDIT_PACKS, extraOpts.redditPack) ? extraOpts.redditPack : 'hiring';
+    const pack = REDDIT_SUBREDDIT_PACKS[packKey];
+    const customSubs = searchList(extraOpts.subreddits || '', 6).map(s => s.replace(/^r\//i, '').replace(/[^a-zA-Z0-9_]/g, '')).filter(Boolean);
+    const subreddits = customSubs.length ? customSubs : pack.subreddits;
+    const intentFilter = extraOpts.redditIntent === 'hiring' ? 'hiring' : 'all_buyers';
+    const geoFilter = /^(online|global|worldwide|remote|any)$/i.test(cleanCity) ? '' : cleanCity;
+
+    for (let i = 0; i < subreddits.length; i++) {
+      if (closed || stopped) break;
+      const sub = subreddits[i];
+      sendEvent({
+        type: 'status',
+        page: i + 1,
+        totalPages: subreddits.length,
+        totalFound: seen.size,
+        message: `Scanning Reddit r/${sub} for "${cleanIndustry}" buyer & hiring posts [${i + 1}/${subreddits.length}]…`
+      });
+      const items = await searchRedditSubreddit(sub, cleanIndustry, intentFilter, geoFilter);
+      if (items.length) await emitBusinesses(items);
+    }
+
+    if (seen.size === 0) await onFailure?.();
+    sendEvent({ type: 'done', totalFound: seen.size });
+    if (!res.writableEnded) res.end();
+    return;
+  }
+
+  // MODE B: MULTI-ENGINE PLATFORM & EMAIL MARKETING STACK DISCOVERY
+  if (sourceType === 'platform') {
+    const targetPlatform = Object.hasOwn(platformDomains, extraOpts.targetPlatform) ? extraOpts.targetPlatform : 'Shopify';
+    const isGlobalOnline = /^(online|global|worldwide|remote|any)$/i.test(cleanCity);
+    let subLocations = isGlobalOnline ? [''] : await resolveSearchLocations(cleanCity);
+    if (subLocations.length > 1 && tierLevel < 4) subLocations = [cleanCity];
+
+    for (let locIdx = 0; locIdx < subLocations.length; locIdx++) {
+      if (closed || stopped) break;
+      const subCity = subLocations[locIdx];
+      const locLabel = subCity || 'Global Web';
+      sendEvent({
+        type: 'status',
+        page: locIdx + 1,
+        totalPages: subLocations.length,
+        totalFound: seen.size,
+        message: `Searching Bing RSS, DuckDuckGo & Web for ${targetPlatform} "${cleanIndustry}" leads (${locLabel})…`
+      });
+      const webItems = await searchPlatformAndStackWeb(cleanIndustry, subCity, targetPlatform);
+      if (webItems.length) await emitBusinesses(webItems);
+
+      if (!stopped && subCity && ['Shopify', 'WooCommerce', 'BigCommerce', 'Wix', 'Squarespace'].includes(targetPlatform)) {
+        sendEvent({
+          type: 'status',
+          page: locIdx + 1,
+          totalPages: subLocations.length,
+          totalFound: seen.size,
+          message: `Cross-checking Bing Maps stores for "${cleanIndustry}" in ${subCity}…`
+        });
+        const mapItems = await searchBingMaps(cleanIndustry, subCity, 'shopify');
+        if (mapItems.length) await emitBusinesses(mapItems);
+      }
+    }
+
+    if (seen.size === 0) await onFailure?.();
+    sendEvent({ type: 'done', totalFound: seen.size });
+    if (!res.writableEnded) res.end();
+    return;
+  }
+
+  // MODE C: MULTI-ENGINE LOCAL & MAPS DISCOVERY (Bing Maps + Google Maps/Serper + Bing RSS + DuckDuckGo + OSM)
+  let subLocations = await resolveSearchLocations(cleanCity);
+  if (subLocations.length > 1 && tierLevel < 4) {
+    subLocations = [cleanCity];
+    sendEvent({
+      type: 'status',
+      totalFound: 0,
+      message: `Searching "${cleanCity}" (State-wide multi-city expansion unlocks on Premium / Agency & Diamond plans)…`
+    });
+  }
+  const isStateBreakdown = subLocations.length > 1;
+  const offsetConfigs = getSearchOffsets(rankMode === 'shopify' ? 'low' : rankMode, isStateBreakdown);
 
   if (isStateBreakdown) {
     sendEvent({
       type: 'status',
       totalFound: 0,
-      message: `Breaking "${city}" into ${subLocations.length} cities/districts (${subLocations.slice(0, 4).map(s => s.split(',')[0]).join(', ')}…) to scrape bit-by-bit…`
+      message: `Breaking "${cleanCity}" into ${subLocations.length} cities/districts (${subLocations.slice(0, 4).map(s => s.split(',')[0]).join(', ')}…) to scrape bit-by-bit…`
     });
   }
 
@@ -1557,14 +2060,27 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
     if (closed || stopped) break;
     const subCity = subLocations[locIndex];
 
-    // When searching for Shopify stores, first run site:myshopify.com & e-commerce web discovery
+    // 1. Optional Google Maps via Serper (if configured)
+    if (process.env.SERPER_API_KEY?.trim() && rankMode !== 'low' && !closed && !stopped) {
+      sendEvent({
+        type: 'status',
+        page: 1,
+        totalPages: offsetConfigs.length,
+        totalFound: seen.size,
+        message: `Querying Google Maps for "${cleanIndustry}" in ${subCity}…`
+      });
+      const gMapItems = await searchSerperMaps(cleanIndustry, subCity);
+      if (gMapItems.length) await emitBusinesses(gMapItems);
+    }
+
+    // 2. Shopify Web Discovery if rankMode === 'shopify'
     if (rankMode === 'shopify' && !closed && !stopped) {
       sendEvent({
         type: 'status',
         page: 1,
         totalPages: offsetConfigs.length,
         totalFound: seen.size,
-        message: `Scraping Shopify stores via site:myshopify.com & web search in ${subCity}…`
+        message: `Scraping Shopify stores via Bing RSS, DuckDuckGo & site:myshopify.com in ${subCity}…`
       });
       try {
         const siteItems = await searchShopifySiteWeb(cleanIndustry, subCity);
@@ -1572,6 +2088,7 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
       } catch {}
     }
 
+    // 3. Bing Maps Pagination
     const queries = rankMode === 'shopify'
       ? [`${cleanIndustry} store in ${subCity}`, `${cleanIndustry} boutique shop in ${subCity}`]
       : [`${cleanIndustry} in ${subCity}`];
@@ -1587,7 +2104,7 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
           totalPages: offsetConfigs.length,
           totalFound: seen.size,
           message: isStateBreakdown
-            ? `Scraping ${city} bit-by-bit [${locIndex + 1}/${subLocations.length}: ${subCity} · Page ${page}]…`
+            ? `Scraping ${cleanCity} bit-by-bit [${locIndex + 1}/${subLocations.length}: ${subCity} · Page ${page}]…`
             : (rankMode === 'low' || rankMode === 'shopify'
                 ? `Scraping low-ranked Bing results in ${subCity} (Page ${page}, Rank #${first}+)…`
                 : `Scraping Bing Maps in ${subCity} (Page ${page}, Rank #${first}+)…`)
@@ -1618,12 +2135,28 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
         }
       }
     }
+
+    // 4. Supplemental Bing RSS + DuckDuckGo Lite Web Sweep for extra local business websites
+    if (!closed && !stopped && !isStateBreakdown) {
+      sendEvent({
+        type: 'status',
+        totalFound: seen.size,
+        message: `Sweeping Bing RSS & DuckDuckGo for additional "${cleanIndustry}" websites in ${subCity}…`
+      });
+      const webQuery = `"${cleanIndustry}" "${subCity}" -jobs -vacancies -yelp -tripadvisor`;
+      const [rssExtra, ddgExtra] = await Promise.all([
+        searchBingRss(webQuery, cleanIndustry, subCity, seen.size + 1),
+        searchDuckDuckGoLite(webQuery, cleanIndustry, subCity, seen.size + 1)
+      ]);
+      const combinedWeb = [...rssExtra, ...ddgExtra];
+      if (combinedWeb.length) await emitBusinesses(combinedWeb);
+    }
   }
 
   if (seen.size === 0 && !closed && !stopped) {
     sendEvent({ type: 'status', message: 'Checking OpenStreetMap fallback…', totalFound: 0 });
     try {
-      const fallbackItems = await searchOverpassFallback(cleanIndustry, city);
+      const fallbackItems = await searchOverpassFallback(cleanIndustry, cleanCity);
       await emitBusinesses(fallbackItems);
     } catch (error) {
       await onFailure?.();
@@ -1935,31 +2468,82 @@ async function assertSafePublicUrl(rawUrl) {
   return parsed;
 }
 
-const ignoredEmailDomains = new Set(['example.com', 'example.org', 'domain.com', 'yourdomain.com', 'email.com', 'sentry.io', 'wixpress.com']);
+const ignoredEmailDomains = new Set([
+  'example.com', 'example.org', 'domain.com', 'yourdomain.com', 'email.com',
+  'sentry.io', 'sentry.wixpress.com', 'wixpress.com', 'cloudflare.com',
+  'shopify.com', 'myshopify.com', 'klaviyo.com', 'w3.org', 'schema.org', 'googleapis.com'
+]);
 const ignoredExtensions = /\.(png|jpe?g|gif|webp|svg|css|js|woff2?|ttf|eot|ico|pdf|mp4|mp3|zip)$/i;
 
-export function extractEmailsFromHtml(html = '') {
+export function decodeCloudflareEmail(encodedHex = '') {
+  const clean = String(encodedHex || '').trim().replace(/^#/, '');
+  if (!/^[0-9a-fA-F]{6,200}$/.test(clean) || clean.length % 2 !== 0) return '';
+  const key = parseInt(clean.slice(0, 2), 16);
+  let out = '';
+  for (let i = 2; i < clean.length; i += 2) {
+    out += String.fromCharCode(parseInt(clean.slice(i, i + 2), 16) ^ key);
+  }
+  return out.trim().toLowerCase();
+}
+
+export function rankDiscoveredEmails(emails = [], siteHostname = '') {
+  const cleanSiteHost = String(siteHostname || '').toLowerCase().replace(/^www\./, '');
+  const scoreEmail = addr => {
+    const [local = '', domain = ''] = String(addr || '').toLowerCase().split('@');
+    let score = 50;
+    if (cleanSiteHost && (domain === cleanSiteHost || domain.endsWith('.' + cleanSiteHost))) score += 30;
+    if (/^(founder|owner|ceo|hello|hi|contact|sales|inquiries|enquiries|projects|studio|booking|team)$/.test(local)) score += 20;
+    else if (/^[a-z]{2,18}(\.[a-z]{2,18})?$/.test(local) && !/^(info|support|admin|help|office|mail)$/.test(local)) score += 25;
+    if (/^(noreply|no-reply|donotreply|do-not-reply|bounce|mailer-daemon|privacy|legal|abuse|dmca|postmaster)/.test(local)) score -= 60;
+    return score;
+  };
+  return [...new Set(emails)].sort((a, b) => scoreEmail(b) - scoreEmail(a));
+}
+
+export function extractEmailsFromHtml(html = '', siteHostname = '') {
   const found = new Set();
   const addCandidate = candidate => {
-    const cleaned = decodeURIComponent(candidate || '')
+    let raw = String(candidate || '');
+    try { raw = decodeURIComponent(raw); } catch {}
+    const cleaned = decodeHtmlEntities(raw)
       .replace(/^mailto:/i, '')
       .split('?')[0]
       .trim()
-      .replace(/[.,;:'")\]}>]+$/, '')
+      .replace(/^[<([{"']+|[.,;:'")\]}>]+$/g, '')
       .toLowerCase();
     if (!validEmail(cleaned) || ignoredExtensions.test(cleaned)) return;
-    const domain = cleaned.split('@')[1];
-    if (ignoredEmailDomains.has(domain)) return;
+    const [local, domain] = cleaned.split('@');
+    if (!local || !domain || local.length > 64) return;
+    if (/^\d+x\d+$/.test(local) || ignoredEmailDomains.has(domain)) return;
+    for (const bad of ignoredEmailDomains) {
+      if (domain.endsWith('.' + bad)) return;
+    }
     found.add(cleaned);
   };
+
+  // 1. Direct mailto: links
   for (const match of html.matchAll(/href\s*=\s*["']mailto:([^"'>\s]+)/gi)) {
     addCandidate(match[1]);
   }
-  const text = html.replace(/<[^>]+>/g, ' ');
-  for (const match of text.matchAll(/[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g)) {
+  // 2. Cloudflare Email Protection ([data-cfemail] & /cdn-cgi/l/email-protection#...)
+  for (const match of html.matchAll(/data-cfemail\s*=\s*["']([0-9a-fA-F]{6,200})["']/gi)) {
+    addCandidate(decodeCloudflareEmail(match[1]));
+  }
+  for (const match of html.matchAll(/\/cdn-cgi\/l\/email-protection#([0-9a-fA-F]{6,200})/gi)) {
+    addCandidate(decodeCloudflareEmail(match[1]));
+  }
+  // 3. Schema.org JSON-LD ContactPoint / Organization email
+  for (const match of html.matchAll(/"email"\s*:\s*"([^"]{5,160})"/gi)) {
+    addCandidate(match[1]);
+  }
+  // 4. Plain text + De-obfuscated ([at] / (at) / [dot]) emails
+  const decodedText = decodeHtmlEntities(html.replace(/<[^>]+>/g, ' '))
+    .replace(/\s*(?:\[at\]|\(at\)|\{at\}|\s+at\s+)\s*/gi, '@')
+    .replace(/\s*(?:\[dot\]|\(dot\)|\{dot\})\s*/gi, '.');
+  for (const match of decodedText.matchAll(/[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g)) {
     addCandidate(match[0]);
   }
-  return [...found];
+  return rankDiscoveredEmails([...found], siteHostname);
 }
 
 export function extractSocialsFromHtml(html = '') {
@@ -2030,10 +2614,14 @@ export function detectPlatformAndTech(html = '', siteUrl = '') {
     ['Mailchimp', /list-manage[.]com|chimpstatic[.]com|mailchimp[.]com[/]embedcode/i],
     ['MailerLite', /assets[.]mailerlite[.]com|mlcdn[.]com|mlsend[.]com[/]forms/i],
     ['Buttondown', /buttondown[.](?:com|email)[/]api[/]emails[/]embed-subscribe/i],
-    ['Klaviyo', /klaviyo[.]com|klaviyo[.]js/i],
+    ['Klaviyo', /klaviyo[.]com|klaviyo[.]js|_learnq/i],
     ['Omnisend', /omnisend[.]com|omnisnippet/i],
-    ['Brevo', /sibforms[.]com|sibautomation[.]com/i],
+    ['Brevo', /sibforms[.]com|sibautomation[.]com|brevo[.]com/i],
     ['ActiveCampaign', /activehosted[.]com|trackcmp[.]net/i],
+    ['Drip', /dc[.]getdrip[.]com|_dcq/i],
+    ['Privy', /widget[.]privy[.]com/i],
+    ['GetResponse', /app[.]getresponse[.]com/i],
+    ['Constant Contact', /constantcontact[.]com|ctctcdn[.]com/i],
     ['Judge.me Reviews', /judge\.me/i],
     ['Loox Reviews', /loox\.io/i],
     ['Yotpo Reviews', /yotpo/i],
@@ -2233,7 +2821,7 @@ async function fetchWebsiteEmails(websiteUrl) {
   } catch {
     fail(502, 'Could not reach the business website.');
   }
-  const emails = new Set(extractEmailsFromHtml(homepageHtml));
+  const emails = new Set(extractEmailsFromHtml(homepageHtml, base.hostname));
   const emailSources = Object.fromEntries([...emails].map(email => [email, base.href]));
   let contactPage = '';
   let contactFormSource = '';
@@ -2241,7 +2829,8 @@ async function fetchWebsiteEmails(websiteUrl) {
   let phoneSource = '';
   function collectContactDetails(html, source) {
     if (!phone) {
-      const phoneLink = html.match(/href\s*=\s*["']tel:([+\d().\s-]{7,35})["']/i)?.[1]?.trim();
+      const phoneLink = html.match(/href\s*=\s*["']tel:([+\d().\s-]{7,35})["']/i)?.[1]?.trim()
+        || html.match(/"telephone"\s*:\s*"([+\d().\s-]{7,35})"/i)?.[1]?.trim();
       if (phoneLink && phoneLink.replace(/\D/g, '').length >= 7) {
         phone = phoneLink;
         phoneSource = source;
@@ -2264,7 +2853,10 @@ async function fetchWebsiteEmails(websiteUrl) {
   if (homepageHtml) {
     const subLinks = [...homepageHtml.matchAll(/href\s*=\s*["']([^"'#]+)["']/gi)]
       .map(match => match[1])
-      .filter(href => /(contact|about|services|our-story|who-we-are|impressum|get-in-touch|reach-us|pages\/contact|pages\/about)/i.test(href));
+      .filter(href => /(contact|about|team|our-story|who-we-are|impressum|get-in-touch|reach-us|pages\/contact|pages\/about|policies\/contact-information)/i.test(href));
+    if (insights.platform === 'Shopify') {
+      subLinks.unshift('/policies/contact-information', '/pages/contact');
+    }
     const uniqueSubUrls = [];
     for (const href of subLinks) {
       try {
@@ -2272,7 +2864,7 @@ async function fetchWebsiteEmails(websiteUrl) {
         if (subUrl.hostname === base.hostname && subUrl.href !== base.href &&
             ['http:', 'https:'].includes(subUrl.protocol) && !uniqueSubUrls.includes(subUrl.href)) {
           uniqueSubUrls.push(subUrl.href);
-          if (uniqueSubUrls.length >= 2) break;
+          if (uniqueSubUrls.length >= 4) break;
         }
       } catch {
         // Ignore invalid sublink
@@ -2283,7 +2875,7 @@ async function fetchWebsiteEmails(websiteUrl) {
         const subHtml = await fetchHtml(subHref);
         collectContactDetails(subHtml, subHref);
         if (subHtml && /contact|get-in-touch|reach-us|impressum/i.test(subHref)) contactPage ||= subHref;
-        for (const email of extractEmailsFromHtml(subHtml)) {
+        for (const email of extractEmailsFromHtml(subHtml, base.hostname)) {
           emails.add(email);
           emailSources[email] ||= subHref;
         }
@@ -2389,17 +2981,18 @@ async function fetchWebsiteEmails(websiteUrl) {
     ? insights.platform
     : (auditReport.stack?.platform || insights.platform);
 
+  const rankedEmails = rankDiscoveredEmails([...emails], base.hostname);
   return {
     website: base.href,
     brandName: insights.brandName || insights.siteTitle?.split(/[|\-–—]/)[0]?.trim() || base.hostname.replace(/^www\./, ''),
     logoUrl: insights.logoUrl || '',
-    emails: [...emails],
+    emails: rankedEmails,
     emailSources,
     contactPage,
     contactFormSource,
     phone,
     phoneSource,
-    email: [...emails][0] || '',
+    email: rankedEmails[0] || '',
     socials,
     facebook: socials.facebook,
     instagram: socials.instagram,
@@ -2452,8 +3045,13 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
   const activeLensLabel = `${persona.title}${addedTools.length ? ` + ${addedTools.map(k => PERSONA_TOOL_MODULES[k]?.shortLabel).filter(Boolean).join(', ')}` : ''}`;
 
   const overviewParts = [
-    `${name} operates as a ${industry} in ${city}${lead.address ? ` (${lead.address})` : ''}.`
+    lead.redditMeta
+      ? `${name} posted in r/${lead.redditMeta.subreddit} (${lead.redditMeta.intentType}${lead.redditMeta.budgetHint ? ` · Budget: ${lead.redditMeta.budgetHint}` : ''}): "${lead.redditMeta.postTitle}".`
+      : `${name} operates as a ${industry} in ${city}${lead.address ? ` (${lead.address})` : ''}.`
   ];
+  if (lead.redditMeta?.postSnippet) {
+    overviewParts.push(`Reddit request summary: "${lead.redditMeta.postSnippet.slice(0, 260)}".`);
+  }
   if (activeModules.has('seo_local') && lead.searchRank) {
     overviewParts.push(`Current Bing Search Position: Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)}).`);
   }
@@ -3093,11 +3691,15 @@ export async function handleRequest(req, res) {
         const record = await findUserById(session.userId);
         if (record) {
           const usage = getUserQuotaStatus(record);
+          const adv = getAdvancedSearchUsage(session.userId, usage);
+          usage.advancedSearchesToday = adv.used;
+          usage.dailyAdvancedSearchLimit = adv.limit;
           activeUser = { id: record.id, email: record.email, name: record.name || '', tier: usage.tier, createdAt: record.created_at || null, usage };
           session.user = activeUser;
         }
       }
       const ws = session.userId ? getWorkspace(session.userId) : createEmptyWorkspace();
+      const { _advancedUsage: _omitAdv, ...publicSettings } = (session.userId ? ws.settings : createEmptyWorkspace().settings) || {};
       return json({
         user: activeUser,
         tiers: Object.values(USER_TIERS),
@@ -3109,7 +3711,7 @@ export async function handleRequest(req, res) {
         mailbox: session.userId ? (session.mailbox ?? null) : null,
         supabase: supabaseStatus,
         leads: session.userId ? ws.leads : [],
-        settings: session.userId ? ws.settings : createEmptyWorkspace().settings
+        settings: publicSettings
       });
     }
     if (req.method === 'POST' && path === '/api/workspace') {
@@ -3139,6 +3741,8 @@ export async function handleRequest(req, res) {
           avatarUrl: safeAvatar,
           persona: persona.id,
           addedTools,
+          autoEnrichDiscovery: tierLevel >= 3 ? Boolean(payload.settings.autoEnrichDiscovery) : false,
+          _advancedUsage: previous.settings?._advancedUsage,
           savedSearches: normalizeSavedSearches(payload.settings.savedSearches),
           leadProfiles: normalizeLeadProfiles(payload.settings.leadProfiles),
           defaultFollowUpDays: Math.max(0, Math.min(90, Number(payload.settings.defaultFollowUpDays) || 0)),
@@ -3177,21 +3781,52 @@ export async function handleRequest(req, res) {
       const quotaStatus = getUserQuotaStatus(userRecord);
       const tierLevel = quotaStatus.level || 1;
       const rankMode = url.searchParams.get('rankMode') || 'all';
+      const sourceType = ['local', 'platform', 'reddit'].includes(url.searchParams.get('sourceType'))
+        ? url.searchParams.get('sourceType')
+        : 'local';
+      const isAdvancedSearch = sourceType === 'platform' || sourceType === 'reddit' || rankMode === 'shopify';
+
       if (rankMode === 'low' && tierLevel < 2) {
         fail(403, 'Low-Ranking Business Discovery (Page 2+ / Rank #11+) requires the Silver (Starter) plan or higher.');
       }
-      if (rankMode === 'shopify' && tierLevel < 3) {
-        fail(403, 'Shopify & E-Commerce Store Discovery (site:myshopify.com) requires the Gold (Pro) plan or higher.');
+      if (isAdvancedSearch && tierLevel < 3) {
+        fail(403, 'Multi-Engine Store/Email-Platform & Reddit Lead Discovery requires Gold (Pro — 1/day), Premium (Agency), or Diamond.');
       }
       if (url.searchParams.get('expanded') === '1') return await streamDiscovery(res, url.searchParams, session.userId);
-      const city = (url.searchParams.get('city') || '').trim();
-      const industry = validateSearch(url.searchParams.get('industry'), city);
-      const chargedOn = await consumeQuota(session.userId, 'search');
+
+      const rawCity = (url.searchParams.get('city') || '').trim() || (sourceType !== 'local' ? 'Online' : '');
+      const rawIndustry = (url.searchParams.get('industry') || '').trim();
+      if (!rawIndustry || !rawCity) fail(400, 'Choose or enter a keyword/industry and enter a city or Online.');
+
+      const advChargedOn = isAdvancedSearch ? await consumeAdvancedSearchQuota(session.userId, quotaStatus) : null;
+      let chargedOn;
+      try {
+        chargedOn = await consumeQuota(session.userId, 'search');
+      } catch (err) {
+        if (advChargedOn) await consumeAdvancedSearchQuota(session.userId, quotaStatus, advChargedOn).catch(() => {});
+        throw err;
+      }
+
       if (url.searchParams.get('stream') === '1') {
-        return await streamSearch(res, industry, city, rankMode,
+        return await streamSearch(
+          res,
+          rawIndustry,
+          rawCity,
+          rankMode,
           count => consumeQuota(session.userId, 'result', null, count),
-          () => consumeQuota(session.userId, 'search', chargedOn).catch(console.error),
-          tierLevel);
+          async () => {
+            await consumeQuota(session.userId, 'search', chargedOn).catch(console.error);
+            if (advChargedOn) await consumeAdvancedSearchQuota(session.userId, quotaStatus, advChargedOn).catch(() => {});
+          },
+          tierLevel,
+          {
+            sourceType,
+            targetPlatform: url.searchParams.get('targetPlatform') || 'Shopify',
+            redditPack: url.searchParams.get('redditPack') || 'hiring',
+            redditIntent: url.searchParams.get('redditIntent') || 'all_buyers',
+            subreddits: url.searchParams.get('subreddits') || ''
+          }
+        );
       }
       try {
         const businesses = await search(industry, city);
