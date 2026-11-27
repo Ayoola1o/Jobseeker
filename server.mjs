@@ -300,6 +300,7 @@ export const USER_TIERS = {
     dailyResultLimit: 50,
     dailyEmailLimit: 20,
     dailyAdvancedSearchLimit: 0,
+    maxSearchPages: 8,
     features: {
       searchModes: ['all'],
       stateExpansion: false,
@@ -327,6 +328,7 @@ export const USER_TIERS = {
     dailyResultLimit: 300,
     dailyEmailLimit: 100,
     dailyAdvancedSearchLimit: 0,
+    maxSearchPages: 11,
     features: {
       searchModes: ['all', 'low'],
       stateExpansion: false,
@@ -354,6 +356,7 @@ export const USER_TIERS = {
     dailyResultLimit: 1000,
     dailyEmailLimit: 400,
     dailyAdvancedSearchLimit: 1,
+    maxSearchPages: 15,
     features: {
       searchModes: ['all', 'low', 'shopify'],
       stateExpansion: false,
@@ -381,6 +384,7 @@ export const USER_TIERS = {
     dailyResultLimit: 4000,
     dailyEmailLimit: 2000,
     dailyAdvancedSearchLimit: null,
+    maxSearchPages: 19,
     features: {
       searchModes: ['all', 'low', 'shopify'],
       stateExpansion: true,
@@ -408,6 +412,7 @@ export const USER_TIERS = {
     dailyResultLimit: null,
     dailyEmailLimit: null,
     dailyAdvancedSearchLimit: null,
+    maxSearchPages: 25,
     features: {
       searchModes: ['all', 'low', 'shopify'],
       stateExpansion: true,
@@ -440,6 +445,15 @@ function todayUsageDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
+export function getMaxSearchPagesForTier(tierLevel = 1) {
+  const lvl = Number(tierLevel) || 1;
+  if (lvl <= 1) return 8;
+  if (lvl === 2) return 11;
+  if (lvl === 3) return 15;
+  if (lvl === 4) return 19;
+  return 25;
+}
+
 export function getUserQuotaStatus(userRecord = {}) {
   const tierKey = normalizeTierKey(userRecord?.tier, userRecord?.email);
   const tier = USER_TIERS[tierKey] || USER_TIERS.basic;
@@ -459,6 +473,7 @@ export function getUserQuotaStatus(userRecord = {}) {
     dailyEmailLimit: tier.dailyEmailLimit,
     dailyResultLimit: tier.dailyResultLimit,
     dailyAdvancedSearchLimit: tier.dailyAdvancedSearchLimit,
+    maxSearchPages: tier.maxSearchPages,
     searchesToday,
     resultsToday,
     emailsToday,
@@ -1328,32 +1343,64 @@ export async function resolveSearchLocations(rawLocation = '') {
   return [cleaned];
 }
 
-function getSearchOffsets(rankMode = 'all', isMultiCity = false) {
+const cityCoordsCache = new Map();
+async function resolveCityCoords(city = '') {
+  const key = String(city || '').trim().toLowerCase();
+  if (!key || /^(online|global|worldwide|remote|any)$/i.test(key)) return null;
+  if (cityCoordsCache.has(key)) return cityCoordsCache.get(key);
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=json&limit=1`, {
+      headers: { 'User-Agent': 'Job Hunta/1.2 (local business discovery)' },
+      signal: AbortSignal.timeout(3200)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.[0]?.lat && data?.[0]?.lon) {
+        const coords = { lat: Number(data[0].lat).toFixed(5), lon: Number(data[0].lon).toFixed(5) };
+        cityCoordsCache.set(key, coords);
+        return coords;
+      }
+    }
+  } catch {}
+  cityCoordsCache.set(key, null);
+  return null;
+}
+
+export function getSearchOffsets(rankMode = 'all', isMultiCity = false, tierLevel = 1) {
+  const maxPage = getMaxSearchPagesForTier(tierLevel);
   if (isMultiCity) {
-    return rankMode === 'low' || rankMode === 'shopify'
-      ? [{ first: 21, page: 3 }, { first: 41, page: 4 }]
-      : [{ first: 1, page: 1 }, { first: 11, page: 2 }];
+    if (rankMode === 'deep_full' && tierLevel >= 5) {
+      return [{ first: 1, page: 1 }, { first: 21, page: 3 }, { first: 61, page: 7 }, { first: 101, page: 11 }, { first: 161, page: 17 }];
+    }
+    if (rankMode === 'deep_19' && tierLevel >= 4) {
+      return [{ first: 81, page: 9 }, { first: 121, page: 13 }, { first: 161, page: 17 }];
+    }
+    return ['low', 'deep_15', 'shopify'].includes(rankMode)
+      ? [{ first: 21, page: 3 }, { first: 51, page: 6 }]
+      : [{ first: 1, page: 1 }, { first: 11, page: 2 }, { first: 21, page: 3 }];
   }
+
+  let startPage = 1;
+  let endPage = maxPage;
   if (rankMode === 'low') {
-    return [
-      { first: 21, page: 3 },
-      { first: 41, page: 4 },
-      { first: 61, page: 5 },
-      { first: 81, page: 6 },
-      { first: 101, page: 7 },
-      { first: 121, page: 8 }
-    ];
+    startPage = 3;
+    endPage = Math.max(8, Math.min(maxPage, 11));
+  } else if (rankMode === 'deep_15') {
+    startPage = 6;
+    endPage = Math.min(maxPage, 15);
+  } else if (rankMode === 'deep_19') {
+    startPage = 9;
+    endPage = Math.min(maxPage, 19);
+  } else if (rankMode === 'deep_full') {
+    startPage = 1;
+    endPage = Math.max(maxPage, 25);
   }
-  return [
-    { first: 1, page: 1 },
-    { first: 11, page: 2 },
-    { first: 21, page: 3 },
-    { first: 31, page: 4 },
-    { first: 41, page: 5 },
-    { first: 51, page: 6 },
-    { first: 61, page: 7 },
-    { first: 71, page: 8 }
-  ];
+
+  const offsets = [];
+  for (let p = startPage; p <= endPage; p++) {
+    offsets.push({ first: (p - 1) * 10 + 1, page: p });
+  }
+  return offsets;
 }
 
 const ignoredWebHosts = /(?:^|\.)(?:bing\.com|microsoft\.com|google\.com|facebook\.com|instagram\.com|linkedin\.com|youtube\.com|tiktok\.com|pinterest\.com|twitter\.com|x\.com|amazon\.com|ebay\.com|etsy\.com|yelp\.com|tripadvisor\.com|yellowpages\.com|wikipedia\.org|reddit\.com|shopify\.com|apps\.shopify\.com|community\.shopify\.com|help\.shopify\.com)$/i;
@@ -1542,9 +1589,9 @@ export function parseDuckDuckGoHtml(html = '', fallbackIndustry = '', city = '',
   return items;
 }
 
-async function searchBingRss(query, cleanIndustry, subCity, startRank = 1) {
+async function searchBingRss(query, cleanIndustry, subCity, startRank = 1, firstOffset = 1) {
   try {
-    const rssUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&format=rss&count=20`;
+    const rssUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&format=rss&count=20&first=${firstOffset}`;
     const response = await fetch(rssUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -1874,7 +1921,7 @@ async function searchBingMaps(cleanIndustry, city, rankMode = 'all') {
   return [...seen.values()];
 }
 
-async function searchOverpassFallback(cleanIndustry, city) {
+async function searchOverpassFallback(cleanIndustry, city, limitNodes = 100, radiusMeters = 6000) {
   const escapedCity = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const cityName = `["name"~${JSON.stringify('^' + escapedCity + '$')},i]`;
 
@@ -1884,7 +1931,7 @@ async function searchOverpassFallback(cleanIndustry, city) {
     const [tag, value] = industries[cleanIndustry];
     const filter = `["${tag}"="${value}"]["name"]`;
     areaQuery = `area${cityName}["boundary"="administrative"]->.city;nwr(area.city)${filter};`;
-    nearbyQuery = `node${cityName}["place"~"^(city|town|village|suburb|borough|municipality)$"]->.city;nwr(around.city:6000)${filter};`;
+    nearbyQuery = `node${cityName}["place"~"^(city|town|village|suburb|borough|municipality)$"]->.city;nwr(around.city:${radiusMeters})${filter};`;
   } else {
     const escapedInd = cleanIndustry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const slugInd = cleanIndustry.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
@@ -1898,12 +1945,12 @@ async function searchOverpassFallback(cleanIndustry, city) {
       `nwr(area.city)["tourism"~${tagRegex},i]["name"];` +
       `nwr(area.city)["name"~${nameRegex},i];);`;
     nearbyQuery = `node${cityName}["place"~"^(city|town|village|suburb|borough|municipality)$"]->.city;(` +
-      `nwr(around.city:6000)["amenity"~${tagRegex},i]["name"];` +
-      `nwr(around.city:6000)["shop"~${tagRegex},i]["name"];` +
-      `nwr(around.city:6000)["office"~${tagRegex},i]["name"];` +
-      `nwr(around.city:6000)["craft"~${tagRegex},i]["name"];` +
-      `nwr(around.city:6000)["tourism"~${tagRegex},i]["name"];` +
-      `nwr(around.city:6000)["name"~${nameRegex},i];);`;
+      `nwr(around.city:${radiusMeters})["amenity"~${tagRegex},i]["name"];` +
+      `nwr(around.city:${radiusMeters})["shop"~${tagRegex},i]["name"];` +
+      `nwr(around.city:${radiusMeters})["office"~${tagRegex},i]["name"];` +
+      `nwr(around.city:${radiusMeters})["craft"~${tagRegex},i]["name"];` +
+      `nwr(around.city:${radiusMeters})["tourism"~${tagRegex},i]["name"];` +
+      `nwr(around.city:${radiusMeters})["name"~${nameRegex},i];);`;
   }
 
   const queryOverpass = async query => {
@@ -1911,8 +1958,8 @@ async function searchOverpassFallback(cleanIndustry, city) {
       try {
         const result = await provider('https://' + host + '/api/interpreter', {
           method: 'POST',
-          headers: { 'User-Agent': 'Job Hunta/1.1 (personal local business search)', Accept: 'application/json' },
-          body: new URLSearchParams({ data: '[out:json][timeout:12];' + query + 'out tags 100;' })
+          headers: { 'User-Agent': 'Job Hunta/1.2 (personal local business search)', Accept: 'application/json' },
+          body: new URLSearchParams({ data: `[out:json][timeout:14];${query}out tags ${Math.min(350, Math.max(50, limitNodes))};` })
         }, 'Business search');
         if (!result.remark && Array.isArray(result.elements)) return result;
       } catch {
@@ -2059,7 +2106,7 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
     return;
   }
 
-  // MODE C: MULTI-ENGINE LOCAL & MAPS DISCOVERY (Bing Maps + Google Maps/Serper + Bing RSS + DuckDuckGo + OSM)
+  // MODE C: MULTI-ENGINE LOCAL & MAPS DISCOVERY (Progressive Page Depth: Basic 1–8, Silver 1–11, Gold 1–15, Premium 1–19, Diamond 1–25+ Full)
   let subLocations = await resolveSearchLocations(cleanCity);
   if (subLocations.length > 1 && tierLevel < 4) {
     subLocations = [cleanCity];
@@ -2070,7 +2117,8 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
     });
   }
   const isStateBreakdown = subLocations.length > 1;
-  const offsetConfigs = getSearchOffsets(rankMode === 'shopify' ? 'low' : rankMode, isStateBreakdown);
+  const offsetConfigs = getSearchOffsets(rankMode === 'shopify' ? 'low' : rankMode, isStateBreakdown, tierLevel);
+  const isDeepRankMode = ['low', 'deep_15', 'deep_19', 'deep_full'].includes(rankMode);
 
   if (isStateBreakdown) {
     sendEvent({
@@ -2083,9 +2131,11 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
   for (let locIndex = 0; locIndex < subLocations.length; locIndex++) {
     if (closed || stopped) break;
     const subCity = subLocations[locIndex];
+    const cityCoords = await resolveCityCoords(subCity);
+    const cpParam = cityCoords ? `&cp=${cityCoords.lat}%7E${cityCoords.lon}&lvl=13.5` : '';
 
     // 1. Optional Google Maps via Serper (if configured)
-    if (process.env.SERPER_API_KEY?.trim() && rankMode !== 'low' && !closed && !stopped) {
+    if (process.env.SERPER_API_KEY?.trim() && !['low', 'deep_15', 'deep_19'].includes(rankMode) && !closed && !stopped) {
       sendEvent({
         type: 'status',
         page: 1,
@@ -2112,12 +2162,15 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
       } catch {}
     }
 
-    // 3. Bing Maps Pagination
+    // 3. Multi-Page Bing Maps + Multi-Page Bing Web RSS Pagination (up to Plan Max Page: 8 / 11 / 15 / 19 / 25+)
     const queries = rankMode === 'shopify'
       ? [`${cleanIndustry} store in ${subCity}`, `${cleanIndustry} boutique shop in ${subCity}`]
       : [`${cleanIndustry} in ${subCity}`];
 
+    const rssWebQuery = `"${cleanIndustry}" "${subCity}" -jobs -vacancies -yelp -tripadvisor -yellowpages`;
     let emptyStreak = 0;
+    const maxEmptyStreak = isDeepRankMode ? 5 : 3;
+
     for (const query of queries) {
       for (let idx = 0; idx < offsetConfigs.length; idx++) {
         if (closed || stopped) break;
@@ -2129,28 +2182,39 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
           totalFound: seen.size,
           message: isStateBreakdown
             ? `Scraping ${cleanCity} bit-by-bit [${locIndex + 1}/${subLocations.length}: ${subCity} · Page ${page}]…`
-            : (rankMode === 'low' || rankMode === 'shopify'
-                ? `Scraping low-ranked Bing results in ${subCity} (Page ${page}, Rank #${first}+)…`
-                : `Scraping Bing Maps in ${subCity} (Page ${page}, Rank #${first}+)…`)
+            : (isDeepRankMode || rankMode === 'shopify'
+                ? `Scraping deep-ranked businesses in ${subCity} (Page ${page}, Rank #${first}+)…`
+                : `Scraping Multi-Engine Page ${page} (Rank #${first}+) in ${subCity}…`)
         });
         try {
-          const url = `https://www.bing.com/maps/overlaybfpr?q=${encodeURIComponent(query)}&count=20&first=${first}`;
-          const response = await fetch(url, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-              'Accept-Language': 'en-US,en;q=0.9'
-            },
-            signal: AbortSignal.timeout(10000)
-          });
-          if (!response.ok) break;
-          const html = await response.text();
-          const items = parseBingMapsHtml(html, cleanIndustry, subCity, first, page);
-          const addedOnPage = await emitBusinesses(items);
+          const mapUrl = `https://www.bing.com/maps/overlaybfpr?q=${encodeURIComponent(query)}&count=20&first=${first}${cpParam}`;
+          const [mapRes, rssPageItems] = await Promise.all([
+            fetch(mapUrl, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9'
+              },
+              signal: AbortSignal.timeout(9500)
+            }).catch(() => null),
+            !isStateBreakdown
+              ? searchBingRss(rssWebQuery, cleanIndustry, subCity, first, first)
+              : Promise.resolve([])
+          ]);
+
+          let mapItems = [];
+          if (mapRes && mapRes.ok) {
+            const html = await mapRes.text();
+            mapItems = parseBingMapsHtml(html, cleanIndustry, subCity, first, page);
+          }
+          for (const rItem of rssPageItems) rItem.searchPage = page;
+
+          const combinedPageItems = [...mapItems, ...rssPageItems];
+          const addedOnPage = await emitBusinesses(combinedPageItems);
           if (stopped) break;
           if (addedOnPage === 0) {
             emptyStreak++;
-            if (emptyStreak >= 2) break;
+            if (emptyStreak >= maxEmptyStreak) break;
           } else {
             emptyStreak = 0;
           }
@@ -2160,27 +2224,69 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
       }
     }
 
-    // 4. Supplemental Bing RSS + DuckDuckGo Lite Web Sweep for extra local business websites
+    // 4. DuckDuckGo Lite Sweep + Weak-SEO / Outdated-Website Dorks (Gold/Premium/Diamond Deep Modes)
     if (!closed && !stopped && !isStateBreakdown) {
       sendEvent({
         type: 'status',
         totalFound: seen.size,
-        message: `Sweeping Bing RSS & DuckDuckGo for additional "${cleanIndustry}" websites in ${subCity}…`
+        message: `Sweeping DuckDuckGo${isDeepRankMode && tierLevel >= 3 ? ' & Weak-SEO footprints' : ''} for buried "${cleanIndustry}" websites in ${subCity}…`
       });
-      const webQuery = `"${cleanIndustry}" "${subCity}" -jobs -vacancies -yelp -tripadvisor`;
-      const [rssExtra, ddgExtra] = await Promise.all([
-        searchBingRss(webQuery, cleanIndustry, subCity, seen.size + 1),
-        searchDuckDuckGoLite(webQuery, cleanIndustry, subCity, seen.size + 1)
-      ]);
-      const combinedWeb = [...rssExtra, ...ddgExtra];
-      if (combinedWeb.length) await emitBusinesses(combinedWeb);
+      const ddgBase = searchDuckDuckGoLite(rssWebQuery, cleanIndustry, subCity, Math.max(seen.size + 1, offsetConfigs[0]?.first || 1));
+      const weakSeoPromises = (isDeepRankMode && tierLevel >= 3)
+        ? [
+            searchBingRss(`intitle:"Home" "${cleanIndustry}" "${subCity}" -yelp -facebook`, cleanIndustry, subCity, 120, 1),
+            searchBingRss(`"${cleanIndustry}" "${subCity}" ("powered by WordPress" OR "created with Wix" OR "© 2020" OR "© 2021") -yelp`, cleanIndustry, subCity, 140, 1)
+          ]
+        : [];
+      const extraBatches = await Promise.all([ddgBase, ...weakSeoPromises]);
+      const extraFlat = extraBatches.flat();
+      if (extraFlat.length) await emitBusinesses(extraFlat);
+    }
+
+    // 5. Diamond Deepest Full Sweep: Intra-City Neighborhood Zone Slicing + 300-node 15km OpenStreetMap Sweep
+    if (!closed && !stopped && !isStateBreakdown && rankMode === 'deep_full' && tierLevel >= 5) {
+      const zones = [`North ${subCity}`, `South ${subCity}`, `East ${subCity}`, `West ${subCity}`, `Downtown ${subCity}`];
+      for (let zIdx = 0; zIdx < zones.length; zIdx++) {
+        if (closed || stopped) break;
+        const zoneName = zones[zIdx];
+        sendEvent({
+          type: 'status',
+          totalFound: seen.size,
+          message: `Diamond Deep-Zone Sweep [${zIdx + 1}/${zones.length}: ${zoneName}] — uncovering buried neighborhood businesses…`
+        });
+        const zoneQuery = `"${cleanIndustry}" "${zoneName}" -yelp -tripadvisor -jobs`;
+        const [zoneRss, zoneDdg] = await Promise.all([
+          searchBingRss(zoneQuery, cleanIndustry, subCity, Math.max(201, seen.size + 1), 1),
+          searchDuckDuckGoLite(zoneQuery, cleanIndustry, subCity, Math.max(201, seen.size + 1))
+        ]);
+        const taggedZone = [...zoneRss, ...zoneDdg].map(it => ({ ...it, searchPage: Math.max(it.searchPage || 21, 21) }));
+        if (taggedZone.length) await emitBusinesses(taggedZone);
+      }
+
+      if (!closed && !stopped) {
+        sendEvent({
+          type: 'status',
+          totalFound: seen.size,
+          message: `Diamond 300-Node OpenStreetMap Deep Sweep (15km around ${subCity})…`
+        });
+        try {
+          const osmDeep = await searchOverpassFallback(cleanIndustry, subCity, 300, 15000);
+          const taggedOsm = osmDeep.map((it, idx) => ({
+            ...it,
+            searchRank: it.searchRank || (220 + idx),
+            searchPage: 23,
+            discoveryProvider: 'OpenStreetMap Deep'
+          }));
+          if (taggedOsm.length) await emitBusinesses(taggedOsm);
+        } catch {}
+      }
     }
   }
 
   if (seen.size === 0 && !closed && !stopped) {
     sendEvent({ type: 'status', message: 'Checking OpenStreetMap fallback…', totalFound: 0 });
     try {
-      const fallbackItems = await searchOverpassFallback(cleanIndustry, cleanCity);
+      const fallbackItems = await searchOverpassFallback(cleanIndustry, cleanCity, tierLevel >= 5 ? 300 : 100, tierLevel >= 5 ? 15000 : 6000);
       await emitBusinesses(fallbackItems);
     } catch (error) {
       await onFailure?.();
@@ -3915,7 +4021,16 @@ export async function handleRequest(req, res) {
       const isAdvancedSearch = sourceType === 'platform' || sourceType === 'reddit' || rankMode === 'shopify';
 
       if (rankMode === 'low' && tierLevel < 2) {
-        fail(403, 'Low-Ranking Business Discovery (Page 2+ / Rank #11+) requires the Silver (Starter) plan or higher.');
+        fail(403, 'Low-Ranking Business Discovery (Pages 3–11) requires the Silver (Starter) plan or higher.');
+      }
+      if (rankMode === 'deep_15' && tierLevel < 3) {
+        fail(403, 'Deep Low-Ranking Discovery (Pages 6–15) requires the Gold (Pro) plan or higher.');
+      }
+      if (rankMode === 'deep_19' && tierLevel < 4) {
+        fail(403, 'Ultra-Low Ranking Discovery (Pages 9–19) requires the Premium (Agency) plan or higher.');
+      }
+      if (rankMode === 'deep_full' && tierLevel < 5) {
+        fail(403, 'Deepest Full-Page & Neighborhood Discovery (Pages 1–25+ & 300-node OSM) requires the Diamond plan.');
       }
       if (isAdvancedSearch && tierLevel < 3) {
         fail(403, 'Multi-Engine Store/Email-Platform & Reddit Lead Discovery requires Gold (Pro — 1/day), Premium (Agency), or Diamond.');

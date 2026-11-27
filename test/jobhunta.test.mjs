@@ -28,6 +28,8 @@ import {
   classifyRedditPostIntent,
   decodeCloudflareEmail,
   rankDiscoveredEmails,
+  getMaxSearchPagesForTier,
+  getSearchOffsets,
   resolveSearchLocations,
   hashPassword,
   verifyPassword,
@@ -664,4 +666,41 @@ test('extractWebsiteInsights captures ogImage, siteImages with missing-alt flags
   assert.match(decodedMime, /Content-Type: text\/html; charset="UTF-8"/);
   assert.match(decodedMime, /filename="research-evidence\.html"/);
   assert.match(decodedMime, /filename="hero-shot\.png"/);
+});
+
+test('Progressive search page depth ladder enforces Basic=8, Silver=11, Gold=15, Premium=19, Diamond=25+ Full', () => {
+  assert.equal(getMaxSearchPagesForTier(1), 8);
+  assert.equal(getMaxSearchPagesForTier(2), 11);
+  assert.equal(getMaxSearchPagesForTier(3), 15);
+  assert.equal(getMaxSearchPagesForTier(4), 19);
+  assert.equal(getMaxSearchPagesForTier(5), 25);
+
+  assert.equal(USER_TIERS.basic.maxSearchPages, 8);
+  assert.equal(USER_TIERS.silver.maxSearchPages, 11);
+  assert.equal(USER_TIERS.gold.maxSearchPages, 15);
+  assert.equal(USER_TIERS.premium.maxSearchPages, 19);
+  assert.equal(USER_TIERS.diamond.maxSearchPages, 25);
+
+  const basicAll = getSearchOffsets('all', false, 1);
+  assert.equal(basicAll.at(0).page, 1);
+  assert.equal(basicAll.at(-1).page, 8);
+
+  const silverAll = getSearchOffsets('all', false, 2);
+  assert.equal(silverAll.at(-1).page, 11);
+  const silverLow = getSearchOffsets('low', false, 2);
+  assert.equal(silverLow.at(0).page, 3);
+  assert.equal(silverLow.at(-1).page, 11);
+
+  const goldDeep = getSearchOffsets('deep_15', false, 3);
+  assert.equal(goldDeep.at(0).page, 6);
+  assert.equal(goldDeep.at(-1).page, 15);
+
+  const premiumUltra = getSearchOffsets('deep_19', false, 4);
+  assert.equal(premiumUltra.at(0).page, 9);
+  assert.equal(premiumUltra.at(-1).page, 19);
+
+  const diamondFull = getSearchOffsets('deep_full', false, 5);
+  assert.equal(diamondFull.at(0).page, 1);
+  assert.equal(diamondFull.at(-1).page, 25);
+  assert.equal(diamondFull.at(-1).first, 241);
 });

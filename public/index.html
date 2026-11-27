@@ -208,10 +208,13 @@
             <label class="search-seg"><span id="city-label">City or State</span>
               <input name="city" id="city-input" placeholder="e.g. Lagos, Ikeja, Texas" minlength="2" maxlength="75" required>
             </label>
-            <label class="search-seg no-div" id="seg-rank-mode"><span>Mode</span>
+            <label class="search-seg no-div" id="seg-rank-mode"><span>Page Depth / Mode</span>
               <select name="rankMode" id="rank-mode">
-                <option value="all">All Ranks (Pages 1–8)</option>
-                <option value="low">Low-Ranked (Pages 3–8)</option>
+                <option value="all">All Ranks (Pages 1–8 · Plan Max)</option>
+                <option value="low">Low-Ranked (Pages 3–11 · Silver+)</option>
+                <option value="deep_15">Deep Low-Rank (Pages 6–15 · Gold+)</option>
+                <option value="deep_19">Ultra-Low Rank (Pages 9–19 · Premium+)</option>
+                <option value="deep_full">Deepest Full Sweep (Pages 1–25+ · Diamond)</option>
                 <option value="shopify">Shopify Stores (Gold+)</option>
               </select>
             </label>
@@ -259,7 +262,8 @@
                 <option value="shopify">Shopify stores only</option>
                 <option value="ecommerce">Stores &amp; Email Platforms</option>
                 <option value="reddit">Reddit Buyer Leads</option>
-                <option value="low">Low-ranked (Rank #21+)</option>
+                <option value="low">Low-ranked (Rank #21+ / Page 3+)</option>
+                <option value="ultra_low">Ultra-low ranked (Rank #81+ / Page 9+)</option>
               </select>
               <button id="stop-search" class="danger" type="button" hidden>Stop</button>
               <button id="save-all" class="btn-soft" type="button" hidden>Save all results</button>

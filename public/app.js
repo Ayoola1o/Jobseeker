@@ -119,11 +119,12 @@ const TIER_CATALOG = [
     dailySearchLimit: 10,
     dailyResultLimit: 50,
     dailyEmailLimit: 20,
+    maxSearchPages: 8,
     maxBroadcastRecipients: 0,
     features: [
       '10 searches & 50 leads discovered / day',
+      'Search Depth: Pages 1–8 (Up to Rank #80)',
       '20 outreach emails / day (1-to-1 Gmail)',
-      'Standard local search & 1 Search Folder',
       'Single-lead website combing & Audit Score preview',
       'Baseline AI pitch template preview'
     ]
@@ -141,11 +142,12 @@ const TIER_CATALOG = [
     dailySearchLimit: 40,
     dailyResultLimit: 300,
     dailyEmailLimit: 100,
+    maxSearchPages: 11,
     maxBroadcastRecipients: 0,
     features: [
       '40 searches & 300 leads discovered / day',
+      'Search Depth: Pages 1–11 (Low-Rank up to #110)',
       '100 outreach emails / day + File/Image Attachments',
-      'Low-Ranking Business Discovery (Rank #11+)',
       'Bad Ranking & Bad Performance Filters + All Folders',
       'Website Audit Bugs & SEO tabs + Editable 360° AI Pitch',
       'Phase 1 Quick-Wins Solution Pack checklist'
@@ -165,13 +167,14 @@ const TIER_CATALOG = [
     dailyResultLimit: 1000,
     dailyEmailLimit: 400,
     dailyAdvancedSearchLimit: 1,
+    maxSearchPages: 15,
     maxBroadcastRecipients: 50,
     features: [
       '150 searches & 1,000 leads discovered / day',
+      'Search Depth: Pages 1–15 + Weak-SEO Dorks',
       '400 outreach emails / day + Broadcast (50/run)',
       '1/day Multi-Engine Store, Email-Platform & Reddit Lead Search',
-      'Full 4-Layer Audit (Bugs, SEO, Speed, Security Hygiene)',
-      'Custom AI Prompt Refinement + 4 Outreach Variants',
+      'Full 4-Layer Audit + Custom AI Prompt Refinement',
       'Full 4-Phase Solution Pack, ROI Matrix & CSV Import/Export'
     ]
   },
@@ -189,14 +192,15 @@ const TIER_CATALOG = [
     dailyResultLimit: 4000,
     dailyEmailLimit: 2000,
     dailyAdvancedSearchLimit: null,
+    maxSearchPages: 19,
     maxBroadcastRecipients: 250,
     features: [
       '500 searches & 4,000 leads discovered / day',
+      'Search Depth: Pages 1–19 Ultra-Low Rank Discovery',
       '2,000 outreach emails / day + Broadcast (250/run)',
       'Unlimited Multi-Engine Store, Email-Stack & Reddit Discovery',
       'State-Wide Multi-City Scraping + Auto-Comb Enrichment',
-      'Downloadable .html Client Solution Pack Proposal',
-      '1-Click Solution Pack Insertion in Outreach Inbox'
+      'Downloadable .html Solution Pack & 1-Click Inbox Insert'
     ]
   },
   {
@@ -213,9 +217,11 @@ const TIER_CATALOG = [
     dailyResultLimit: null,
     dailyEmailLimit: null,
     dailyAdvancedSearchLimit: null,
+    maxSearchPages: 25,
     maxBroadcastRecipients: null,
     features: [
       'Unlimited searches & leads discovered / day',
+      'Deepest Full Page Sweep: Pages 1–25+ & Suburb/300-Node OSM',
       'Unlimited outreach emails & Broadcast batch size',
       'Unlimited Multi-Engine, Email-Platform & Reddit Lead Mining',
       'Full 4-Layer Audit, Custom AI Prompts & Bulk Combing',
@@ -1923,7 +1929,8 @@ function getVisibleSearchResults() {
   if (mode === 'shopify') return results.filter(item => item.platform === 'Shopify');
   if (mode === 'ecommerce') return results.filter(item => item.platform && item.platform !== 'Custom / Website' && item.platform !== 'Reddit Lead' || item.targetPlatform);
   if (mode === 'reddit') return results.filter(item => Boolean(item.redditMeta) || item.platform === 'Reddit Lead');
-  if (mode === 'low') return results.filter(item => (item.searchRank || 0) >= 21);
+  if (mode === 'low') return results.filter(item => (item.searchRank || 0) >= 21 || (item.searchPage || 0) >= 3);
+  if (mode === 'ultra_low') return results.filter(item => (item.searchRank || 0) >= 81 || (item.searchPage || 0) >= 9);
   return results;
 }
 
@@ -2032,7 +2039,10 @@ function buildSearchFolderName(industry = '', city = '', rankMode = 'all', sourc
   if (sourceType === 'reddit') return `${base} (Reddit Leads)`;
   if (sourceType === 'platform') return `${base} (${extraLabel || 'Platform'})`;
   if (rankMode === 'shopify') return `${base} (Shopify)`;
-  if (rankMode === 'low') return `${base} (Low-Ranked)`;
+  if (rankMode === 'deep_full') return `${base} (Pages 1–25+ Full)`;
+  if (rankMode === 'deep_19') return `${base} (Pages 9–19 Ultra-Low)`;
+  if (rankMode === 'deep_15') return `${base} (Pages 6–15 Deep)`;
+  if (rankMode === 'low') return `${base} (Pages 3–11 Low-Rank)`;
   return base;
 }
 
@@ -6031,6 +6041,14 @@ function setDiscoverSourceTab(source = 'local') {
 }
 
 function renderDiscoverMetaBar() {
+  const activeTier = getActiveTier();
+  const maxPages = activeTier.maxSearchPages || 8;
+  const allOpt = document.querySelector('#rank-mode option[value="all"]');
+  if (allOpt) {
+    allOpt.textContent = activeTier.level >= 5
+      ? `All Ranks (Pages 1–25+ · ${activeTier.label})`
+      : `All Ranks (Pages 1–${maxPages} · ${activeTier.label})`;
+  }
   const bar = $('#discover-meta-bar');
   if (!bar) return;
   const tierLevel = getUserTierLevel();
@@ -6041,7 +6059,7 @@ function renderDiscoverMetaBar() {
   const leftPill = create('span', '', 'discover-meta-pill');
   leftPill.append(
     iconEl('sparkles', 13),
-    document.createTextNode(`Auto-Comb Websites: ${settings.autoEnrichDiscovery ? 'ON' : 'OFF (Default)'} · `)
+    document.createTextNode(`Page Depth: 1–${tierLevel >= 5 ? '25+ Full' : maxPages} · Auto-Comb: ${settings.autoEnrichDiscovery ? 'ON' : 'OFF'} · `)
   );
   const cfgBtn = create('button', 'Toggle in Settings →', 'discover-meta-link');
   cfgBtn.type = 'button';
@@ -6093,7 +6111,19 @@ $('#search').onsubmit = async event => {
   const targetPlatform = String(formData.get('targetPlatform') || 'Shopify');
   const redditPack = String(formData.get('redditPack') || 'hiring');
 
-  if (sourceType === 'local' && chosenMode === 'low' && !requireTier(2, 'Low-Ranking Business Discovery (Rank #11+)', 'Target businesses buried on Pages 2–8 of search results on Silver (Starter) and above.')) {
+  if (sourceType === 'local' && chosenMode === 'low' && !requireTier(2, 'Low-Ranking Business Discovery (Pages 3–11)', 'Target businesses buried on Pages 3–11 of search results on Silver (Starter — up to Page 11) and above.')) {
+    if ($('#rank-mode')) $('#rank-mode').value = 'all';
+    return;
+  }
+  if (sourceType === 'local' && chosenMode === 'deep_15' && !requireTier(3, 'Deep Low-Rank Discovery (Pages 6–15 & Weak-SEO)', 'Scrape deep Pages 6–15 plus weak-SEO / unoptimized business footprints on Gold (Pro — up to Page 15) and above.')) {
+    if ($('#rank-mode')) $('#rank-mode').value = 'all';
+    return;
+  }
+  if (sourceType === 'local' && chosenMode === 'deep_19' && !requireTier(4, 'Ultra-Low Rank Discovery (Pages 9–19)', 'Uncover deeply buried businesses across Pages 9–19 on Premium (Agency — up to Page 19) and Diamond plans.')) {
+    if ($('#rank-mode')) $('#rank-mode').value = 'all';
+    return;
+  }
+  if (sourceType === 'local' && chosenMode === 'deep_full' && !requireTier(5, 'Deepest Full Sweep (Pages 1–25+ & Suburb/OSM Expansion)', 'Unlock full 25+ page pagination, intra-city neighborhood slicing, weak-SEO dorks, and 300-node OpenStreetMap sweeps on Diamond.')) {
     if ($('#rank-mode')) $('#rank-mode').value = 'all';
     return;
   }
