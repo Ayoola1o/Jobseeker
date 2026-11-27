@@ -4950,7 +4950,7 @@ function renderProfile() {
   const heroActs = create('div', '', 'actions profile-hero-actions');
   if (currentUser?.isAdmin) {
     heroActs.append(
-      btnWithIcon('shieldCheck', 'Open Admin cPanel', () => { location.hash = '#admin'; }, 'hero-btn-white')
+      btnWithIcon('shieldCheck', 'Open Admin cPanel', () => { location.assign('/admin'); }, 'hero-btn-white')
     );
   }
   heroActs.append(
@@ -7568,6 +7568,10 @@ $('#tab-signup').onclick = () => setAuthMode('signup');
 $('#auth-switch-btn').onclick = () => setAuthMode(authMode === 'login' ? 'signup' : 'login');
 
 function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMailbox = null, { isHydration = false } = {}) {
+  if (!isHydration && String(user?.email || '').toLowerCase() === 'admin@jobhunta.com' && new URLSearchParams(location.search).get('view') !== 'app') {
+    location.replace('/admin');
+    return;
+  }
   currentUser = user;
   account.user = user;
   if (serverMailbox !== undefined) account.mailbox = serverMailbox;
@@ -7658,7 +7662,8 @@ $('#auth-form').onsubmit = async event => {
     const data = await api(authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login', payload);
     form.reset();
     if (String(data.user?.email || '').toLowerCase() === 'admin@jobhunta.com') {
-      location.hash = '#admin';
+      location.assign('/admin');
+      return;
     }
     applyUserSession(data.user, data.leads, data.settings, data.mailbox);
   } catch (error) {

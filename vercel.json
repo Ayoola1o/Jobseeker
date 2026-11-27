@@ -1,5 +1,7 @@
 {
   "rewrites": [
+    { "source": "/admin", "destination": "/admin.html" },
+    { "source": "/admin/", "destination": "/admin.html" },
     { "source": "/api/:path*", "destination": "/api/index?__path=/api/:path*" },
     { "source": "/oauth/callback", "destination": "/api/index?__path=/oauth/callback" }
   ]

@@ -883,4 +883,11 @@ test('Admin cPanel RBAC, Super-Admin provisioning (admin@jobhunta.com), MRR calc
   assert.equal(overview.dailySeries.length, 14);
   assert.ok(Array.isArray(overview.promoCodes));
   assert.ok(overview.systemHealth && typeof overview.systemHealth.memoryRssMb === 'number');
+
+  // Verify standalone /admin HTML & JS assets exist and exclude customer workspace tabs
+  const { readFile: rf } = await import('node:fs/promises');
+  const adminHtml = await rf(new URL('../public/admin.html', import.meta.url), 'utf8');
+  assert.match(adminHtml, /ADMIN CPANEL &amp; CRM/);
+  assert.ok(!adminHtml.includes('Business Dossier'));
+  assert.ok(!adminHtml.includes('Find Businesses'));
 });

@@ -1410,6 +1410,11 @@ const sessions = new Map();
 const searches = new Map();
 const files = {
   '/': ['index.html', 'text/html; charset=utf-8'],
+  '/admin': ['admin.html', 'text/html; charset=utf-8'],
+  '/admin/': ['admin.html', 'text/html; charset=utf-8'],
+  '/admin.html': ['admin.html', 'text/html; charset=utf-8'],
+  '/admin.js': ['admin.js', 'text/javascript; charset=utf-8'],
+  '/admin.css': ['admin.css', 'text/css; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/icons.mjs': ['icons.mjs', 'text/javascript; charset=utf-8'],
   '/audit.mjs': ['audit.mjs', 'text/javascript; charset=utf-8'],
@@ -5628,6 +5633,40 @@ export async function handleRequest(req, res) {
     if (req.method === 'GET' && path === '/api/admin/overview') {
       await requireAdmin(session);
       return json(await computeAdminOverview());
+    }
+    if (req.method === 'POST' && path === '/api/admin/create-user') {
+      const adminRecord = await requireAdmin(session);
+      const body = await readJson(req);
+      const name = String(body.name || '').trim();
+      const email = String(body.email || '').trim().toLowerCase();
+      const password = String(body.password || '');
+      const tier = Object.hasOwn(USER_TIERS, body.tier) ? body.tier : 'basic';
+      const billingType = ['free', 'paid', 'comped', 'trial'].includes(body.billingType) ? body.billingType : (tier === 'basic' ? 'free' : 'comped');
+      const trialDays = Math.max(0, Number(body.trialDays) || 0);
+      if (name.length < 2 || name.length > 80) fail(400, 'Enter a name (2–80 characters).');
+      if (!validEmail(email)) fail(400, 'Enter a valid email address.');
+      if (password.length < 6 || password.length > 128) fail(400, 'Password must be at least 6 characters.');
+      const existing = await findUserByEmail(email);
+      if (existing) fail(409, 'An account with this email already exists.');
+      const created = await createUserAccount({ name, email, password, tier });
+      const s = getAdminState();
+      s.userMeta[created.id] = {
+        status: 'active',
+        billingType,
+        trialEndsAt: billingType === 'trial' && trialDays > 0 ? new Date(Date.now() + trialDays * 86400000).toISOString() : null,
+        bonusSearches: 0,
+        bonusResults: 0,
+        bonusEmails: 0,
+        monthlyPricePaid: billingType === 'paid' ? DEFAULT_TIER_MONTHLY_USD[tier] : null,
+        notes: String(body.notes || '').slice(0, 500)
+      };
+      logAdminAudit(adminRecord.email, 'create_user', email, `Created ${tier.toUpperCase()} (${billingType}) account`);
+      recordPlatformTelemetry('signups', 1, {
+        actor: adminRecord.email,
+        eventSummary: `Admin created account: ${name} (${email} · ${tier.toUpperCase()})`
+      });
+      await saveAdminState(true);
+      return json({ ok: true, user: created });
     }
     if (req.method === 'POST' && path === '/api/admin/user-update') {
       const adminRecord = await requireAdmin(session);
