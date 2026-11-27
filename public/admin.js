@@ -168,15 +168,25 @@ const VALID_PAGES = ['overview', 'users', 'monetization', 'plans', 'telemetry', 
 
 function syncRoute() {
   document.body.classList.remove('nav-open');
+  closeDrawer();
   const hash = location.hash.replace(/^#/, '');
   activePage = VALID_PAGES.includes(hash) ? hash : 'overview';
-  for (const a of document.querySelectorAll('#admin-nav a')) {
+  for (const a of document.querySelectorAll('#admin-nav a, #admin-mobile-nav a')) {
     a.classList.toggle('active', a.dataset.page === activePage);
   }
   if (overviewData) renderCurrentPage();
 }
 
 window.addEventListener('hashchange', syncRoute);
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    closeDrawer();
+    document.body.classList.remove('nav-open');
+  }
+});
+if ($('#admin-toast')) {
+  $('#admin-toast').onclick = () => { $('#admin-toast').hidden = true; };
+}
 $('#menu-toggle').onclick = () => document.body.classList.toggle('nav-open');
 $('#sidebar-close').onclick = () => document.body.classList.remove('nav-open');
 $('#sidebar-backdrop').onclick = () => document.body.classList.remove('nav-open');
@@ -311,8 +321,10 @@ function exportUsersCsv(users = []) {
 /* ---------------- SLIDE-OVER CRM ACCOUNT DRAWER ---------------- */
 function closeDrawer() {
   activeDrawerUserId = null;
-  $('#crm-drawer').hidden = true;
-  $('#drawer-backdrop').hidden = true;
+  const drawer = $('#crm-drawer');
+  const backdrop = $('#drawer-backdrop');
+  if (drawer) drawer.hidden = true;
+  if (backdrop) backdrop.hidden = true;
 }
 $('#drawer-close').onclick = closeDrawer;
 $('#drawer-backdrop').onclick = closeDrawer;
@@ -356,7 +368,10 @@ function openCrmDrawer(u) {
   tierWrap.append(el('span', 'Subscription Plan'));
   const tierSel = el('select');
   for (const t of overviewData?.tierCatalog || []) {
-    const opt = new Option(`${t.displayLabel} (${t.price})`, t.key);
+    const optLabel = t.key === 'basic' || String(t.displayLabel).includes(t.price)
+      ? t.displayLabel
+      : `${t.displayLabel} · ${t.price}`;
+    const opt = new Option(optLabel, t.key);
     if (t.key === u.tier) opt.selected = true;
     tierSel.append(opt);
   }
@@ -399,20 +414,21 @@ function openCrmDrawer(u) {
 
   const notesF = field('Internal CRM Notes', 'notes', u.notes || '', { tag: 'textarea', rows: 3, placeholder: 'Billing history, onboarding notes, upsell context…' });
 
-  const acts = el('div', '', 'actions');
-  const saveBtn = btn('Save Account Changes', null, 'btn-primary', 'check');
+  const acts = el('div', '', 'drawer-sticky-actions');
+  const saveBtn = btn('Save Changes', null, 'btn-primary', 'check');
   saveBtn.type = 'submit';
-  const resetBtn = btn('Reset Today Quotas', async () => {
+  const resetBtn = btn('Reset Quotas', async () => {
     try {
       await api('/api/admin/reset-quota', { userId: u.id });
       toast(`Reset daily quotas to 0 for ${u.email}.`);
       loadOverview(false);
     } catch (err) { toast(err.message, true); }
   }, 'btn-soft', 'refresh');
+  const cancelBtn = btn('Close', closeDrawer, 'btn-secondary');
 
-  acts.append(saveBtn, resetBtn);
+  acts.append(saveBtn, resetBtn, cancelBtn);
   if (String(u.email).toLowerCase() !== 'admin@jobhunta.com') {
-    acts.append(btn('Delete Account', async () => {
+    acts.append(btn('Delete', async () => {
       if (!confirm(`Permanently delete ${u.email} and all their workspace data?`)) return;
       try {
         await api('/api/admin/delete-user', { userId: u.id });
@@ -443,6 +459,7 @@ function openCrmDrawer(u) {
         notes: notesF.lastChild.value.trim()
       });
       toast(`Saved CRM changes for ${u.email}.`);
+      closeDrawer();
       loadOverview(false);
     } catch (err) {
       toast(err.message, true);

@@ -6273,9 +6273,9 @@ function renderNotificationsPopover() {
   const h3 = create('h3');
   h3.append(document.createTextNode('Notifications'));
   if (items.length) h3.append(create('span', String(items.length), 'pill'));
-  head.append(h3);
+  const headActs = create('div', '', 'notif-head-actions');
   if (items.length) {
-    head.append(button('Clear all', () => {
+    headActs.append(button('Clear all', () => {
       items.forEach(i => dismissedNotifs.add(i.id));
       notificationEvents = [];
       saveUserNotifications();
@@ -6283,6 +6283,13 @@ function renderNotificationsPopover() {
       renderNotificationsPopover();
     }, 'link-btn'));
   }
+  const closeNotifBtn = create('button', '', 'notif-close-btn');
+  closeNotifBtn.type = 'button';
+  closeNotifBtn.setAttribute('aria-label', 'Close notifications');
+  closeNotifBtn.append(iconEl('x', 14));
+  closeNotifBtn.onclick = () => setNotificationsOpen(false);
+  headActs.append(closeNotifBtn);
+  head.append(h3, headActs);
 
   const body = create('div', '', 'notif-list');
   if (items.length) {
