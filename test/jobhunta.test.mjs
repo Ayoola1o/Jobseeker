@@ -46,6 +46,8 @@ import {
   verifyPassword,
   USER_TIERS,
   getUserQuotaStatus,
+  getAdvancedSearchUsage,
+  tryReserveOmnichannelQuota,
   industries
 } from '../server.mjs';
 
@@ -809,4 +811,46 @@ test('Omnichannel discovery packs, intermediary URL classifier, crt.sh parser, a
   }, { senderName: 'Ayoola', persona: 'digital_marketer' });
   assert.match(jobBoardBrief.overview, /actively hiring \(Senior Shopify & Growth Marketer\)/i);
   assert.ok(jobBoardBrief.gaps.some(g => /Active Hiring Bottleneck/i.test(g)));
+});
+
+test('Omnichannel tier reservation grants unlimited runs to Premium & Diamond, 1/day to Gold, and skips without throwing on Basic/Silver', async () => {
+  const basicQuota = getUserQuotaStatus({ tier: 'basic' });
+  const silverQuota = getUserQuotaStatus({ tier: 'silver' });
+  const goldQuota = getUserQuotaStatus({ tier: 'gold' });
+  const premiumQuota = getUserQuotaStatus({ tier: 'premium' });
+  const diamondQuota = getUserQuotaStatus({ tier: 'diamond' });
+
+  // Verify getAdvancedSearchUsage preserves null (unlimited) for Premium & Diamond instead of coalescing to 0
+  assert.equal(getAdvancedSearchUsage('test-basic-u', basicQuota).limit, 0);
+  assert.equal(getAdvancedSearchUsage('test-silver-u', silverQuota).limit, 0);
+  assert.equal(getAdvancedSearchUsage('test-gold-u', goldQuota).limit, 1);
+  assert.equal(getAdvancedSearchUsage('test-premium-u', premiumQuota).limit, null);
+  assert.equal(getAdvancedSearchUsage('test-diamond-u', diamondQuota).limit, null);
+
+  // Basic & Silver skip omnichannel cleanly without throwing
+  const basicRes = await tryReserveOmnichannelQuota('test-basic-u', basicQuota);
+  assert.equal(basicRes.allowed, false);
+  assert.equal(basicRes.reason, 'tier_locked');
+
+  const silverRes = await tryReserveOmnichannelQuota('test-silver-u', silverQuota);
+  assert.equal(silverRes.allowed, false);
+
+  // Gold allows 1st run of the day, then gracefully skips 2nd run without throwing
+  const goldUser = 'test-gold-run-' + Date.now();
+  const goldFirst = await tryReserveOmnichannelQuota(goldUser, goldQuota);
+  assert.equal(goldFirst.allowed, true);
+  assert.ok(goldFirst.chargedOn);
+  const goldSecond = await tryReserveOmnichannelQuota(goldUser, goldQuota);
+  assert.equal(goldSecond.allowed, false);
+  assert.equal(goldSecond.reason, 'daily_gold_used');
+
+  // Premium & Diamond allow unlimited runs consecutively
+  for (let i = 0; i < 5; i++) {
+    const premRes = await tryReserveOmnichannelQuota('test-premium-u', premiumQuota);
+    assert.equal(premRes.allowed, true);
+    assert.equal(premRes.unlimited, true);
+    const diaRes = await tryReserveOmnichannelQuota('test-diamond-u', diamondQuota);
+    assert.equal(diaRes.allowed, true);
+    assert.equal(diaRes.unlimited, true);
+  }
 });

@@ -181,65 +181,24 @@
         <div class="discover-hero">
           <div class="discover-hero-copy">
             <h1>Discover Businesses.<br>Find New Opportunities.</h1>
-            <p>Search Maps, Search Engines, Stores &amp; Marketplaces, Link-in-Bio/Directories, Newly Registered Domains (crt.sh), and Hiring/Ad-Spending Buyers.</p>
-          </div>
-          <div class="discover-source-tabs" id="discover-source-tabs" role="tablist" aria-label="Discovery source">
-            <button type="button" class="discover-tab active" data-source="local" role="tab" aria-selected="true">
-              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>
-              <span>Local &amp; Chambers</span>
-            </button>
-            <button type="button" class="discover-tab" data-source="platform" role="tab" aria-selected="false">
-              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
-              <span>Stores, ESPs &amp; Etsy</span>
-              <small class="tab-pro-tag">Gold+</small>
-            </button>
-            <button type="button" class="discover-tab" data-source="directory" role="tab" aria-selected="false">
-              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-              <span>Social &amp; Directory-Only</span>
-              <small class="tab-pro-tag">Gold+</small>
-            </button>
-            <button type="button" class="discover-tab" data-source="launches" role="tab" aria-selected="false">
-              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/></svg>
-              <span>New Domains &amp; Launches</span>
-              <small class="tab-pro-tag">Gold+</small>
-            </button>
-            <button type="button" class="discover-tab" data-source="reddit" role="tab" aria-selected="false">
-              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>
-              <span>Hiring, Reddit &amp; Ads</span>
-              <small class="tab-pro-tag">Gold+</small>
-            </button>
+            <p>Enter your target industry and location once — Job Hunta automatically runs every search engine, store/marketplace, directory, live new-domain feed, and buyer-intent channel unlocked by your plan.</p>
           </div>
           <form id="search" class="surface search-bar-card">
-            <input type="hidden" name="sourceType" id="source-type-input" value="local">
-            <label class="search-seg"><span id="industry-label">Industry</span>
-              <input name="industry" id="industry-input" list="industries" placeholder="e.g. Clothing &amp; Fashion, Dentists" minlength="2" maxlength="60" required>
+            <label class="search-seg"><span id="industry-label">Industry or Niche</span>
+              <input name="industry" id="industry-input" list="industries" placeholder="e.g. Cosmetics &amp; Skincare, Dentists, Clothing" minlength="2" maxlength="60" required>
               <datalist id="industries"></datalist>
             </label>
-            <label class="search-seg"><span id="city-label">City or State</span>
-              <input name="city" id="city-input" placeholder="e.g. Lagos, Ikeja, Texas" minlength="2" maxlength="75" required>
+            <label class="search-seg"><span id="city-label">City, State or Online</span>
+              <input name="city" id="city-input" placeholder="e.g. New York, Lagos, Texas, or Online" minlength="2" maxlength="75" required>
             </label>
-            <label class="search-seg no-div" id="seg-rank-mode"><span>Page Depth / Mode</span>
+            <label class="search-seg no-div" id="seg-rank-mode"><span>Search Depth</span>
               <select name="rankMode" id="rank-mode">
-                <option value="all">All Ranks (Pages 1–8 · Plan Max)</option>
-                <option value="low">Low-Ranked (Pages 3–11 · Silver+)</option>
-                <option value="deep_15">Deep Low-Rank (Pages 6–15 · Gold+)</option>
-                <option value="deep_19">Ultra-Low Rank (Pages 9–19 · Premium+)</option>
-                <option value="deep_full">Deepest Full Sweep (Pages 1–25+ · Diamond)</option>
-                <option value="chamber">Chamber &amp; Trade Directories (Gold+)</option>
-                <option value="shopify">Shopify Stores (Gold+)</option>
+                <option value="all">All Channels &amp; Ranks (Plan Max)</option>
+                <option value="low" data-min-tier="2">Low-Ranked Focus (Pages 3–11)</option>
+                <option value="deep_15" data-min-tier="3">Deep Low-Rank Focus (Pages 6–15)</option>
+                <option value="deep_19" data-min-tier="4">Ultra-Low Rank Focus (Pages 9–19)</option>
+                <option value="deep_full" data-min-tier="5">Deepest Full Sweep (Pages 1–25+)</option>
               </select>
-            </label>
-            <label class="search-seg no-div" id="seg-platform" hidden><span>Store / ESP / Marketplace</span>
-              <select name="targetPlatform" id="target-platform"></select>
-            </label>
-            <label class="search-seg no-div" id="seg-directory" hidden><span>Rented Profile Type</span>
-              <select name="directoryPack" id="directory-pack"></select>
-            </label>
-            <label class="search-seg no-div" id="seg-launch" hidden><span>Launch / Domain Feed</span>
-              <select name="launchMode" id="launch-mode"></select>
-            </label>
-            <label class="search-seg no-div" id="seg-reddit" hidden><span>Buyer-Intent Channel</span>
-              <select name="redditPack" id="reddit-pack"></select>
             </label>
             <button type="submit" class="search-submit-btn" id="search-submit-btn">Search Businesses</button>
           </form>
@@ -286,6 +245,10 @@
               </select>
               <button id="stop-search" class="danger" type="button" hidden>Stop</button>
               <button id="save-all" class="btn-soft" type="button" hidden>Save all results</button>
+              <button id="clear-results" class="secondary btn-clear-results" type="button" hidden>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                Clear results
+              </button>
             </div>
           </div>
           <div id="scrape-banner" class="scrape-banner" role="status" aria-live="polite" hidden>

@@ -484,35 +484,44 @@ export function getUserQuotaStatus(userRecord = {}) {
   };
 }
 
-function getAdvancedSearchUsage(userId, quotaStatus) {
+export function getAdvancedSearchUsage(userId, quotaStatus) {
   const ws = getWorkspace(userId || 'default');
   const today = todayUsageDate();
   const raw = ws.settings?._advancedUsage;
   const used = raw && raw.date === today ? Math.max(0, Number(raw.count) || 0) : 0;
-  const limit = quotaStatus?.dailyAdvancedSearchLimit ?? 0;
+  const tierLevel = Number(quotaStatus?.level) || 1;
+  // Premium (level 4) and Diamond (level 5) have unlimited (null) omnichannel runs; Gold (level 3) has 1/day; Basic/Silver have 0.
+  const limit = tierLevel >= 4
+    ? null
+    : (quotaStatus && typeof quotaStatus.dailyAdvancedSearchLimit === 'number'
+        ? quotaStatus.dailyAdvancedSearchLimit
+        : (tierLevel === 3 ? 1 : 0));
   return { used, limit, date: today };
 }
 
-async function consumeAdvancedSearchQuota(userId, quotaStatus, refundDate = null) {
-  const tierLevel = quotaStatus?.level || 1;
+export async function tryReserveOmnichannelQuota(userId, quotaStatus, refundDate = null) {
+  const tierLevel = Number(quotaStatus?.level) || 1;
   if (tierLevel < 3) {
-    fail(403, 'Multi-Engine Platform/Email-Stack & Reddit Lead Discovery requires Gold (Pro — 1/day), Premium (Agency), or Diamond.');
+    return { allowed: false, unlimited: false, chargedOn: null, reason: 'tier_locked' };
   }
   const ws = getWorkspace(userId || 'default');
   const { used, limit, date } = getAdvancedSearchUsage(userId, quotaStatus);
   if (refundDate) {
-    if (refundDate === date && used > 0) {
+    if (limit !== null && refundDate === date && used > 0) {
       ws.settings._advancedUsage = { date, count: Math.max(0, used - 1) };
       await saveStore(userId).catch(() => {});
     }
-    return date;
+    return { allowed: true, unlimited: limit === null, chargedOn: null };
   }
-  if (limit !== null && used >= limit) {
-    fail(429, `Gold (Pro) includes ${limit} Advanced Multi-Engine / Reddit search per day (resets at 00:00 UTC). Upgrade to Premium (Agency) or Diamond for unlimited access.`);
+  if (limit === null) {
+    return { allowed: true, unlimited: true, chargedOn: null };
+  }
+  if (used >= limit) {
+    return { allowed: false, unlimited: false, chargedOn: null, reason: 'daily_gold_used' };
   }
   ws.settings._advancedUsage = { date, count: used + 1 };
   await saveStore(userId).catch(() => {});
-  return date;
+  return { allowed: true, unlimited: false, chargedOn: date };
 }
 
 async function findUserById(userId) {
@@ -1707,12 +1716,17 @@ async function searchCrtShNewDomains(keyword = '', locationFilter = '') {
 async function runTargetedSiteQueries(queries = [], keyword = '', city = '', decorateItem = null) {
   const out = [];
   const seen = new Set();
-  for (const q of queries) {
-    const [rssItems, ddgItems] = await Promise.all([
-      searchBingRss(q, keyword, city || 'Online', 1, 1, true),
-      searchDuckDuckGoLite(q, keyword, city || 'Online', 1, true)
-    ]);
-    for (const item of [...rssItems, ...ddgItems]) {
+  const batches = await Promise.all(
+    queries.slice(0, 4).map(async q => {
+      const [rssItems, ddgItems] = await Promise.all([
+        searchBingRss(q, keyword, city || 'Online', 1, 1, true),
+        searchDuckDuckGoLite(q, keyword, city || 'Online', 1, true)
+      ]);
+      return { q, items: [...rssItems, ...ddgItems] };
+    })
+  );
+  for (const { q, items } of batches) {
+    for (const item of items) {
       const key = item.website || item.id;
       if (!key || seen.has(key)) continue;
       seen.add(key);
@@ -2200,14 +2214,80 @@ async function searchOverpassFallback(cleanIndustry, city, limitNodes = 100, rad
   }));
 }
 
+async function runUnifiedOmnichannelSweep({ cleanIndustry, cleanCity, emitBusinesses, sendEvent, isStopped, getTotalFound }) {
+  const isOnlineOnly = /^(online|global|worldwide|remote|any)$/i.test(cleanCity);
+  const geoFilter = isOnlineOnly ? '' : cleanCity;
+  const runCollector = async promise => {
+    if (isStopped()) return 0;
+    try {
+      const items = await promise;
+      if (!isStopped() && Array.isArray(items) && items.length) {
+        return await emitBusinesses(items);
+      }
+    } catch {}
+    return 0;
+  };
+
+  // Wave 1: Live SSL New Domains (crt.sh) + Hiring Job Boards + Reddit Buyer/Hiring Communities
+  if (!isStopped()) {
+    sendEvent({
+      type: 'status',
+      totalFound: getTotalFound(),
+      message: `Omnichannel Wave 1/3: Scanning crt.sh New Domains, Hiring Job Boards & Reddit Buyers for "${cleanIndustry}"…`
+    });
+    await Promise.allSettled([
+      runCollector(searchCrtShNewDomains(cleanIndustry, cleanCity)),
+      runCollector(searchJobBoardCompanies(cleanIndustry, cleanCity)),
+      runCollector(searchRedditSubreddit('forhire', cleanIndustry, 'hiring', geoFilter)),
+      runCollector(searchRedditSubreddit('smallbusiness', cleanIndustry, 'all_buyers', geoFilter))
+    ]);
+  }
+
+  // Wave 2: Stores, Email Marketing Stacks (Shopify, Klaviyo) & Marketplace Sellers (Etsy, Faire)
+  if (!isStopped()) {
+    sendEvent({
+      type: 'status',
+      totalFound: getTotalFound(),
+      message: `Omnichannel Wave 2/3: Scanning Shopify, Klaviyo/ESP Brands & Etsy/Faire Marketplaces for "${cleanIndustry}"…`
+    });
+    await Promise.allSettled([
+      runCollector(searchShopifySiteWeb(cleanIndustry, geoFilter)),
+      runCollector(searchPlatformAndStackWeb(cleanIndustry, geoFilter, 'Klaviyo')),
+      runCollector(searchPlatformAndStackWeb(cleanIndustry, geoFilter, 'Etsy Shop')),
+      runCollector(searchPlatformAndStackWeb(cleanIndustry, geoFilter, 'Faire Brand'))
+    ]);
+  }
+
+  // Wave 3: Link-in-Bio, Booking/Agency Directories, Chambers of Commerce, Product Launches & Paid-Ad Funnels
+  if (!isStopped()) {
+    sendEvent({
+      type: 'status',
+      totalFound: getTotalFound(),
+      message: `Omnichannel Wave 3/3: Scanning Link-in-Bio, Booking/Trade Directories, Product Launches & Ad Funnels…`
+    });
+    await Promise.allSettled([
+      runCollector(searchSocialAndDirectoryLeads(cleanIndustry, cleanCity, 'link_in_bio')),
+      runCollector(searchSocialAndDirectoryLeads(cleanIndustry, cleanCity, 'booking_beauty')),
+      runCollector(searchSocialAndDirectoryLeads(cleanIndustry, cleanCity, 'home_b2b')),
+      ...(isOnlineOnly ? [] : [runCollector(searchChamberDirectories(cleanIndustry, cleanCity))]),
+      runCollector(searchProductLaunches(cleanIndustry, cleanCity)),
+      runCollector(searchAdFunnelSpenders(cleanIndustry, cleanCity))
+    ]);
+  }
+}
+
 async function streamSearch(res, industry, city, rankMode = 'all', reserveResults, onFailure, tierLevel = 5, extraOpts = {}) {
   const cleanIndustry = (industry || '').trim();
-  const sourceType = ['local', 'platform', 'directory', 'launches', 'reddit'].includes(extraOpts.sourceType) ? extraOpts.sourceType : 'local';
-  const cleanCity = (city || '').trim() || (sourceType !== 'local' ? 'Online' : '');
+  const sourceType = ['all', 'local', 'platform', 'directory', 'launches', 'reddit'].includes(extraOpts.sourceType) ? extraOpts.sourceType : 'all';
+  const cleanCity = (city || '').trim() || 'Online';
   if (!/^[\p{L}\p{M}\p{N} .,'’&/+()-]{2,60}$/u.test(cleanIndustry) ||
       !/^[\p{L}\p{M}\p{N} .,'’/()-]{2,75}$/u.test(cleanCity)) {
     fail(400, 'Choose or enter a keyword/industry and enter a city, state, or Online.');
   }
+  const omnichannelAllowed = Boolean(extraOpts.omnichannelAllowed);
+  const omnichannelCharged = Boolean(extraOpts.omnichannelCharged);
+  const omnichannelReason = extraOpts.omnichannelReason || '';
+
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson; charset=utf-8',
     'Cache-Control': 'no-store, no-transform',
@@ -2222,6 +2302,12 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
       res.write(JSON.stringify(payload) + '\n');
     }
   };
+  sendEvent({
+    type: 'meta',
+    tierLevel,
+    omnichannelActive: omnichannelAllowed,
+    omnichannelCharged
+  });
 
   const seen = new Set();
   const seenDomains = new Set();
@@ -2406,25 +2492,67 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
     return;
   }
 
-  // MODE C: MULTI-ENGINE LOCAL & MAPS DISCOVERY (Progressive Page Depth: Basic 1–8, Silver 1–11, Gold 1–15, Premium 1–19, Diamond 1–25+ Full)
+  // UNIFIED ALL-IN-ONE DISCOVERY: Runs every engine unlocked for the user's tier simultaneously
+  const isOnlineOnlyCity = /^(online|global|worldwide|remote|any)$/i.test(cleanCity);
+
+  // If city is "Online"/"Global"/"Remote", run Omnichannel (if unlocked) + Multi-Engine Global Web
+  if (isOnlineOnlyCity) {
+    if (omnichannelAllowed) {
+      await runUnifiedOmnichannelSweep({
+        cleanIndustry,
+        cleanCity,
+        emitBusinesses,
+        sendEvent,
+        isStopped: () => closed || stopped,
+        getTotalFound: () => seen.size
+      });
+    }
+    if (!closed && !stopped) {
+      const globalOffsets = getSearchOffsets(rankMode, false, tierLevel).slice(0, Math.min(8, getMaxSearchPagesForTier(tierLevel)));
+      const globalQuery = `"${cleanIndustry}" -jobs -vacancies -yelp -tripadvisor -yellowpages`;
+      for (const { first, page } of globalOffsets) {
+        if (closed || stopped) break;
+        sendEvent({
+          type: 'status',
+          page,
+          totalPages: globalOffsets.length,
+          totalFound: seen.size,
+          message: `Scanning Global Multi-Engine Web Page ${page} (Rank #${first}+) for "${cleanIndustry}"…`
+        });
+        const [rssPage, ddgPage] = await Promise.all([
+          searchBingRss(globalQuery, cleanIndustry, 'Online', first, first),
+          page === 1 ? searchDuckDuckGoLite(globalQuery, cleanIndustry, 'Online', 1) : Promise.resolve([])
+        ]);
+        await emitBusinesses([...rssPage, ...ddgPage]);
+      }
+    }
+    if (seen.size === 0) await onFailure?.();
+    sendEvent({ type: 'done', totalFound: seen.size });
+    if (!res.writableEnded) res.end();
+    return;
+  }
+
+  // MULTI-ENGINE LOCAL + OMNICHANNEL + PROGRESSIVE PAGE DEPTH (Basic 1–8, Silver 1–11, Gold 1–15, Premium 1–19, Diamond 1–25+ Full)
   let subLocations = await resolveSearchLocations(cleanCity);
   if (subLocations.length > 1 && tierLevel < 4) {
     subLocations = [cleanCity];
-    sendEvent({
-      type: 'status',
-      totalFound: 0,
-      message: `Searching "${cleanCity}" (State-wide multi-city expansion unlocks on Premium / Agency & Diamond plans)…`
-    });
   }
   const isStateBreakdown = subLocations.length > 1;
   const offsetConfigs = getSearchOffsets(rankMode === 'shopify' ? 'low' : rankMode, isStateBreakdown, tierLevel);
   const isDeepRankMode = ['low', 'deep_15', 'deep_19', 'deep_full'].includes(rankMode);
+  let omnichannelExecuted = false;
 
   if (isStateBreakdown) {
     sendEvent({
       type: 'status',
       totalFound: 0,
       message: `Breaking "${cleanCity}" into ${subLocations.length} cities/districts (${subLocations.slice(0, 4).map(s => s.split(',')[0]).join(', ')}…) to scrape bit-by-bit…`
+    });
+  } else if (!omnichannelAllowed && omnichannelReason === 'daily_gold_used' && tierLevel === 3) {
+    sendEvent({
+      type: 'status',
+      totalFound: 0,
+      message: `Gold 1/day Omnichannel bonus already used today — running Pages 1–15 Local, Multi-Engine & Weak-SEO sweep…`
     });
   }
 
@@ -2447,29 +2575,11 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
       if (gMapItems.length) await emitBusinesses(gMapItems);
     }
 
-    // 2. Shopify Web Discovery if rankMode === 'shopify'
-    if (rankMode === 'shopify' && !closed && !stopped) {
-      sendEvent({
-        type: 'status',
-        page: 1,
-        totalPages: offsetConfigs.length,
-        totalFound: seen.size,
-        message: `Scraping Shopify stores via Bing RSS, DuckDuckGo & site:myshopify.com in ${subCity}…`
-      });
-      try {
-        const siteItems = await searchShopifySiteWeb(cleanIndustry, subCity);
-        if (siteItems.length) await emitBusinesses(siteItems);
-      } catch {}
-    }
-
-    // 3. Multi-Page Bing Maps + Multi-Page Bing Web RSS Pagination (up to Plan Max Page: 8 / 11 / 15 / 19 / 25+)
-    const queries = rankMode === 'shopify'
-      ? [`${cleanIndustry} store in ${subCity}`, `${cleanIndustry} boutique shop in ${subCity}`]
-      : [`${cleanIndustry} in ${subCity}`];
-
+    // 2. Multi-Page Bing Maps + Multi-Page Bing Web RSS Pagination (interleaving Omnichannel Sweep right after Page 1!)
+    const queries = [`${cleanIndustry} in ${subCity}`];
     const rssWebQuery = `"${cleanIndustry}" "${subCity}" -jobs -vacancies -yelp -tripadvisor -yellowpages`;
     let emptyStreak = 0;
-    const maxEmptyStreak = isDeepRankMode ? 5 : 3;
+    const maxEmptyStreak = isDeepRankMode || tierLevel >= 4 ? 5 : 3;
 
     for (const query of queries) {
       for (let idx = 0; idx < offsetConfigs.length; idx++) {
@@ -2482,9 +2592,7 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
           totalFound: seen.size,
           message: isStateBreakdown
             ? `Scraping ${cleanCity} bit-by-bit [${locIndex + 1}/${subLocations.length}: ${subCity} · Page ${page}]…`
-            : (isDeepRankMode || rankMode === 'shopify'
-                ? `Scraping deep-ranked businesses in ${subCity} (Page ${page}, Rank #${first}+)…`
-                : `Scraping Multi-Engine Page ${page} (Rank #${first}+) in ${subCity}…`)
+            : `Scraping Local Maps & Web Page ${page} (Rank #${first}+) in ${subCity}…`
         });
         try {
           const mapUrl = `https://www.bing.com/maps/overlaybfpr?q=${encodeURIComponent(query)}&count=20&first=${first}${cpParam}`;
@@ -2511,6 +2619,20 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
 
           const combinedPageItems = [...mapItems, ...rssPageItems];
           const addedOnPage = await emitBusinesses(combinedPageItems);
+
+          // Immediately after Page 1 delivers fast local leads, trigger ALL Omnichannel Engines if unlocked for this tier!
+          if (!omnichannelExecuted && omnichannelAllowed && !closed && !stopped) {
+            omnichannelExecuted = true;
+            await runUnifiedOmnichannelSweep({
+              cleanIndustry,
+              cleanCity,
+              emitBusinesses,
+              sendEvent,
+              isStopped: () => closed || stopped,
+              getTotalFound: () => seen.size
+            });
+          }
+
           if (stopped) break;
           if (addedOnPage === 0) {
             emptyStreak++;
@@ -2524,28 +2646,31 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
       }
     }
 
-    // 4. DuckDuckGo Lite Sweep + Weak-SEO / Outdated-Website Dorks + Chamber of Commerce (Gold/Premium/Diamond)
+    // Ensure Omnichannel still runs even if Page 1 threw a network timeout
+    if (!omnichannelExecuted && omnichannelAllowed && !closed && !stopped) {
+      omnichannelExecuted = true;
+      await runUnifiedOmnichannelSweep({
+        cleanIndustry,
+        cleanCity,
+        emitBusinesses,
+        sendEvent,
+        isStopped: () => closed || stopped,
+        getTotalFound: () => seen.size
+      });
+    }
+
+    // 3. DuckDuckGo Lite Sweep + Weak-SEO / Outdated-Website Dorks (Gold/Premium/Diamond automatically included!)
     if (!closed && !stopped && !isStateBreakdown) {
-      if (rankMode === 'chamber') {
-        sendEvent({
-          type: 'status',
-          totalFound: seen.size,
-          message: `Scanning Chamber of Commerce & Trade Member Directories in ${subCity}…`
-        });
-        const chamberItems = await searchChamberDirectories(cleanIndustry, subCity);
-        if (chamberItems.length) await emitBusinesses(chamberItems);
-      }
       sendEvent({
         type: 'status',
         totalFound: seen.size,
-        message: `Sweeping DuckDuckGo${isDeepRankMode && tierLevel >= 3 ? ' & Weak-SEO footprints' : ''} for buried "${cleanIndustry}" websites in ${subCity}…`
+        message: `Sweeping DuckDuckGo${tierLevel >= 3 ? ' & Weak-SEO footprints' : ''} for buried "${cleanIndustry}" websites in ${subCity}…`
       });
       const ddgBase = searchDuckDuckGoLite(rssWebQuery, cleanIndustry, subCity, Math.max(seen.size + 1, offsetConfigs[0]?.first || 1));
-      const weakSeoPromises = (isDeepRankMode && tierLevel >= 3)
+      const weakSeoPromises = tierLevel >= 3
         ? [
             searchBingRss(`intitle:"Home" "${cleanIndustry}" "${subCity}" -yelp -facebook`, cleanIndustry, subCity, 120, 1),
-            searchBingRss(`"${cleanIndustry}" "${subCity}" ("powered by WordPress" OR "created with Wix" OR "© 2020" OR "© 2021") -yelp`, cleanIndustry, subCity, 140, 1),
-            ...(rankMode === 'deep_full' ? [searchChamberDirectories(cleanIndustry, subCity)] : [])
+            searchBingRss(`"${cleanIndustry}" "${subCity}" ("powered by WordPress" OR "created with Wix" OR "© 2020" OR "© 2021") -yelp`, cleanIndustry, subCity, 140, 1)
           ]
         : [];
       const extraBatches = await Promise.all([ddgBase, ...weakSeoPromises]);
@@ -2553,8 +2678,8 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
       if (extraFlat.length) await emitBusinesses(extraFlat);
     }
 
-    // 5. Diamond Deepest Full Sweep: Intra-City Neighborhood Zone Slicing + 300-node 15km OpenStreetMap Sweep
-    if (!closed && !stopped && !isStateBreakdown && rankMode === 'deep_full' && tierLevel >= 5) {
+    // 4. Diamond Automatic Deep Sweep: Intra-City Neighborhood Zone Slicing + 300-node 15km OpenStreetMap Sweep
+    if (!closed && !stopped && !isStateBreakdown && tierLevel >= 5) {
       const zones = [`North ${subCity}`, `South ${subCity}`, `East ${subCity}`, `West ${subCity}`, `Downtown ${subCity}`];
       for (let zIdx = 0; zIdx < zones.length; zIdx++) {
         if (closed || stopped) break;
@@ -4408,41 +4533,38 @@ export async function handleRequest(req, res) {
       const userRecord = await findUserById(session.userId);
       const quotaStatus = getUserQuotaStatus(userRecord);
       const tierLevel = quotaStatus.level || 1;
-      const rankMode = url.searchParams.get('rankMode') || 'all';
-      const sourceType = ['local', 'platform', 'directory', 'launches', 'reddit'].includes(url.searchParams.get('sourceType'))
-        ? url.searchParams.get('sourceType')
-        : 'local';
-      const isAdvancedSearch = ['platform', 'directory', 'launches', 'reddit'].includes(sourceType) || ['shopify', 'chamber'].includes(rankMode);
+      const requestedRankMode = url.searchParams.get('rankMode') || 'all';
+      const requestedSource = url.searchParams.get('sourceType') || 'all';
+      const sourceType = ['all', 'local', 'platform', 'directory', 'launches', 'reddit'].includes(requestedSource)
+        ? requestedSource
+        : 'all';
 
-      if (rankMode === 'low' && tierLevel < 2) {
-        fail(403, 'Low-Ranking Business Discovery (Pages 3–11) requires the Silver (Starter) plan or higher.');
-      }
-      if (rankMode === 'deep_15' && tierLevel < 3) {
-        fail(403, 'Deep Low-Ranking Discovery (Pages 6–15) requires the Gold (Pro) plan or higher.');
-      }
-      if (rankMode === 'deep_19' && tierLevel < 4) {
-        fail(403, 'Ultra-Low Ranking Discovery (Pages 9–19) requires the Premium (Agency) plan or higher.');
-      }
-      if (rankMode === 'deep_full' && tierLevel < 5) {
-        fail(403, 'Deepest Full-Page & Neighborhood Discovery (Pages 1–25+ & 300-node OSM) requires the Diamond plan.');
-      }
-      if (isAdvancedSearch && tierLevel < 3) {
-        fail(403, 'Multi-Engine Store/Email-Platform & Reddit Lead Discovery requires Gold (Pro — 1/day), Premium (Agency), or Diamond.');
-      }
+      // Gracefully clamp rankMode to the user's tier capabilities instead of rejecting the search
+      const allowedModesByTier = {
+        1: ['all'],
+        2: ['all', 'low'],
+        3: ['all', 'low', 'deep_15'],
+        4: ['all', 'low', 'deep_15', 'deep_19'],
+        5: ['all', 'low', 'deep_15', 'deep_19', 'deep_full']
+      };
+      const allowedModes = allowedModesByTier[Math.min(5, Math.max(1, tierLevel))] || ['all'];
+      const rankMode = allowedModes.includes(requestedRankMode) ? requestedRankMode : 'all';
+      const effectiveSourceType = ['platform', 'directory', 'launches', 'reddit'].includes(sourceType) && tierLevel < 3
+        ? 'all'
+        : sourceType;
+
       if (url.searchParams.get('expanded') === '1') return await streamDiscovery(res, url.searchParams, session.userId);
 
-      const rawCity = (url.searchParams.get('city') || '').trim() || (sourceType !== 'local' ? 'Online' : '');
+      const rawCity = (url.searchParams.get('city') || '').trim() || 'Online';
       const rawIndustry = (url.searchParams.get('industry') || '').trim();
-      if (!rawIndustry || !rawCity) fail(400, 'Choose or enter a keyword/industry and enter a city or Online.');
+      if (!rawIndustry) fail(400, 'Choose or enter an industry or niche keyword to search.');
 
-      const advChargedOn = isAdvancedSearch ? await consumeAdvancedSearchQuota(session.userId, quotaStatus) : null;
-      let chargedOn;
+      // Charge 1 regular search first, then reserve Omnichannel capability ONLY if the user's tier allows it
+      const chargedOn = await consumeQuota(session.userId, 'search');
+      let advRes = { allowed: false, unlimited: false, chargedOn: null, reason: 'tier_locked' };
       try {
-        chargedOn = await consumeQuota(session.userId, 'search');
-      } catch (err) {
-        if (advChargedOn) await consumeAdvancedSearchQuota(session.userId, quotaStatus, advChargedOn).catch(() => {});
-        throw err;
-      }
+        advRes = await tryReserveOmnichannelQuota(session.userId, quotaStatus);
+      } catch {}
 
       if (url.searchParams.get('stream') === '1') {
         return await streamSearch(
@@ -4453,11 +4575,14 @@ export async function handleRequest(req, res) {
           count => consumeQuota(session.userId, 'result', null, count),
           async () => {
             await consumeQuota(session.userId, 'search', chargedOn).catch(console.error);
-            if (advChargedOn) await consumeAdvancedSearchQuota(session.userId, quotaStatus, advChargedOn).catch(() => {});
+            if (advRes.chargedOn) await tryReserveOmnichannelQuota(session.userId, quotaStatus, advRes.chargedOn).catch(() => {});
           },
           tierLevel,
           {
-            sourceType,
+            sourceType: !advRes.allowed && ['platform', 'directory', 'launches', 'reddit'].includes(effectiveSourceType) ? 'all' : effectiveSourceType,
+            omnichannelAllowed: advRes.allowed,
+            omnichannelCharged: Boolean(advRes.chargedOn),
+            omnichannelReason: advRes.reason || '',
             targetPlatform: url.searchParams.get('targetPlatform') || 'Shopify',
             directoryPack: url.searchParams.get('directoryPack') || 'link_in_bio',
             launchMode: url.searchParams.get('launchMode') || 'both',

@@ -1,12 +1,6 @@
 import { readBusinessCsv, writeBusinessCsv } from './csv.mjs';
 import { iconEl, iconSvg, planBadgeEl } from './icons.mjs';
-import {
-  PLATFORM_DISCOVERY_GROUPS,
-  SOCIAL_DIRECTORY_PACKS,
-  LAUNCH_DOMAIN_MODES,
-  REDDIT_SUBREDDIT_PACKS,
-  classifyRentedOrIntermediaryUrl
-} from './discovery.mjs';
+import { classifyRentedOrIntermediaryUrl } from './discovery.mjs';
 import {
   generateClientOutreach,
   generateLeadSolutionPack,
@@ -62,6 +56,7 @@ let settings = {
 
 const userLeadsKey = userId => `jobhunta.leads.v2.${userId}`;
 const userSettingsKey = userId => `jobhunta.settings.v2.${userId}`;
+const userDiscoveryKey = userId => `jobhunta.discovery.v1.${userId}`;
 
 function loadLocalUserCache(userId) {
   if (!userId) return { cachedLeads: [], cachedSettings: {} };
@@ -82,6 +77,7 @@ let leadsPage = 1;
 let selectedLeadFolder = '';
 let activeSearchFolder = '';
 let autoPersistTimer = null;
+let discoveryPersistTimer = null;
 let activeBusinessId = null;
 let dossierTab = 'overview';
 let auditCategoryFilter = 'all';
@@ -1522,7 +1518,7 @@ function updateScrapeBanner() {
 
   const scanningWebsites = results.filter(item => item.scanning).length;
   const pendingWebsites = results.filter(item => item.website && !item.email && !item.scanned && !item.scanning).length;
-  const activeEnrichment = scanningWebsites > 0 || pendingWebsites > 0;
+  const activeEnrichment = scanningWebsites > 0 || (Boolean(settings.autoEnrichDiscovery) && (streamActive || activeWorkers > 0) && pendingWebsites > 0);
   const isWorking = streamActive || activeEnrichment;
 
   if (stopBtn) stopBtn.hidden = !isWorking;
@@ -1559,7 +1555,10 @@ async function enrichItemEmail(item, triggerButton) {
     item.scanned = true;
     applyEnrichmentToItem(item, found);
     persist();
-    if (results.length) renderResults();
+    if (results.length) {
+      renderResults();
+      scheduleDiscoveryPersist(true);
+    }
     if (found.email || found.aboutSummary) {
       report(`Combed ${item.name}'s website: ${found.email ? 'found ' + found.email : 'extracted website insights'}.`);
     } else {
@@ -1602,6 +1601,7 @@ function triggerEnrichmentWorkers(generation) {
         if (generation === searchGeneration) {
           renderResults();
           updateScrapeBanner();
+          scheduleDiscoveryPersist(false);
           triggerEnrichmentWorkers(generation);
         }
       }
@@ -1972,6 +1972,151 @@ function getVisibleSearchResults() {
   return results;
 }
 
+function saveDiscoverySession() {
+  if (!currentUser?.id) return;
+  const key = userDiscoveryKey(currentUser.id);
+  if (!results.length) {
+    try { localStorage.removeItem(key); } catch {}
+    return;
+  }
+  const cleanItems = results.slice(0, 1000).map(item => {
+    const copy = { ...item };
+    delete copy.scanning;
+    return copy;
+  });
+  const payload = {
+    results: cleanItems,
+    resultsPage,
+    resultsFilter: $('#results-filter')?.value || '',
+    activeSearchFolder: activeSearchFolder || '',
+    formState: {
+      industry: $('#industry-input')?.value || '',
+      city: $('#city-input')?.value || '',
+      rankMode: $('#rank-mode')?.value || 'all'
+    },
+    updatedAt: Date.now()
+  };
+  try {
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch {
+    try {
+      payload.results = cleanItems.slice(0, 350).map(item => {
+        const slim = { ...item };
+        delete slim.siteImages;
+        delete slim.keyLinks;
+        return slim;
+      });
+      localStorage.setItem(key, JSON.stringify(payload));
+    } catch {}
+  }
+}
+
+function scheduleDiscoveryPersist(immediate = false) {
+  if (discoveryPersistTimer) {
+    clearTimeout(discoveryPersistTimer);
+    discoveryPersistTimer = null;
+  }
+  if (immediate) {
+    saveDiscoverySession();
+    return;
+  }
+  discoveryPersistTimer = setTimeout(() => {
+    discoveryPersistTimer = null;
+    saveDiscoverySession();
+  }, 650);
+}
+
+function renderEmptyDiscoverState() {
+  if ($('#results')) {
+    $('#results').replaceChildren(empty('search', 'Start a search', 'Choose or enter an industry and enter the city you want to explore.'));
+  }
+  if ($('#save-all')) $('#save-all').hidden = true;
+  if ($('#clear-results')) $('#clear-results').hidden = true;
+  if ($('#results-pagination')) $('#results-pagination').hidden = true;
+  if ($('#results-count')) $('#results-count').textContent = '';
+  if ($('#scrape-banner')) $('#scrape-banner').hidden = true;
+}
+
+function restoreDiscoverySession(userId) {
+  if (!userId) {
+    results = [];
+    resultsPage = 1;
+    renderEmptyDiscoverState();
+    return false;
+  }
+  try {
+    const raw = localStorage.getItem(userDiscoveryKey(userId));
+    if (!raw) {
+      results = [];
+      resultsPage = 1;
+      renderEmptyDiscoverState();
+      return false;
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.results) || !parsed.results.length) {
+      results = [];
+      resultsPage = 1;
+      renderEmptyDiscoverState();
+      return false;
+    }
+    const leadMap = new Map(leads.filter(l => l?.id).map(l => [l.id, l]));
+    results = parsed.results.map(item => {
+      const clean = { ...item };
+      delete clean.scanning;
+      const savedMatch = clean.id ? leadMap.get(clean.id) : null;
+      if (savedMatch) {
+        if (!clean.email && savedMatch.email) clean.email = savedMatch.email;
+        if ((!clean.platform || clean.platform === 'Custom / Website') && savedMatch.platform) clean.platform = savedMatch.platform;
+      }
+      return clean;
+    });
+    resultsPage = Math.max(1, Number(parsed.resultsPage) || 1);
+    activeSearchFolder = parsed.activeSearchFolder || '';
+
+    const fs = parsed.formState || {};
+    if (fs.industry !== undefined && $('#industry-input')) $('#industry-input').value = fs.industry;
+    if (fs.city !== undefined && $('#city-input')) $('#city-input').value = fs.city;
+    if (fs.rankMode && $('#rank-mode')) {
+      const hasOpt = [...$('#rank-mode').options].some(o => o.value === fs.rankMode && !o.hidden);
+      $('#rank-mode').value = hasOpt ? fs.rankMode : 'all';
+    }
+    if (parsed.resultsFilter !== undefined && $('#results-filter')) $('#results-filter').value = parsed.resultsFilter;
+
+    renderResults();
+    updateScrapeBanner();
+    return true;
+  } catch {
+    results = [];
+    resultsPage = 1;
+    renderEmptyDiscoverState();
+    return false;
+  }
+}
+
+function clearSearchResults() {
+  searchGeneration++;
+  if (searchController) {
+    searchController.abort();
+    searchController = null;
+  }
+  if (discoveryPersistTimer) {
+    clearTimeout(discoveryPersistTimer);
+    discoveryPersistTimer = null;
+  }
+  streamActive = false;
+  activeWorkers = 0;
+  results = [];
+  resultsPage = 1;
+  activeSearchFolder = '';
+  if ($('#results-filter')) $('#results-filter').value = '';
+  if (currentUser?.id) {
+    try { localStorage.removeItem(userDiscoveryKey(currentUser.id)); } catch {}
+  }
+  renderEmptyDiscoverState();
+  updateScrapeBanner();
+  report('Search results cleared. Your saved leads remain safe in Saved Leads.');
+}
+
 function renderResults() {
   const visibleResults = getVisibleSearchResults();
   const unsavedCount = visibleResults.filter(item => !duplicate(item)).length;
@@ -1980,6 +2125,10 @@ function renderResults() {
     saveAllBtn.hidden = visibleResults.length === 0;
     saveAllBtn.disabled = unsavedCount === 0;
     saveAllBtn.textContent = unsavedCount ? `Save all (${unsavedCount})` : 'All saved';
+  }
+  const clearBtn = $('#clear-results');
+  if (clearBtn) {
+    clearBtn.hidden = results.length === 0;
   }
   const withEmailCount = results.filter(item => item.email).length;
   const shopifyCount = results.filter(item => item.platform === 'Shopify').length;
@@ -2066,6 +2215,7 @@ function renderResults() {
   renderPagination(paginationEl, resultsPage, totalPages, visibleResults.length, newPage => {
     resultsPage = newPage;
     renderResults();
+    scheduleDiscoveryPersist(true);
     $('#results').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 }
@@ -6090,146 +6240,58 @@ $('#stop-search').onclick = () => {
   if (searchController) { searchController.abort(); searchController = null; }
   streamActive = false;
   for (const item of results) { item.scanning = false; item.scanned = true; }
-  if (results.length) scheduleAutoPersist(true);
+  if (results.length) {
+    scheduleAutoPersist(true);
+    scheduleDiscoveryPersist(true);
+  }
   renderResults(); updateScrapeBanner();
 };
 
-function initDiscoverControls() {
-  const platSelect = $('#target-platform');
-  if (platSelect && !platSelect.options.length) {
-    for (const grp of PLATFORM_DISCOVERY_GROUPS) {
-      const og = document.createElement('optgroup');
-      og.label = grp.group;
-      for (const item of grp.items) {
-        const opt = document.createElement('option');
-        opt.value = item.key;
-        opt.textContent = item.label;
-        og.append(opt);
-      }
-      platSelect.append(og);
-    }
-  }
-  const dirSelect = $('#directory-pack');
-  if (dirSelect && !dirSelect.options.length) {
-    for (const pack of Object.values(SOCIAL_DIRECTORY_PACKS)) {
-      const opt = document.createElement('option');
-      opt.value = pack.key;
-      opt.textContent = pack.label;
-      dirSelect.append(opt);
-    }
-  }
-  const launchSelect = $('#launch-mode');
-  if (launchSelect && !launchSelect.options.length) {
-    for (const m of Object.values(LAUNCH_DOMAIN_MODES)) {
-      const opt = document.createElement('option');
-      opt.value = m.key;
-      opt.textContent = m.label;
-      launchSelect.append(opt);
-    }
-  }
-  const redditSelect = $('#reddit-pack');
-  if (redditSelect && !redditSelect.options.length) {
-    for (const pack of Object.values(REDDIT_SUBREDDIT_PACKS)) {
-      const opt = document.createElement('option');
-      opt.value = pack.key;
-      opt.textContent = pack.label;
-      redditSelect.append(opt);
-    }
-  }
-  const tabsWrap = $('#discover-source-tabs');
-  if (tabsWrap && !tabsWrap.dataset.wired) {
-    tabsWrap.dataset.wired = '1';
-    for (const btn of tabsWrap.querySelectorAll('.discover-tab')) {
-      btn.onclick = () => setDiscoverSourceTab(btn.dataset.source || 'local');
-    }
-  }
-  renderDiscoverMetaBar();
+if ($('#clear-results')) {
+  $('#clear-results').onclick = clearSearchResults;
 }
 
-function setDiscoverSourceTab(source = 'local') {
-  const valid = ['local', 'platform', 'directory', 'launches', 'reddit'].includes(source) ? source : 'local';
-  if ($('#source-type-input')) $('#source-type-input').value = valid;
-  for (const btn of document.querySelectorAll('#discover-source-tabs .discover-tab')) {
-    const active = btn.dataset.source === valid;
-    btn.classList.toggle('active', active);
-    btn.setAttribute('aria-selected', String(active));
+window.addEventListener('beforeunload', () => {
+  if (currentUser?.id && results.length) {
+    saveDiscoverySession();
   }
-  if ($('#seg-rank-mode')) $('#seg-rank-mode').hidden = valid !== 'local';
-  if ($('#seg-platform')) $('#seg-platform').hidden = valid !== 'platform';
-  if ($('#seg-directory')) $('#seg-directory').hidden = valid !== 'directory';
-  if ($('#seg-launch')) $('#seg-launch').hidden = valid !== 'launches';
-  if ($('#seg-reddit')) $('#seg-reddit').hidden = valid !== 'reddit';
+});
 
-  const indLabel = $('#industry-label');
-  const indInput = $('#industry-input');
-  const cityLabel = $('#city-label');
-  const cityInput = $('#city-input');
-  const submitBtn = $('#search-submit-btn');
-
-  if (valid === 'reddit') {
-    if (indLabel) indLabel.textContent = 'Role / Service Keyword';
-    if (indInput) indInput.placeholder = 'e.g. shopify developer, marketing, seo, facebook ads';
-    if (cityLabel) cityLabel.textContent = 'Location Filter (Optional)';
-    if (cityInput) {
-      cityInput.required = false;
-      cityInput.placeholder = 'Remote / Any (or e.g. Austin, UK)';
-    }
-    if (submitBtn) submitBtn.textContent = 'Find Buyer Leads';
-  } else if (valid === 'directory') {
-    if (indLabel) indLabel.textContent = 'Niche / Business Type';
-    if (indInput) indInput.placeholder = 'e.g. Hair Salon, Med Spa, Fitness Coach, Interior Design';
-    if (cityLabel) cityLabel.textContent = 'City / Market (Optional)';
-    if (cityInput) {
-      cityInput.required = false;
-      cityInput.placeholder = 'Any / Global (or e.g. Miami, London, Lagos)';
-    }
-    if (submitBtn) submitBtn.textContent = 'Scan Profiles & Directories';
-  } else if (valid === 'launches') {
-    if (indLabel) indLabel.textContent = 'Domain / Niche Keyword';
-    if (indInput) indInput.placeholder = 'e.g. dental, skincare, roofing, coffee, ai';
-    if (cityLabel) cityLabel.textContent = 'Market Hint (Optional)';
-    if (cityInput) {
-      cityInput.required = false;
-      cityInput.placeholder = 'Global SSL & Launch Feed';
-    }
-    if (submitBtn) submitBtn.textContent = 'Discover New Launches';
-  } else if (valid === 'platform') {
-    if (indLabel) indLabel.textContent = 'Niche / Product';
-    if (indInput) indInput.placeholder = 'e.g. Skincare, Candles, Jewelry, Coffee';
-    if (cityLabel) cityLabel.textContent = 'City / Country (Optional)';
-    if (cityInput) {
-      cityInput.required = false;
-      cityInput.placeholder = 'Global Web (or e.g. London, Lagos, Texas)';
-    }
-    if (submitBtn) submitBtn.textContent = 'Find Store & ESP Leads';
-  } else {
-    if (indLabel) indLabel.textContent = 'Industry';
-    if (indInput) indInput.placeholder = 'e.g. Clothing & Fashion, Dentists';
-    if (cityLabel) cityLabel.textContent = 'City or State';
-    if (cityInput) {
-      cityInput.required = true;
-      cityInput.placeholder = 'e.g. Lagos, Ikeja, Texas';
-    }
-    if (submitBtn) submitBtn.textContent = 'Search Businesses';
-  }
+function initDiscoverControls() {
   renderDiscoverMetaBar();
 }
 
 function renderDiscoverMetaBar() {
   const activeTier = getActiveTier();
+  const tierLevel = getUserTierLevel();
   const maxPages = activeTier.maxSearchPages || 8;
-  const allOpt = document.querySelector('#rank-mode option[value="all"]');
-  if (allOpt) {
-    allOpt.textContent = activeTier.level >= 5
-      ? `All Ranks (Pages 1–25+ · ${activeTier.label})`
-      : `All Ranks (Pages 1–${maxPages} · ${activeTier.label})`;
+  const rankSelect = $('#rank-mode');
+  if (rankSelect) {
+    for (const opt of rankSelect.options) {
+      if (opt.value === 'all') {
+        opt.textContent = tierLevel >= 5
+          ? `All Channels & Ranks (Pages 1–25+ · ${activeTier.label})`
+          : `All Channels & Ranks (Pages 1–${maxPages} · ${activeTier.label})`;
+        opt.hidden = false;
+        opt.disabled = false;
+      } else {
+        const reqLvl = Number(opt.dataset.minTier) || 1;
+        const allowed = tierLevel >= reqLvl;
+        opt.hidden = !allowed;
+        opt.disabled = !allowed;
+      }
+    }
+    const selectedOpt = rankSelect.selectedOptions?.[0];
+    if (selectedOpt && (selectedOpt.hidden || selectedOpt.disabled)) {
+      rankSelect.value = 'all';
+    }
   }
+
   const bar = $('#discover-meta-bar');
   if (!bar) return;
-  const tierLevel = getUserTierLevel();
   const usage = currentUser?.usage || {};
   const advUsed = Number(usage.advancedSearchesToday) || 0;
-  const advLimit = usage.dailyAdvancedSearchLimit;
+  const advLimit = tierLevel >= 4 ? null : (typeof usage.dailyAdvancedSearchLimit === 'number' ? usage.dailyAdvancedSearchLimit : (tierLevel === 3 ? 1 : 0));
 
   const leftPill = create('span', '', 'discover-meta-pill');
   leftPill.append(
@@ -6245,35 +6307,21 @@ function renderDiscoverMetaBar() {
   leftPill.append(cfgBtn);
 
   const rightPill = create('span', '', 'discover-meta-pill');
-  if (tierLevel < 3) {
-    rightPill.textContent = 'Stores/ESP & Reddit Search: Gold (1/day) · Premium & Diamond (Unlimited)';
+  if (tierLevel === 1) {
+    rightPill.textContent = 'Active on Basic: Local Maps & Multi-Engine Web (Pages 1–8)';
+  } else if (tierLevel === 2) {
+    rightPill.textContent = 'Active on Silver: Local Maps & Low-Rank Web (Pages 1–11)';
   } else if (tierLevel === 3) {
     const left = Math.max(0, (advLimit ?? 1) - advUsed);
-    rightPill.textContent = `Gold Plan: ${left} / ${advLimit ?? 1} Advanced Store/Reddit Search left today`;
+    rightPill.textContent = left > 0
+      ? `Active on Gold: Pages 1–15 + All Omnichannel Engines (${left}/${advLimit ?? 1} Omnichannel run ready today)`
+      : 'Active on Gold: Pages 1–15 + Weak-SEO (1/1 Omnichannel bonus used today — resets 00:00 UTC)';
+  } else if (tierLevel === 4) {
+    rightPill.textContent = 'Premium (Agency): All Channels Active (Pages 1–19 + State Sweep + Unlimited Stores, Directories, crt.sh, Hiring & Reddit)';
   } else {
-    rightPill.textContent = `${getActiveTier().displayLabel}: Unlimited Multi-Engine, ESP & Reddit Discovery`;
+    rightPill.textContent = 'Diamond: Maximum All-in-One Sweep Active (Pages 1–25+ + Suburbs/OSM + Unlimited Stores, Directories, crt.sh, Hiring & Reddit)';
   }
   bar.replaceChildren(leftPill, rightPill);
-}
-
-function checkAdvancedDiscoveryAllowance(featureTitle, featureDesc) {
-  const tierLevel = getUserTierLevel();
-  if (tierLevel < 3) {
-    return requireTier(3, featureTitle, featureDesc);
-  }
-  if (tierLevel === 3) {
-    const used = Number(currentUser?.usage?.advancedSearchesToday) || 0;
-    const limit = currentUser?.usage?.dailyAdvancedSearchLimit ?? 1;
-    if (used >= limit) {
-      showUpgradeModal(
-        4,
-        'Unlimited Store, Email-Platform & Reddit Discovery',
-        `Your Gold (Pro) plan includes ${limit} Advanced Multi-Engine / Reddit search per day (resets at 00:00 UTC). Upgrade to Premium (Agency) or Diamond for unlimited daily access.`
-      );
-      return false;
-    }
-  }
-  return true;
 }
 
 $('#search').onsubmit = async event => {
@@ -6281,84 +6329,38 @@ $('#search').onsubmit = async event => {
   const form = event.currentTarget;
   const submit = form.querySelector('#search-submit-btn') || form.querySelector('button[type="submit"]');
   const formData = new FormData(form);
-  const sourceType = String(formData.get('sourceType') || 'local');
   const chosenMode = String(formData.get('rankMode') || 'all');
-  const targetPlatform = String(formData.get('targetPlatform') || 'Shopify');
-  const redditPack = String(formData.get('redditPack') || 'hiring');
-
-  if (sourceType === 'local' && chosenMode === 'low' && !requireTier(2, 'Low-Ranking Business Discovery (Pages 3–11)', 'Target businesses buried on Pages 3–11 of search results on Silver (Starter — up to Page 11) and above.')) {
-    if ($('#rank-mode')) $('#rank-mode').value = 'all';
-    return;
-  }
-  if (sourceType === 'local' && chosenMode === 'deep_15' && !requireTier(3, 'Deep Low-Rank Discovery (Pages 6–15 & Weak-SEO)', 'Scrape deep Pages 6–15 plus weak-SEO / unoptimized business footprints on Gold (Pro — up to Page 15) and above.')) {
-    if ($('#rank-mode')) $('#rank-mode').value = 'all';
-    return;
-  }
-  if (sourceType === 'local' && chosenMode === 'deep_19' && !requireTier(4, 'Ultra-Low Rank Discovery (Pages 9–19)', 'Uncover deeply buried businesses across Pages 9–19 on Premium (Agency — up to Page 19) and Diamond plans.')) {
-    if ($('#rank-mode')) $('#rank-mode').value = 'all';
-    return;
-  }
-  if (sourceType === 'local' && chosenMode === 'deep_full' && !requireTier(5, 'Deepest Full Sweep (Pages 1–25+ & Suburb/OSM Expansion)', 'Unlock full 25+ page pagination, intra-city neighborhood slicing, weak-SEO dorks, and 300-node OpenStreetMap sweeps on Diamond.')) {
-    if ($('#rank-mode')) $('#rank-mode').value = 'all';
-    return;
-  }
-  const isAdvanced = ['platform', 'directory', 'launches', 'reddit'].includes(sourceType) || (sourceType === 'local' && ['shopify', 'chamber'].includes(chosenMode));
-  if (isAdvanced) {
-    const title = sourceType === 'directory'
-      ? 'Link-in-Bio, Social & Booking Directory Discovery'
-      : sourceType === 'launches'
-        ? 'Newly Registered Domains (crt.sh) & Product Launch Discovery'
-        : sourceType === 'reddit'
-          ? 'Hiring Boards, Reddit & Ad-Funnel Buyer Discovery'
-          : `Omnichannel ${sourceType === 'platform' ? targetPlatform : chosenMode === 'chamber' ? 'Chamber Directory' : 'Shopify'} Discovery`;
-    const desc = 'Uncover businesses across Link-in-Bio/Booking Directories, Live SSL Registrations (crt.sh), Etsy/Faire Marketplaces, ATS Job Boards, and Reddit. Gold (Pro) includes 1 run/day; Premium (Agency) & Diamond get unlimited access.';
-    if (!checkAdvancedDiscoveryAllowance(title, desc)) {
-      if (sourceType === 'local' && $('#rank-mode')) $('#rank-mode').value = 'all';
-      return;
-    }
-  }
 
   if (searchController) searchController.abort();
   searchController = new AbortController();
   const generation = ++searchGeneration;
-  const cityVal = String(formData.get('city') || '').trim() || (sourceType === 'reddit' ? 'Remote' : sourceType !== 'local' ? 'Online' : '');
-  const directoryPack = String(formData.get('directoryPack') || 'link_in_bio');
-  const launchMode = String(formData.get('launchMode') || 'both');
-  const extraFolderLabel = sourceType === 'platform'
-    ? targetPlatform
-    : sourceType === 'directory'
-      ? (SOCIAL_DIRECTORY_PACKS[directoryPack]?.badge || 'Directory')
-      : sourceType === 'launches'
-        ? (launchMode === 'crt_sh' ? 'crt.sh New Domains' : 'New Launches')
-        : sourceType === 'reddit'
-          ? (REDDIT_SUBREDDIT_PACKS[redditPack]?.kind === 'job_boards' ? 'Hiring Boards' : REDDIT_SUBREDDIT_PACKS[redditPack]?.kind === 'ad_funnels' ? 'Ad Funnels' : 'Reddit Leads')
-          : '';
-  activeSearchFolder = buildSearchFolderName(formData.get('industry'), cityVal, chosenMode, sourceType, extraFolderLabel);
+  const cityVal = String(formData.get('city') || '').trim() || 'Online';
+  const previousResults = results.slice();
+  const previousFolder = activeSearchFolder;
+  const previousPage = resultsPage;
+  activeSearchFolder = buildSearchFolderName(formData.get('industry'), cityVal, chosenMode, 'all', '');
   activeWorkers = 0; results = []; resultsPage = 1; streamActive = true;
-  currentScrapeStep = sourceType === 'directory'
-    ? 'Scanning Link-in-Bio & rented directory profiles…'
-    : sourceType === 'launches'
-      ? 'Querying crt.sh Certificate Transparency & launch feeds…'
-      : sourceType === 'reddit'
-        ? 'Scanning active hiring boards, Reddit & promo funnels…'
-        : sourceType === 'platform'
-          ? `Searching multi-engine web for ${targetPlatform} leads…`
-          : 'Connecting to multi-engine business search…';
+  currentScrapeStep = getUserTierLevel() >= 3
+    ? 'Launching unified Multi-Engine + Omnichannel search across all unlocked channels…'
+    : 'Connecting to Multi-Engine Local & Web search…';
   submit.disabled = true; report(); updateScrapeBanner();
-  $('#save-all').hidden = true; $('#results-pagination').hidden = true; $('#results-count').textContent = '';
+  $('#save-all').hidden = true;
+  if ($('#clear-results')) $('#clear-results').hidden = true;
+  $('#results-pagination').hidden = true;
+  $('#results-count').textContent = '';
   $('#results').replaceChildren(empty(
     'search',
     currentScrapeStep,
-    'Discovered leads will stream in real time and auto-save into your search folder in Saved Leads.'
+    'Every search engine and discovery channel unlocked by your plan runs automatically in one stream.'
   ));
 
   let autoSavedCount = 0;
   try {
-    const params = new URLSearchParams(formData);
-    if (!params.get('city')) params.set('city', cityVal || 'Online');
-    if (sourceType === 'reddit') {
-      params.set('redditIntent', REDDIT_SUBREDDIT_PACKS[redditPack]?.defaultIntent || 'all_buyers');
-    }
+    const params = new URLSearchParams();
+    params.set('industry', String(formData.get('industry') || '').trim());
+    params.set('city', cityVal);
+    params.set('rankMode', chosenMode);
+    params.set('sourceType', 'all');
     params.set('stream', '1');
     const response = await fetch('/api/search?' + params, { signal: searchController.signal });
     if (!response.ok) {
@@ -6367,9 +6369,6 @@ $('#search').onsubmit = async event => {
     }
     if (currentUser?.usage) {
       currentUser.usage.searchesToday = (currentUser.usage.searchesToday || 0) + 1;
-      if (isAdvanced) {
-        currentUser.usage.advancedSearchesToday = (currentUser.usage.advancedSearchesToday || 0) + 1;
-      }
       renderDiscoverMetaBar();
       renderProfile();
     }
@@ -6386,13 +6385,20 @@ $('#search').onsubmit = async event => {
       for (const line of lines) {
         if (!line.trim()) continue;
         let msg; try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.type === 'status') { currentScrapeStep = msg.message; updateScrapeBanner(); }
+        if (msg.type === 'meta') {
+          if (msg.omnichannelCharged && currentUser?.usage) {
+            currentUser.usage.advancedSearchesToday = (currentUser.usage.advancedSearchesToday || 0) + 1;
+            renderDiscoverMetaBar();
+            renderProfile();
+          }
+        } else if (msg.type === 'status') { currentScrapeStep = msg.message; updateScrapeBanner(); }
         else if (msg.type === 'business' && msg.item) {
           if (!results.some(x => x.id === msg.item.id)) {
             msg.item.folder = activeSearchFolder;
             results.push(msg.item);
             if (upsertLeadIntoFolder(msg.item, activeSearchFolder)) autoSavedCount++;
             scheduleAutoPersist(false);
+            scheduleDiscoveryPersist(false);
             renderResults(); updateScrapeBanner(); triggerEnrichmentWorkers(generation);
           }
         } else if (msg.type === 'limit') {
@@ -6408,9 +6414,11 @@ $('#search').onsubmit = async event => {
       }
     }
     if (generation === searchGeneration && !results.length) {
+      saveDiscoverySession();
       $('#results').replaceChildren(empty('search', 'No matching businesses', 'Try a nearby city or another industry.'));
     } else if (generation === searchGeneration && results.length) {
       scheduleAutoPersist(true);
+      scheduleDiscoveryPersist(true);
       const shopifyFound = results.filter(r => r.platform === 'Shopify').length;
       pushNotification({
         icon: 'search',
@@ -6433,13 +6441,24 @@ $('#search').onsubmit = async event => {
           targetHash: '#profile'
         });
       }
-      if (!results.length) $('#results').replaceChildren(empty('search', 'Search unavailable', error.message));
-      else report(error.message, true);
+      if (!results.length && previousResults.length) {
+        results = previousResults;
+        activeSearchFolder = previousFolder;
+        resultsPage = previousPage;
+        renderResults();
+        updateScrapeBanner();
+        report(error.message, true);
+      } else if (!results.length) {
+        $('#results').replaceChildren(empty('search', 'Search unavailable', error.message));
+      } else {
+        report(error.message, true);
+      }
     }
   } finally {
     if (generation === searchGeneration) {
       streamActive = false; searchController = null;
       if (autoSavedCount > 0) scheduleAutoPersist(true);
+      if (results.length > 0) scheduleDiscoveryPersist(true);
       updateScrapeBanner();
     }
     submit.disabled = false;
@@ -6499,7 +6518,11 @@ $('#save-all').onclick = () => {
   if (added) { persist(); renderResults(); report(`Saved ${added} business(es) to your leads.`); }
 };
 
-$('#results-filter').onchange = () => { resultsPage = 1; renderResults(); };
+$('#results-filter').onchange = () => {
+  resultsPage = 1;
+  renderResults();
+  scheduleDiscoveryPersist(true);
+};
 
 function setMobileNav(open) {
   document.body.classList.toggle('nav-open', open);
@@ -6518,6 +6541,7 @@ function navigate() {
     else link.removeAttribute('aria-current');
   }
   if (page === 'dashboard') renderDashboard();
+  if (page === 'discover' && results.length) { renderResults(); updateScrapeBanner(); }
   if (page === 'business') renderBusinessPage();
   if (page === 'inbox') refresh();
   if (page === 'broadcast') renderBroadcast();
@@ -6559,13 +6583,7 @@ $('#filter-sort').onchange = e => {
   renderLeads();
 };
 if ($('#rank-mode')) {
-  $('#rank-mode').onchange = e => {
-    if (e.target.value === 'low' && !requireTier(2, 'Low-Ranking Business Discovery (Rank #11+)', 'Target businesses buried on Pages 2–8 of search results on Silver (Starter) and above.')) {
-      e.target.value = 'all';
-    } else if (e.target.value === 'shopify' && !requireTier(3, 'Shopify & E-Commerce Store Discovery (site:myshopify.com)', 'Scrape live Shopify stores and custom e-commerce domains on Gold (Pro) and above.')) {
-      e.target.value = 'all';
-    }
-  };
+  $('#rank-mode').onchange = () => scheduleDiscoveryPersist(true);
 }
 window.addEventListener('hashchange', navigate);
 $('#results').replaceChildren(empty('search', 'Start a search', 'Choose or enter an industry and enter the city you want to explore.'));
@@ -6631,11 +6649,11 @@ function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMai
   if (!Array.isArray(settings.templates) || !settings.templates.length) settings.templates = defaultTemplates;
 
   if (!isHydration) {
-    results = []; resultsPage = 1; leadsPage = 1; activeBusinessId = null; selectedInboxKey = null; messages.clear();
-    $('#results').replaceChildren(empty('search', 'Start a search', 'Choose or enter an industry and enter the city you want to explore.'));
-    $('#save-all').hidden = true; $('#results-pagination').hidden = true; $('#results-count').textContent = '';
+    leadsPage = 1; activeBusinessId = null; selectedInboxKey = null; messages.clear();
+    if (!streamActive) restoreDiscoverySession(user.id);
     persist();
   } else {
+    if (!streamActive) restoreDiscoverySession(user.id);
     updateHeaderBadges();
     renderDashboard();
     renderLeads();
@@ -6650,7 +6668,8 @@ function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMai
 }
 
 function showAuthScreen() {
-  currentUser = null; leads = []; results = []; activeBusinessId = null; selectedInboxKey = null; messages.clear();
+  currentUser = null; leads = []; results = []; resultsPage = 1; activeBusinessId = null; selectedInboxKey = null; messages.clear();
+  renderEmptyDiscoverState();
   try { localStorage.removeItem('jobhunta.activeUser'); } catch {}
   setAuthMode('login');
   document.body.classList.remove('auth-checking');
