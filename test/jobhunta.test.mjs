@@ -45,6 +45,10 @@ import {
   hashPassword,
   verifyPassword,
   USER_TIERS,
+  SUPER_ADMIN_EMAIL,
+  isAdminUser,
+  getEffectiveTierCatalog,
+  computeAdminOverview,
   getUserQuotaStatus,
   getAdvancedSearchUsage,
   tryReserveOmnichannelQuota,
@@ -853,4 +857,30 @@ test('Omnichannel tier reservation grants unlimited runs to Premium & Diamond, 1
     assert.equal(diaRes.allowed, true);
     assert.equal(diaRes.unlimited, true);
   }
+});
+
+test('Admin cPanel RBAC, Super-Admin provisioning (admin@jobhunta.com), MRR calculation, and overview metrics work cleanly', async () => {
+  assert.equal(SUPER_ADMIN_EMAIL, 'admin@jobhunta.com');
+  assert.equal(isAdminUser('admin@jobhunta.com'), true);
+  assert.equal(isAdminUser('ADMIN@JOBHUNTA.COM'), true);
+  assert.equal(isAdminUser({ email: 'regular-user@example.com' }), false);
+
+  const superQuota = getUserQuotaStatus({ email: 'admin@jobhunta.com', tier: 'basic' });
+  assert.equal(superQuota.tier, 'diamond');
+  assert.equal(superQuota.level, 5);
+  assert.equal(superQuota.dailySearchLimit, null);
+
+  const catalog = getEffectiveTierCatalog();
+  assert.equal(catalog.silver.monthlyUsd, 29);
+  assert.equal(catalog.gold.monthlyUsd, 79);
+  assert.equal(catalog.premium.monthlyUsd, 199);
+  assert.equal(catalog.diamond.monthlyUsd, 499);
+
+  const overview = await computeAdminOverview();
+  assert.ok(overview.kpis.totalUsers >= 1);
+  assert.ok(Array.isArray(overview.users));
+  assert.ok(overview.users.some(u => u.email === 'admin@jobhunta.com' && u.isAdmin === true));
+  assert.equal(overview.dailySeries.length, 14);
+  assert.ok(Array.isArray(overview.promoCodes));
+  assert.ok(overview.systemHealth && typeof overview.systemHealth.memoryRssMb === 'number');
 });

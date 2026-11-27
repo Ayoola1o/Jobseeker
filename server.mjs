@@ -24,7 +24,7 @@ import {
   filterAuditFindingsForPersona
 } from './public/audit.mjs';
 import { createServer } from 'node:http';
-import { randomBytes, randomUUID, createHash, createCipheriv, createDecipheriv, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, createHash, createHmac, createCipheriv, createDecipheriv, scryptSync, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
@@ -183,6 +183,7 @@ try {
   const saved = JSON.parse(await readFile(dataFilePath, 'utf8'));
   if (saved && typeof saved === 'object') {
     if (Array.isArray(saved.users)) store.users = saved.users;
+    if (saved.adminState && typeof saved.adminState === 'object') store.adminState = saved.adminState;
     if (saved.workspaces && typeof saved.workspaces === 'object') {
       store.workspaces = saved.workspaces;
     } else if (Array.isArray(saved.leads) || saved.settings) {
@@ -435,8 +436,108 @@ export const USER_TIERS = {
   }
 };
 
+export const SUPER_ADMIN_EMAIL = 'admin@jobhunta.com';
+const SUPER_ADMIN_DEFAULT_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || 'adminjobhunta';
+const SYSTEM_ADMIN_WS_ID = '__system_admin__';
+const serverStartedAt = Date.now();
+
+export const DEFAULT_TIER_MONTHLY_USD = {
+  basic: 0,
+  silver: 29,
+  gold: 79,
+  premium: 199,
+  diamond: 499
+};
+
+function createDefaultAdminState() {
+  return {
+    coAdmins: [],
+    userMeta: {},
+    checkoutUrls: { silver: '', gold: '', premium: '', diamond: '' },
+    tierOverrides: {},
+    promoCodes: [
+      {
+        code: 'LAUNCH7',
+        tier: 'gold',
+        durationDays: 7,
+        maxUses: 100,
+        usesCount: 0,
+        active: true,
+        redeemedBy: [],
+        createdAt: new Date().toISOString()
+      }
+    ],
+    transactions: [],
+    dailyStats: {},
+    topSearches: { industries: {}, cities: {} },
+    upgradeIntents: [],
+    recentEvents: [],
+    announcements: [],
+    auditLog: []
+  };
+}
+
+function getAdminState() {
+  if (!store.adminState || typeof store.adminState !== 'object') {
+    store.adminState = createDefaultAdminState();
+  }
+  const s = store.adminState;
+  if (!Array.isArray(s.coAdmins)) s.coAdmins = [];
+  if (!s.userMeta || typeof s.userMeta !== 'object') s.userMeta = {};
+  if (!s.checkoutUrls || typeof s.checkoutUrls !== 'object') s.checkoutUrls = { silver: '', gold: '', premium: '', diamond: '' };
+  if (!s.tierOverrides || typeof s.tierOverrides !== 'object') s.tierOverrides = {};
+  if (!Array.isArray(s.promoCodes)) s.promoCodes = [];
+  if (!Array.isArray(s.transactions)) s.transactions = [];
+  if (!s.dailyStats || typeof s.dailyStats !== 'object') s.dailyStats = {};
+  if (!s.topSearches || typeof s.topSearches !== 'object') s.topSearches = { industries: {}, cities: {} };
+  if (!s.topSearches.industries) s.topSearches.industries = {};
+  if (!s.topSearches.cities) s.topSearches.cities = {};
+  if (!Array.isArray(s.upgradeIntents)) s.upgradeIntents = [];
+  if (!Array.isArray(s.recentEvents)) s.recentEvents = [];
+  if (!Array.isArray(s.announcements)) s.announcements = [];
+  if (!Array.isArray(s.auditLog)) s.auditLog = [];
+  return s;
+}
+
+export function isAdminUser(emailOrUser) {
+  const email = String(typeof emailOrUser === 'string' ? emailOrUser : emailOrUser?.email || '').trim().toLowerCase();
+  if (!email) return false;
+  if (email === SUPER_ADMIN_EMAIL || email === 'philipibitade@gmail.com') return true;
+  const envAdmins = String(process.env.ADMIN_EMAILS || '')
+    .split(',')
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean);
+  if (envAdmins.includes(email)) return true;
+  const coAdmins = getAdminState().coAdmins.map(e => String(e || '').trim().toLowerCase());
+  return coAdmins.includes(email);
+}
+
+export function getEffectiveTierCatalog() {
+  const overrides = getAdminState().tierOverrides || {};
+  const result = {};
+  for (const [key, base] of Object.entries(USER_TIERS)) {
+    const ov = overrides[key] && typeof overrides[key] === 'object' ? overrides[key] : {};
+    const mergedSearch = ov.dailySearchLimit !== undefined ? ov.dailySearchLimit : base.dailySearchLimit;
+    const mergedResult = ov.dailyResultLimit !== undefined ? ov.dailyResultLimit : base.dailyResultLimit;
+    const mergedEmail = ov.dailyEmailLimit !== undefined ? ov.dailyEmailLimit : base.dailyEmailLimit;
+    const mergedPages = ov.maxSearchPages !== undefined ? Number(ov.maxSearchPages) || base.maxSearchPages : base.maxSearchPages;
+    const monthlyUsd = ov.monthlyUsd !== undefined ? Math.max(0, Number(ov.monthlyUsd) || 0) : DEFAULT_TIER_MONTHLY_USD[key];
+    result[key] = {
+      ...base,
+      price: ov.price ? String(ov.price) : (key === 'basic' ? 'Free' : `$${monthlyUsd}/mo`),
+      monthlyUsd,
+      dailySearchLimit: mergedSearch === null || mergedSearch === '' ? null : Math.max(0, Number(mergedSearch)),
+      dailyResultLimit: mergedResult === null || mergedResult === '' ? null : Math.max(0, Number(mergedResult)),
+      dailyEmailLimit: mergedEmail === null || mergedEmail === '' ? null : Math.max(0, Number(mergedEmail)),
+      maxSearchPages: mergedPages
+    };
+  }
+  return result;
+}
+
 export function normalizeTierKey(rawTier = 'basic', email = '') {
-  if (String(email || '').trim().toLowerCase() === 'philipibitade@gmail.com') {
+  const normEmail = String(email || '').trim().toLowerCase();
+  if (normEmail === SUPER_ADMIN_EMAIL || normEmail === 'philipibitade@gmail.com') {
     return 'diamond';
   }
   const cleaned = String(rawTier || 'basic').trim().toLowerCase();
@@ -457,30 +558,63 @@ export function getMaxSearchPagesForTier(tierLevel = 1) {
   return 25;
 }
 
+export function getUserAdminMeta(userId, email = '') {
+  const meta = (userId && getAdminState().userMeta?.[userId]) || {};
+  const normEmail = String(email || '').trim().toLowerCase();
+  const isOwner = normEmail === SUPER_ADMIN_EMAIL || normEmail === 'philipibitade@gmail.com';
+  return {
+    status: isOwner ? 'active' : (meta.status === 'suspended' ? 'suspended' : 'active'),
+    billingType: meta.billingType || (isOwner ? 'comped' : 'free'),
+    trialEndsAt: meta.trialEndsAt || null,
+    bonusSearches: Math.max(0, Number(meta.bonusSearches) || 0),
+    bonusResults: Math.max(0, Number(meta.bonusResults) || 0),
+    bonusEmails: Math.max(0, Number(meta.bonusEmails) || 0),
+    monthlyPricePaid: meta.monthlyPricePaid !== undefined && meta.monthlyPricePaid !== null ? Number(meta.monthlyPricePaid) : null,
+    notes: String(meta.notes || '')
+  };
+}
+
 export function getUserQuotaStatus(userRecord = {}) {
-  const tierKey = normalizeTierKey(userRecord?.tier, userRecord?.email);
-  const tier = USER_TIERS[tierKey] || USER_TIERS.basic;
+  const meta = getUserAdminMeta(userRecord?.id, userRecord?.email);
+  let tierKey = normalizeTierKey(userRecord?.tier, userRecord?.email);
+  const normEmail = String(userRecord?.email || '').trim().toLowerCase();
+  const isOwner = normEmail === SUPER_ADMIN_EMAIL || normEmail === 'philipibitade@gmail.com';
+  if (!isOwner && meta.billingType === 'trial' && meta.trialEndsAt) {
+    const exp = Date.parse(meta.trialEndsAt);
+    if (!Number.isNaN(exp) && exp < Date.now()) {
+      tierKey = 'basic';
+    }
+  }
+  const catalog = getEffectiveTierCatalog();
+  const tier = catalog[tierKey] || catalog.basic;
   const today = todayUsageDate();
   const sameDay = userRecord?.usage_date === today;
   const searchesToday = sameDay ? Math.max(0, Number(userRecord?.searches_today) || 0) : 0;
   const resultsToday = sameDay ? Math.max(0, Number(userRecord?.results_today) || 0) : 0;
   const emailsToday = sameDay ? Math.max(0, Number(userRecord?.emails_today) || 0) : 0;
+  const dailySearchLimit = tier.dailySearchLimit === null ? null : tier.dailySearchLimit + meta.bonusSearches;
+  const dailyResultLimit = tier.dailyResultLimit === null ? null : tier.dailyResultLimit + meta.bonusResults;
+  const dailyEmailLimit = tier.dailyEmailLimit === null ? null : tier.dailyEmailLimit + meta.bonusEmails;
   return {
     tier: tier.key,
     label: tier.label,
     displayLabel: tier.displayLabel,
     price: tier.price,
+    monthlyUsd: tier.monthlyUsd,
     level: tier.level,
     features: tier.features,
-    dailySearchLimit: tier.dailySearchLimit,
-    dailyEmailLimit: tier.dailyEmailLimit,
-    dailyResultLimit: tier.dailyResultLimit,
+    dailySearchLimit,
+    dailyEmailLimit,
+    dailyResultLimit,
     dailyAdvancedSearchLimit: tier.dailyAdvancedSearchLimit,
     maxSearchPages: tier.maxSearchPages,
     searchesToday,
     resultsToday,
     emailsToday,
-    usageDate: today
+    usageDate: today,
+    accountStatus: meta.status,
+    billingType: meta.billingType,
+    trialEndsAt: meta.trialEndsAt
   };
 }
 
@@ -756,7 +890,521 @@ function saveStore(userId = 'default', leadChanges = null) {
   return writeQueue;
 }
 
+async function loadAdminState() {
+  const state = getAdminState();
+  if (!supabaseConfigured) return state;
+  try {
+    const res = await fetch(`${supabaseUrl}/rest/v1/jobhunta_workspace?id=eq.${encodeURIComponent(SYSTEM_ADMIN_WS_ID)}&select=settings&limit=1`, {
+      headers: supabaseHeaders(),
+      signal: AbortSignal.timeout(6000)
+    });
+    if (res.ok) {
+      const rows = await res.json();
+      if (Array.isArray(rows) && rows[0]?.settings && typeof rows[0].settings === 'object' && Object.keys(rows[0].settings).length) {
+        store.adminState = { ...createDefaultAdminState(), ...rows[0].settings };
+        return getAdminState();
+      }
+    }
+  } catch {}
+  return state;
+}
+
+let adminSaveTimer = null;
+async function saveAdminState(immediate = true) {
+  const state = getAdminState();
+  const persistNow = async () => {
+    if (supabaseConfigured) {
+      try {
+        await fetch(supabaseUrl + '/rest/v1/rpc/jobhunta_save_workspace', {
+          method: 'POST',
+          headers: supabaseHeaders(),
+          body: JSON.stringify({
+            workspace: { id: SYSTEM_ADMIN_WS_ID, settings: state, auth: null, thread_owners: {}, updated_at: new Date().toISOString() },
+            lead_rows: [],
+            removed_ids: []
+          }),
+          signal: AbortSignal.timeout(8000)
+        });
+      } catch {}
+    }
+    if (!isServerless) {
+      try {
+        await writeFile(dataFilePath, JSON.stringify(store, null, 2), 'utf8');
+      } catch {}
+    }
+  };
+  if (immediate) {
+    if (adminSaveTimer) { clearTimeout(adminSaveTimer); adminSaveTimer = null; }
+    await persistNow();
+  } else if (!adminSaveTimer) {
+    adminSaveTimer = setTimeout(() => {
+      adminSaveTimer = null;
+      persistNow().catch(() => {});
+    }, 2500);
+  }
+}
+
+function recordPlatformTelemetry(kind, amount = 1, extra = {}) {
+  const s = getAdminState();
+  const day = todayUsageDate();
+  if (!s.dailyStats[day]) {
+    s.dailyStats[day] = { signups: 0, searches: 0, results: 0, emails: 0, audits: 0, aiBriefs: 0, upgradeClicks: 0, revenueUsd: 0 };
+  }
+  const bucket = s.dailyStats[day];
+  if (Object.hasOwn(bucket, kind)) {
+    bucket[kind] = Math.max(0, (Number(bucket[kind]) || 0) + (Number(amount) || 0));
+  }
+  if (extra.industry) {
+    const k = String(extra.industry).trim().slice(0, 50);
+    if (k) s.topSearches.industries[k] = (s.topSearches.industries[k] || 0) + 1;
+  }
+  if (extra.city) {
+    const c = String(extra.city).trim().slice(0, 50);
+    if (c) s.topSearches.cities[c] = (s.topSearches.cities[c] || 0) + 1;
+  }
+  if (extra.eventSummary) {
+    s.recentEvents.unshift({
+      id: randomUUID(),
+      type: kind,
+      actor: String(extra.actor || ''),
+      summary: String(extra.eventSummary).slice(0, 220),
+      time: new Date().toISOString()
+    });
+    if (s.recentEvents.length > 80) s.recentEvents.length = 80;
+  }
+  const dayKeys = Object.keys(s.dailyStats).sort();
+  if (dayKeys.length > 95) {
+    for (const oldKey of dayKeys.slice(0, dayKeys.length - 95)) delete s.dailyStats[oldKey];
+  }
+  saveAdminState(false).catch(() => {});
+}
+
+function logAdminAudit(actorEmail, action, targetEmail = '', details = '') {
+  const s = getAdminState();
+  s.auditLog.unshift({
+    id: randomUUID(),
+    actorEmail: String(actorEmail || ''),
+    action: String(action || ''),
+    targetEmail: String(targetEmail || ''),
+    details: String(details || '').slice(0, 400),
+    time: new Date().toISOString()
+  });
+  if (s.auditLog.length > 200) s.auditLog.length = 200;
+}
+
+async function ensureSuperAdminAccount() {
+  try {
+    let existing = null;
+    if (supabaseConfigured) {
+      const res = await fetch(`${supabaseUrl}/rest/v1/jobhunta_users?email=eq.${encodeURIComponent(SUPER_ADMIN_EMAIL)}&select=*&limit=1`, {
+        headers: supabaseHeaders(),
+        signal: AbortSignal.timeout(6000)
+      });
+      if (res.ok) {
+        const rows = await res.json();
+        existing = Array.isArray(rows) ? rows[0] : null;
+      }
+    } else {
+      existing = store.users.find(u => u.email.toLowerCase() === SUPER_ADMIN_EMAIL) || null;
+    }
+
+    if (!existing) {
+      const created = await createUserAccount({
+        name: 'Job Hunta Super Admin',
+        email: SUPER_ADMIN_EMAIL,
+        password: SUPER_ADMIN_DEFAULT_PASSWORD,
+        senderService: 'Platform Administration',
+        tier: 'diamond'
+      });
+      const st = getAdminState();
+      st.userMeta[created.id] = {
+        ...(st.userMeta[created.id] || {}),
+        status: 'active',
+        billingType: 'comped',
+        notes: 'Default Super Admin'
+      };
+      await saveAdminState(true);
+      return created;
+    }
+
+    if (existing.tier !== 'diamond') {
+      existing.tier = 'diamond';
+      if (supabaseConfigured) {
+        await fetch(`${supabaseUrl}/rest/v1/jobhunta_users?id=eq.${encodeURIComponent(existing.id)}`, {
+          method: 'PATCH',
+          headers: supabaseHeaders(),
+          body: JSON.stringify({ tier: 'diamond' }),
+          signal: AbortSignal.timeout(5000)
+        }).catch(() => {});
+      }
+    }
+    return existing;
+  } catch {
+    return null;
+  }
+}
+
 await loadFromSupabase('default');
+await loadAdminState();
+await ensureSuperAdminAccount();
+
+async function requireAdmin(session) {
+  if (!session?.userId) fail(401, 'Sign in to access the Admin cPanel.');
+  await loadAdminState();
+  const record = await findUserById(session.userId);
+  if (!record || !isAdminUser(record.email)) {
+    fail(403, 'Admin cPanel access requires an authorized Super Admin account.');
+  }
+  return record;
+}
+
+async function updateUserRecordById(userId, patch = {}) {
+  const cleanPatch = {};
+  if (patch.tier !== undefined) cleanPatch.tier = String(patch.tier);
+  if (patch.name !== undefined) cleanPatch.name = String(patch.name);
+  if (patch.password_hash !== undefined) cleanPatch.password_hash = String(patch.password_hash);
+  if (patch.searches_today !== undefined) cleanPatch.searches_today = Number(patch.searches_today) || 0;
+  if (patch.results_today !== undefined) cleanPatch.results_today = Number(patch.results_today) || 0;
+  if (patch.emails_today !== undefined) cleanPatch.emails_today = Number(patch.emails_today) || 0;
+  if (patch.usage_date !== undefined) cleanPatch.usage_date = String(patch.usage_date);
+
+  if (supabaseConfigured && Object.keys(cleanPatch).length) {
+    const res = await fetch(`${supabaseUrl}/rest/v1/jobhunta_users?id=eq.${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      headers: supabaseHeaders({ Prefer: 'return=representation' }),
+      body: JSON.stringify(cleanPatch),
+      signal: AbortSignal.timeout(7000)
+    });
+    if (!res.ok) fail(503, 'Could not update user record in Supabase.');
+  }
+  const localUser = store.users.find(u => u.id === userId);
+  if (localUser) Object.assign(localUser, cleanPatch);
+  if (!isServerless) {
+    try { await writeFile(dataFilePath, JSON.stringify(store, null, 2), 'utf8'); } catch {}
+  }
+}
+
+export async function computeAdminOverview() {
+  const dbStart = Date.now();
+  await loadAdminState();
+  const s = getAdminState();
+  const catalog = getEffectiveTierCatalog();
+  const today = todayUsageDate();
+
+  let allUsers = [];
+  let allWorkspaces = [];
+  let allLeads = [];
+
+  if (supabaseConfigured) {
+    const [uRes, wRes, lRes] = await Promise.all([
+      fetch(`${supabaseUrl}/rest/v1/jobhunta_users?select=id,email,name,tier,searches_today,results_today,emails_today,usage_date,created_at&order=created_at.desc&limit=5000`, {
+        headers: supabaseHeaders(),
+        signal: AbortSignal.timeout(9000)
+      }).catch(() => null),
+      fetch(`${supabaseUrl}/rest/v1/jobhunta_workspace?select=id,settings,auth,thread_owners,updated_at&limit=5000`, {
+        headers: supabaseHeaders(),
+        signal: AbortSignal.timeout(9000)
+      }).catch(() => null),
+      fetch(`${supabaseUrl}/rest/v1/jobhunta_leads?select=id,user_id,email,platform,source,classification,search_rank,data,updated_at&limit=20000`, {
+        headers: supabaseHeaders(),
+        signal: AbortSignal.timeout(10000)
+      }).catch(() => null)
+    ]);
+    if (uRes?.ok) allUsers = await uRes.json();
+    if (wRes?.ok) allWorkspaces = await wRes.json();
+    if (lRes?.ok) allLeads = await lRes.json();
+  } else {
+    allUsers = store.users.map(u => ({ ...u }));
+    allWorkspaces = Object.entries(store.workspaces || {}).map(([id, ws]) => ({
+      id,
+      settings: ws.settings || {},
+      auth: ws.auth || null,
+      thread_owners: ws.threadOwners || {},
+      updated_at: null
+    }));
+    for (const [uid, ws] of Object.entries(store.workspaces || {})) {
+      if (uid === SYSTEM_ADMIN_WS_ID) continue;
+      for (const l of ws.leads || []) {
+        allLeads.push({
+          id: l.id,
+          user_id: uid,
+          email: l.email || '',
+          platform: l.platform || '',
+          source: l.source || '',
+          classification: l.classification || '',
+          search_rank: l.searchRank ?? null,
+          data: l,
+          updated_at: null
+        });
+      }
+    }
+  }
+  const dbLatencyMs = Date.now() - dbStart;
+
+  const wsById = new Map();
+  for (const w of allWorkspaces) {
+    if (w?.id && w.id !== SYSTEM_ADMIN_WS_ID) wsById.set(w.id, w);
+  }
+
+  const leadsByUser = new Map();
+  const channelBreakdown = {
+    mapsLocal: 0,
+    shopifyEcom: 0,
+    rentedDirectory: 0,
+    newDomainsLaunches: 0,
+    hiringRedditAds: 0,
+    other: 0
+  };
+  let leadsWithEmail = 0;
+  let auditedLeads = 0;
+  let repliedLeads = 0;
+
+  for (const l of allLeads) {
+    const uid = l.user_id || 'default';
+    if (!leadsByUser.has(uid)) {
+      leadsByUser.set(uid, { total: 0, withEmail: 0, audited: 0, interested: 0 });
+    }
+    const bucket = leadsByUser.get(uid);
+    bucket.total++;
+    if (l.email) { bucket.withEmail++; leadsWithEmail++; }
+    if (l.data?.auditReport) { bucket.audited++; auditedLeads++; }
+    if (l.classification === 'interested') { bucket.interested++; repliedLeads++; }
+
+    const ch = l.data?.channelMeta?.channel || '';
+    const plat = String(l.platform || '');
+    const src = String(l.source || '');
+    if (['new_domain', 'launch'].includes(ch)) channelBreakdown.newDomainsLaunches++;
+    else if (['link_in_bio', 'directory', 'social_only', 'chamber'].includes(ch)) channelBreakdown.rentedDirectory++;
+    else if (['job_board', 'ad_funnel'].includes(ch) || l.data?.redditMeta || plat === 'Reddit Lead') channelBreakdown.hiringRedditAds++;
+    else if (/Shopify|WooCommerce|BigCommerce|Klaviyo|Mailchimp|Omnisend|Etsy|Faire|eBay/i.test(plat)) channelBreakdown.shopifyEcom++;
+    else if (/bing\.com\/maps|google\.com\/maps|openstreetmap/i.test(src) || !plat || plat === 'Custom / Website') channelBreakdown.mapsLocal++;
+    else channelBreakdown.other++;
+  }
+
+  const nowMs = Date.now();
+  const dayMs = 86400000;
+  const tierDistribution = { basic: 0, silver: 0, gold: 0, premium: 0, diamond: 0 };
+  const personaBreakdown = {};
+  let newUsersToday = 0;
+  let newUsers7d = 0;
+  let dau = 0;
+  let wau = 0;
+  let mau = 0;
+  let paidSubscribers = 0;
+  let compedOrTrialUsers = 0;
+  let netPaidMrr = 0;
+  let grossPlanValueMrr = 0;
+  let gmailConnectedUsers = 0;
+  let totalOutreachThreads = 0;
+  let searchesTodaySum = 0;
+  let resultsTodaySum = 0;
+  let emailsTodaySum = 0;
+  const quotaHitUsers = [];
+
+  const usersList = allUsers.map(u => {
+    const quota = getUserQuotaStatus(u);
+    const meta = getUserAdminMeta(u.id, u.email);
+    const wsRow = wsById.get(u.id) || {};
+    const wsSettings = wsRow.settings || {};
+    const advRaw = wsSettings._advancedUsage;
+    const advUsed = advRaw && advRaw.date === today ? Math.max(0, Number(advRaw.count) || 0) : 0;
+    const leadStats = leadsByUser.get(u.id) || { total: 0, withEmail: 0, audited: 0, interested: 0 };
+    const threadCount = wsRow.thread_owners && typeof wsRow.thread_owners === 'object'
+      ? Object.keys(wsRow.thread_owners).length
+      : 0;
+    totalOutreachThreads += threadCount;
+
+    let gmailConnected = false;
+    let gmailMailbox = '';
+    if (wsRow.auth) {
+      gmailConnected = true;
+      const decodedAuth = typeof wsRow.auth.sealed === 'string' ? unsealCookie(wsRow.auth.sealed) : wsRow.auth;
+      gmailMailbox = decodedAuth?.mailbox || 'Connected';
+    }
+    if (gmailConnected) gmailConnectedUsers++;
+
+    const personaKey = wsSettings.persona || 'web_dev';
+    personaBreakdown[personaKey] = (personaBreakdown[personaKey] || 0) + 1;
+
+    tierDistribution[quota.tier] = (tierDistribution[quota.tier] || 0) + 1;
+
+    const createdMs = u.created_at ? Date.parse(u.created_at) : NaN;
+    if (!Number.isNaN(createdMs)) {
+      if (u.created_at.slice(0, 10) === today) newUsersToday++;
+      if (nowMs - createdMs <= 7 * dayMs) newUsers7d++;
+    }
+
+    const updatedMs = wsRow.updated_at ? Date.parse(wsRow.updated_at) : NaN;
+    const activeToday = u.usage_date === today && (quota.searchesToday > 0 || quota.emailsToday > 0 || quota.resultsToday > 0) ||
+      (!Number.isNaN(updatedMs) && wsRow.updated_at.slice(0, 10) === today);
+    if (activeToday) dau++;
+    if (activeToday || (!Number.isNaN(updatedMs) && nowMs - updatedMs <= 7 * dayMs)) wau++;
+    if (activeToday || (!Number.isNaN(updatedMs) && nowMs - updatedMs <= 30 * dayMs) || (!Number.isNaN(createdMs) && nowMs - createdMs <= 30 * dayMs)) mau++;
+
+    searchesTodaySum += quota.searchesToday;
+    resultsTodaySum += quota.resultsToday;
+    emailsTodaySum += quota.emailsToday;
+
+    const planUsd = meta.monthlyPricePaid !== null ? meta.monthlyPricePaid : (catalog[quota.tier]?.monthlyUsd || 0);
+    if (quota.level >= 2) {
+      grossPlanValueMrr += planUsd;
+      if (meta.billingType === 'paid') {
+        paidSubscribers++;
+        netPaidMrr += planUsd;
+      } else {
+        compedOrTrialUsers++;
+      }
+    }
+
+    const searchPct = quota.dailySearchLimit ? Math.round((quota.searchesToday / quota.dailySearchLimit) * 100) : 0;
+    const resultPct = quota.dailyResultLimit ? Math.round((quota.resultsToday / quota.dailyResultLimit) * 100) : 0;
+    const emailPct = quota.dailyEmailLimit ? Math.round((quota.emailsToday / quota.dailyEmailLimit) * 100) : 0;
+    const maxQuotaPct = Math.max(searchPct, resultPct, emailPct);
+
+    const row = {
+      id: u.id,
+      email: u.email,
+      name: u.name || '',
+      isAdmin: isAdminUser(u.email),
+      tier: quota.tier,
+      tierLabel: quota.displayLabel,
+      tierLevel: quota.level,
+      priceLabel: quota.price,
+      monthlyUsd: planUsd,
+      status: meta.status,
+      billingType: meta.billingType,
+      trialEndsAt: meta.trialEndsAt,
+      bonusSearches: meta.bonusSearches,
+      bonusResults: meta.bonusResults,
+      bonusEmails: meta.bonusEmails,
+      notes: meta.notes,
+      persona: personaKey,
+      gmailConnected,
+      gmailMailbox,
+      searchesToday: quota.searchesToday,
+      dailySearchLimit: quota.dailySearchLimit,
+      resultsToday: quota.resultsToday,
+      dailyResultLimit: quota.dailyResultLimit,
+      emailsToday: quota.emailsToday,
+      dailyEmailLimit: quota.dailyEmailLimit,
+      advancedSearchesToday: advUsed,
+      dailyAdvancedSearchLimit: quota.dailyAdvancedSearchLimit,
+      maxQuotaPct,
+      leadsCount: leadStats.total,
+      leadsWithEmail: leadStats.withEmail,
+      auditedCount: leadStats.audited,
+      interestedCount: leadStats.interested,
+      outreachSentCount: threadCount,
+      createdAt: u.created_at || null,
+      lastActiveAt: wsRow.updated_at || (u.usage_date ? `${u.usage_date}T00:00:00Z` : u.created_at || null)
+    };
+    if (maxQuotaPct >= 80 && quota.level < 5) {
+      quotaHitUsers.push(row);
+    }
+    return row;
+  });
+
+  quotaHitUsers.sort((a, b) => b.maxQuotaPct - a.maxQuotaPct);
+
+  // Build 14-day historical timeline merging dailyStats + live today totals
+  const dailySeries = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(nowMs - i * dayMs).toISOString().slice(0, 10);
+    const st = s.dailyStats[d] || {};
+    const isToday = d === today;
+    dailySeries.push({
+      date: d,
+      signups: isToday ? Math.max(Number(st.signups) || 0, newUsersToday) : (Number(st.signups) || 0),
+      searches: isToday ? Math.max(Number(st.searches) || 0, searchesTodaySum) : (Number(st.searches) || 0),
+      results: isToday ? Math.max(Number(st.results) || 0, resultsTodaySum) : (Number(st.results) || 0),
+      emails: isToday ? Math.max(Number(st.emails) || 0, emailsTodaySum) : (Number(st.emails) || 0),
+      audits: Number(st.audits) || 0,
+      revenueUsd: Number(st.revenueUsd) || 0
+    });
+  }
+
+  const totalRevenueRecorded = s.transactions.reduce((acc, tx) => acc + (tx.kind === 'refund' ? -Math.abs(Number(tx.amountUsd) || 0) : (Number(tx.amountUsd) || 0)), 0);
+  const nonAdminUsersCount = Math.max(1, usersList.filter(u => !u.isAdmin).length);
+  const conversionRate = Number(((paidSubscribers / nonAdminUsersCount) * 100).toFixed(1));
+  const arpu = paidSubscribers > 0 ? Number((netPaidMrr / paidSubscribers).toFixed(2)) : 0;
+
+  const topIndustries = Object.entries(s.topSearches.industries || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, count]) => ({ name, count }));
+  const topCities = Object.entries(s.topSearches.cities || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, count]) => ({ name, count }));
+
+  const mem = process.memoryUsage();
+
+  return {
+    generatedAt: new Date().toISOString(),
+    kpis: {
+      totalUsers: usersList.length,
+      newUsersToday,
+      newUsers7d,
+      dau,
+      wau,
+      mau,
+      paidSubscribers,
+      compedOrTrialUsers,
+      freeUsers: Math.max(0, usersList.length - paidSubscribers - compedOrTrialUsers),
+      conversionRate,
+      netPaidMrr,
+      projectedArr: netPaidMrr * 12,
+      grossPlanValueMrr,
+      arpu,
+      totalRevenueRecorded,
+      searchesToday: searchesTodaySum,
+      resultsToday: resultsTodaySum,
+      emailsToday: emailsTodaySum,
+      totalLeads: allLeads.length,
+      leadsWithEmail,
+      auditedLeads,
+      repliedLeads,
+      totalOutreachThreads,
+      gmailConnectedUsers
+    },
+    tierDistribution,
+    channelBreakdown,
+    personaBreakdown,
+    dailySeries,
+    topIndustries,
+    topCities,
+    quotaHitUsers: quotaHitUsers.slice(0, 15),
+    upgradeIntents: s.upgradeIntents.slice(0, 30),
+    recentEvents: s.recentEvents.slice(0, 40),
+    transactions: s.transactions.slice(0, 60),
+    promoCodes: s.promoCodes,
+    checkoutUrls: s.checkoutUrls,
+    tierCatalog: Object.values(catalog),
+    tierOverrides: s.tierOverrides,
+    coAdmins: s.coAdmins,
+    announcements: s.announcements,
+    auditLog: s.auditLog.slice(0, 60),
+    users: usersList,
+    systemHealth: {
+      supabaseConfigured,
+      supabaseConnected: supabaseConfigured ? supabaseStatus.connected !== false : false,
+      supabaseLatencyMs: dbLatencyMs,
+      gmailOAuthConfigured: gmailConfigured,
+      geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
+      serperConfigured: Boolean(process.env.SERPER_API_KEY?.trim()),
+      tavilyConfigured: Boolean(process.env.TAVILY_API_KEY?.trim()),
+      webhookSecretConfigured: Boolean(process.env.BILLING_WEBHOOK_SECRET?.trim()),
+      uptimeSeconds: Math.floor((Date.now() - serverStartedAt) / 1000),
+      memoryRssMb: Math.round((mem.rss / 1048576) * 10) / 10,
+      heapUsedMb: Math.round((mem.heapUsed / 1048576) * 10) / 10,
+      dbCounts: {
+        users: usersList.length,
+        workspaces: wsById.size,
+        leads: allLeads.length
+      }
+    }
+  };
+}
 
 const sessions = new Map();
 const searches = new Map();
@@ -4324,6 +4972,11 @@ export async function handleRequest(req, res) {
         fail(409, 'An account with this email already exists. Please sign in.');
       }
       const user = await createUserAccount({ name, email, password, senderService });
+      user.isAdmin = isAdminUser(user.email);
+      recordPlatformTelemetry('signups', 1, {
+        actor: user.email,
+        eventSummary: `New account registered: ${user.name} (${user.email})`
+      });
       session.user = user;
       session.userId = user.id;
       delete session.mailbox;
@@ -4344,12 +4997,28 @@ export async function handleRequest(req, res) {
       if (!validEmail(email) || typeof password !== 'string' || !password) {
         fail(400, 'Enter your email and password.');
       }
+      if (String(email).trim().toLowerCase() === SUPER_ADMIN_EMAIL) {
+        await ensureSuperAdminAccount();
+      }
       const record = await findUserByEmail(email);
       if (!record || !verifyPassword(password, record.password_hash)) {
         fail(401, 'Invalid email or password.');
       }
+      await loadAdminState();
+      const adminMeta = getUserAdminMeta(record.id, record.email);
+      if (adminMeta.status === 'suspended') {
+        fail(403, 'Your account has been suspended by an administrator. Contact support for assistance.');
+      }
       const usage = getUserQuotaStatus(record);
-      const user = { id: record.id, email: record.email, name: record.name || '', tier: usage.tier, createdAt: record.created_at || null, usage };
+      const user = {
+        id: record.id,
+        email: record.email,
+        name: record.name || '',
+        tier: usage.tier,
+        isAdmin: isAdminUser(record.email),
+        createdAt: record.created_at || null,
+        usage
+      };
       session.user = user;
       session.userId = user.id;
       await loadFromSupabase(user.id);
@@ -4443,19 +5112,36 @@ export async function handleRequest(req, res) {
         }
         const record = await findUserById(session.userId);
         if (record) {
+          await loadAdminState();
           const usage = getUserQuotaStatus(record);
           const adv = getAdvancedSearchUsage(session.userId, usage);
           usage.advancedSearchesToday = adv.used;
           usage.dailyAdvancedSearchLimit = adv.limit;
-          activeUser = { id: record.id, email: record.email, name: record.name || '', tier: usage.tier, createdAt: record.created_at || null, usage };
+          activeUser = {
+            id: record.id,
+            email: record.email,
+            name: record.name || '',
+            tier: usage.tier,
+            isAdmin: isAdminUser(record.email),
+            createdAt: record.created_at || null,
+            usage
+          };
           session.user = activeUser;
         }
       }
       const ws = session.userId ? getWorkspace(session.userId) : createEmptyWorkspace();
       const { _advancedUsage: _omitAdv, ...publicSettings } = (session.userId ? ws.settings : createEmptyWorkspace().settings) || {};
+      const adm = getAdminState();
+      const userTierKey = activeUser?.tier || 'basic';
+      const activeAnnouncements = (adm.announcements || []).filter(a => a.active && (a.targetTier === 'all' || !a.targetTier || a.targetTier === userTierKey));
       return json({
         user: activeUser,
-        tiers: Object.values(USER_TIERS),
+        tiers: Object.values(getEffectiveTierCatalog()),
+        billing: {
+          checkoutUrls: adm.checkoutUrls || {},
+          acceptPromoCodes: true
+        },
+        announcements: activeAnnouncements.slice(0, 5),
         industries: Object.keys(industries),
         configured: gmailConfigured,
         clientId: client_id || null,
@@ -4531,6 +5217,9 @@ export async function handleRequest(req, res) {
     if (req.method === 'GET' && path === '/api/search') {
       if (!session.userId) fail(401, 'Sign in to search for businesses.');
       const userRecord = await findUserById(session.userId);
+      if (getUserAdminMeta(session.userId, userRecord?.email).status === 'suspended') {
+        fail(403, 'Your account has been suspended by an administrator.');
+      }
       const quotaStatus = getUserQuotaStatus(userRecord);
       const tierLevel = quotaStatus.level || 1;
       const requestedRankMode = url.searchParams.get('rankMode') || 'all';
@@ -4561,6 +5250,12 @@ export async function handleRequest(req, res) {
 
       // Charge 1 regular search first, then reserve Omnichannel capability ONLY if the user's tier allows it
       const chargedOn = await consumeQuota(session.userId, 'search');
+      recordPlatformTelemetry('searches', 1, {
+        industry: rawIndustry,
+        city: rawCity,
+        actor: userRecord?.email || '',
+        eventSummary: `${userRecord?.email || 'User'} searched "${rawIndustry}" in ${rawCity}`
+      });
       let advRes = { allowed: false, unlimited: false, chargedOn: null, reason: 'tier_locked' };
       try {
         advRes = await tryReserveOmnichannelQuota(session.userId, quotaStatus);
@@ -4613,6 +5308,9 @@ export async function handleRequest(req, res) {
     if (req.method === 'POST' && path === '/api/evidence-assets') {
       if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');
       const userRecord = await findUserById(session.userId);
+      if (getUserAdminMeta(session.userId, userRecord?.email).status === 'suspended') {
+        fail(403, 'Your account has been suspended by an administrator.');
+      }
       const quotaStatus = getUserQuotaStatus(userRecord);
       if ((quotaStatus.level || 1) < 2) {
         fail(403, 'Attaching captured research pictures requires the Silver (Starter) plan or higher.');
@@ -4659,6 +5357,9 @@ export async function handleRequest(req, res) {
     if (req.method === 'POST' && path === '/api/audit') {
       if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');
       const userRecord = await findUserById(session.userId);
+      if (getUserAdminMeta(session.userId, userRecord?.email).status === 'suspended') {
+        fail(403, 'Your account has been suspended by an administrator.');
+      }
       const quotaStatus = getUserQuotaStatus(userRecord);
       const tierLevel = quotaStatus.level || 1;
       const { website, lead = {}, extraContext = '', senderSettings: reqSenderSettings = null } = await readJson(req);
@@ -4675,6 +5376,10 @@ export async function handleRequest(req, res) {
           }
         : ws.settings;
       const enriched = await fetchWebsiteEmails(targetUrl);
+      recordPlatformTelemetry('audits', 1, {
+        actor: userRecord?.email || '',
+        eventSummary: `${userRecord?.email || 'User'} audited ${targetUrl} (Score: ${enriched.auditReport?.overallScore ?? '—'}/100)`
+      });
       const mergedLead = { ...lead, ...enriched, name: lead?.name || enriched.brandName };
       const outreach = generateClientOutreach(enriched.auditReport, mergedLead, effectiveSettings, tierLevel >= 3 ? extraContext : '', tierLevel);
       const { primary: personaFindings } = filterAuditFindingsForPersona(enriched.auditReport.findings || [], effectiveSettings, tierLevel);
@@ -4700,6 +5405,9 @@ export async function handleRequest(req, res) {
     if (req.method === 'POST' && path === '/api/analyze') {
       if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');
       const userRecord = await findUserById(session.userId);
+      if (getUserAdminMeta(session.userId, userRecord?.email).status === 'suspended') {
+        fail(403, 'Your account has been suspended by an administrator.');
+      }
       const quotaStatus = getUserQuotaStatus(userRecord);
       const tierLevel = quotaStatus.level || 1;
       const { lead, userIssues, extraContext, senderSettings: reqSenderSettings = null } = await readJson(req);
@@ -4738,6 +5446,7 @@ export async function handleRequest(req, res) {
         tierLevel >= 3 ? (extraContext ?? enrichedLead.aiExtraContext ?? '') : '',
         tierLevel
       );
+      recordPlatformTelemetry('aiBriefs', 1);
       return json({
         ...brief,
         auditReport: enrichedLead.auditReport || null,
@@ -4754,7 +5463,413 @@ export async function handleRequest(req, res) {
           fail(403, 'Email file & image attachments require the Silver (Starter) plan or higher.');
         }
       }
-      return json(await send(session, payload));
+      const sentRes = await send(session, payload);
+      recordPlatformTelemetry('emails', 1, {
+        actor: session.user?.email || '',
+        eventSummary: `${session.user?.email || 'User'} sent outreach email to ${payload.to || 'lead'}`
+      });
+      return json(sentRes);
+    }
+    if (req.method === 'POST' && path === '/api/billing/intent') {
+      if (!session.userId) return json({ ok: false });
+      const { targetTier = '', featureTitle = '' } = await readJson(req);
+      const userRecord = await findUserById(session.userId);
+      if (userRecord) {
+        await loadAdminState();
+        const s = getAdminState();
+        s.upgradeIntents.unshift({
+          id: randomUUID(),
+          userId: userRecord.id,
+          email: userRecord.email,
+          name: userRecord.name || '',
+          currentTier: normalizeTierKey(userRecord.tier, userRecord.email),
+          targetTier: String(targetTier || '').slice(0, 24),
+          featureTitle: String(featureTitle || '').slice(0, 120),
+          time: new Date().toISOString()
+        });
+        if (s.upgradeIntents.length > 100) s.upgradeIntents.length = 100;
+        recordPlatformTelemetry('upgradeClicks', 1, {
+          actor: userRecord.email,
+          eventSummary: `Upgrade intent: ${userRecord.email} viewed ${targetTier || 'higher plan'} (${featureTitle || 'feature unlock'})`
+        });
+      }
+      return json({ ok: true });
+    }
+    if (req.method === 'POST' && path === '/api/billing/redeem') {
+      if (!session.userId) fail(401, 'Sign in to redeem a promo code.');
+      const { code = '' } = await readJson(req);
+      const cleanCode = String(code || '').trim().toUpperCase();
+      if (!cleanCode) fail(400, 'Enter a promo or trial code.');
+      await loadAdminState();
+      const s = getAdminState();
+      const promo = s.promoCodes.find(p => String(p.code || '').toUpperCase() === cleanCode);
+      if (!promo || !promo.active) fail(404, 'Invalid or inactive promo code.');
+      if (promo.maxUses && (Number(promo.usesCount) || 0) >= Number(promo.maxUses)) {
+        fail(400, 'This promo code has reached its redemption limit.');
+      }
+      if (!Array.isArray(promo.redeemedBy)) promo.redeemedBy = [];
+      if (promo.redeemedBy.includes(session.userId)) {
+        fail(400, 'You have already redeemed this promo code.');
+      }
+      const userRecord = await findUserById(session.userId);
+      if (!userRecord) fail(404, 'Account not found.');
+      const targetTier = normalizeTierKey(promo.tier || 'gold');
+      await updateUserRecordById(userRecord.id, { tier: targetTier });
+      userRecord.tier = targetTier;
+
+      const durationDays = Math.max(0, Number(promo.durationDays) || 0);
+      const trialEndsAt = durationDays > 0 ? new Date(Date.now() + durationDays * 86400000).toISOString() : null;
+      s.userMeta[userRecord.id] = {
+        ...(s.userMeta[userRecord.id] || {}),
+        status: 'active',
+        billingType: durationDays > 0 ? 'trial' : 'comped',
+        trialEndsAt
+      };
+      promo.usesCount = (Number(promo.usesCount) || 0) + 1;
+      promo.redeemedBy.push(session.userId);
+      recordPlatformTelemetry('upgradeClicks', 0, {
+        actor: userRecord.email,
+        eventSummary: `${userRecord.email} redeemed promo code ${cleanCode} -> ${targetTier.toUpperCase()}${durationDays ? ` (${durationDays}d trial)` : ''}`
+      });
+      await saveAdminState(true);
+
+      const usage = getUserQuotaStatus(userRecord);
+      const updatedUser = {
+        id: userRecord.id,
+        email: userRecord.email,
+        name: userRecord.name || '',
+        tier: usage.tier,
+        isAdmin: isAdminUser(userRecord.email),
+        createdAt: userRecord.created_at || null,
+        usage
+      };
+      session.user = updatedUser;
+      writeUserCookie(updatedUser);
+      return json({ ok: true, user: updatedUser, durationDays, trialEndsAt });
+    }
+    if (req.method === 'POST' && path === '/api/webhooks/billing') {
+      const rawChunks = [];
+      for await (const chunk of req) rawChunks.push(chunk);
+      const rawBody = Buffer.concat(rawChunks).toString('utf8');
+      const secret = (process.env.BILLING_WEBHOOK_SECRET || '').trim();
+      if (secret) {
+        const paystackSig = req.headers['x-paystack-signature'];
+        const customSig = req.headers['x-webhook-secret'];
+        const hmacHex = createHmac('sha512', secret).update(rawBody).digest('hex');
+        const hmac256 = createHmac('sha256', secret).update(rawBody).digest('hex');
+        const stripeSig = String(req.headers['stripe-signature'] || '');
+        const validPaystack = typeof paystackSig === 'string' && paystackSig === hmacHex;
+        const validCustom = typeof customSig === 'string' && customSig === secret;
+        const validStripe = stripeSig.includes(hmac256);
+        if (!validPaystack && !validCustom && !validStripe) {
+          fail(401, 'Invalid billing webhook signature.');
+        }
+      }
+      let body = {};
+      try { body = JSON.parse(rawBody || '{}'); } catch { fail(400, 'Invalid JSON webhook payload.'); }
+
+      // Normalize Stripe (checkout.session.completed / invoice.paid), Paystack (charge.success), or Flutterwave
+      const eventType = String(body.type || body.event || 'payment.succeeded');
+      const dataObj = body.data?.object || body.data || body;
+      const customerEmail = String(
+        dataObj.customer_details?.email ||
+        dataObj.customer_email ||
+        dataObj.customer?.email ||
+        body.email ||
+        ''
+      ).trim().toLowerCase();
+      const rawAmount = Number(dataObj.amount_total ?? dataObj.amount_paid ?? dataObj.amount ?? body.amountUsd ?? 0);
+      const currency = String(dataObj.currency || body.currency || 'USD').toUpperCase();
+      const isMinorUnit = Boolean(body.type || body.event === 'charge.success');
+      const amountUsd = currency === 'NGN'
+        ? Math.round(((isMinorUnit ? rawAmount / 100 : rawAmount) / 1600) * 100) / 100
+        : (isMinorUnit && rawAmount >= 100 ? Math.round((rawAmount / 100) * 100) / 100 : rawAmount);
+
+      let tierKey = normalizeTierKey(
+        dataObj.metadata?.tier || body.tier ||
+        (amountUsd >= 400 ? 'diamond' : amountUsd >= 150 ? 'premium' : amountUsd >= 60 ? 'gold' : amountUsd >= 20 ? 'silver' : 'silver')
+      );
+      if (tierKey === 'basic') tierKey = 'silver';
+
+      await loadAdminState();
+      const s = getAdminState();
+      let matchedUser = customerEmail ? await findUserByEmail(customerEmail) : null;
+      if (matchedUser) {
+        await updateUserRecordById(matchedUser.id, { tier: tierKey });
+        s.userMeta[matchedUser.id] = {
+          ...(s.userMeta[matchedUser.id] || {}),
+          status: 'active',
+          billingType: 'paid',
+          trialEndsAt: null,
+          monthlyPricePaid: amountUsd || DEFAULT_TIER_MONTHLY_USD[tierKey]
+        };
+      }
+      const tx = {
+        id: randomUUID(),
+        userId: matchedUser?.id || null,
+        email: customerEmail || 'unknown',
+        tier: tierKey,
+        amountUsd: amountUsd || DEFAULT_TIER_MONTHLY_USD[tierKey],
+        currency,
+        provider: body.event === 'charge.success' ? 'Paystack' : (body.type ? 'Stripe' : (body.provider || 'Webhook')),
+        reference: String(dataObj.reference || dataObj.id || randomUUID().slice(0, 12)),
+        kind: /refund/i.test(eventType) ? 'refund' : 'payment',
+        time: new Date().toISOString()
+      };
+      s.transactions.unshift(tx);
+      if (s.transactions.length > 500) s.transactions.length = 500;
+      recordPlatformTelemetry('revenueUsd', tx.kind === 'refund' ? -tx.amountUsd : tx.amountUsd, {
+        actor: tx.email,
+        eventSummary: `${tx.provider} ${tx.kind}: $${tx.amountUsd} (${tierKey.toUpperCase()}) for ${tx.email}`
+      });
+      await saveAdminState(true);
+      return json({ received: true, upgradedUser: Boolean(matchedUser), tier: tierKey });
+    }
+    if (req.method === 'GET' && path === '/api/admin/overview') {
+      await requireAdmin(session);
+      return json(await computeAdminOverview());
+    }
+    if (req.method === 'POST' && path === '/api/admin/user-update') {
+      const adminRecord = await requireAdmin(session);
+      const body = await readJson(req);
+      const userId = String(body.userId || '').trim();
+      if (!userId) fail(400, 'Specify a userId to update.');
+      const target = await findUserById(userId);
+      if (!target) fail(404, 'Target user not found.');
+      const s = getAdminState();
+      const prevMeta = getUserAdminMeta(target.id, target.email);
+      const isPrimarySuper = String(target.email || '').toLowerCase() === SUPER_ADMIN_EMAIL;
+
+      const dbPatch = {};
+      const nextTier = body.tier ? normalizeTierKey(body.tier, isPrimarySuper ? target.email : '') : null;
+      if (nextTier && Object.hasOwn(USER_TIERS, nextTier)) {
+        dbPatch.tier = nextTier;
+      }
+      if (typeof body.name === 'string') {
+        dbPatch.name = body.name.trim().slice(0, 80);
+      }
+      if (typeof body.newPassword === 'string' && body.newPassword.length >= 6) {
+        dbPatch.password_hash = hashPassword(body.newPassword);
+      }
+      if (Object.keys(dbPatch).length) {
+        await updateUserRecordById(target.id, dbPatch);
+      }
+
+      const billingType = ['free', 'paid', 'comped', 'trial'].includes(body.billingType)
+        ? body.billingType
+        : prevMeta.billingType;
+      let trialEndsAt = prevMeta.trialEndsAt;
+      if (billingType === 'trial') {
+        if (body.trialDays !== undefined && Number(body.trialDays) > 0) {
+          trialEndsAt = new Date(Date.now() + Number(body.trialDays) * 86400000).toISOString();
+        } else if (body.trialEndsAt) {
+          trialEndsAt = String(body.trialEndsAt);
+        }
+      } else {
+        trialEndsAt = null;
+      }
+
+      s.userMeta[target.id] = {
+        status: isPrimarySuper ? 'active' : (body.status === 'suspended' ? 'suspended' : (body.status === 'active' ? 'active' : prevMeta.status)),
+        billingType,
+        trialEndsAt,
+        bonusSearches: body.bonusSearches !== undefined ? Math.max(0, Number(body.bonusSearches) || 0) : prevMeta.bonusSearches,
+        bonusResults: body.bonusResults !== undefined ? Math.max(0, Number(body.bonusResults) || 0) : prevMeta.bonusResults,
+        bonusEmails: body.bonusEmails !== undefined ? Math.max(0, Number(body.bonusEmails) || 0) : prevMeta.bonusEmails,
+        monthlyPricePaid: body.monthlyPricePaid !== undefined && body.monthlyPricePaid !== '' ? Math.max(0, Number(body.monthlyPricePaid) || 0) : prevMeta.monthlyPricePaid,
+        notes: body.notes !== undefined ? String(body.notes || '').slice(0, 500) : prevMeta.notes
+      };
+
+      logAdminAudit(
+        adminRecord.email,
+        'user_update',
+        target.email,
+        `Tier=${dbPatch.tier || target.tier}, Billing=${billingType}, Status=${s.userMeta[target.id].status}${body.newPassword ? ', Password reset' : ''}`
+      );
+      await saveAdminState(true);
+      return json({ ok: true });
+    }
+    if (req.method === 'POST' && path === '/api/admin/reset-quota') {
+      const adminRecord = await requireAdmin(session);
+      const { userId = '' } = await readJson(req);
+      if (!userId) fail(400, 'Specify a userId to reset daily usage.');
+      const target = await findUserById(userId);
+      if (!target) fail(404, 'User not found.');
+      await updateUserRecordById(userId, {
+        searches_today: 0,
+        results_today: 0,
+        emails_today: 0,
+        usage_date: todayUsageDate()
+      });
+      await loadFromSupabase(userId);
+      const ws = getWorkspace(userId);
+      if (ws.settings?._advancedUsage) {
+        ws.settings._advancedUsage = { date: todayUsageDate(), count: 0 };
+        await saveStore(userId).catch(() => {});
+      }
+      logAdminAudit(adminRecord.email, 'reset_quota', target.email, 'Reset daily searches, leads, emails & omnichannel counters to 0');
+      await saveAdminState(true);
+      return json({ ok: true });
+    }
+    if (req.method === 'POST' && path === '/api/admin/delete-user') {
+      const adminRecord = await requireAdmin(session);
+      const { userId = '' } = await readJson(req);
+      const target = await findUserById(userId);
+      if (!target) fail(404, 'User not found.');
+      if (String(target.email || '').toLowerCase() === SUPER_ADMIN_EMAIL || target.id === adminRecord.id) {
+        fail(400, 'Cannot delete the primary Super Admin or your own active session.');
+      }
+      if (supabaseConfigured) {
+        await Promise.all([
+          fetch(`${supabaseUrl}/rest/v1/jobhunta_leads?user_id=eq.${encodeURIComponent(userId)}`, { method: 'DELETE', headers: supabaseHeaders(), signal: AbortSignal.timeout(6000) }).catch(() => {}),
+          fetch(`${supabaseUrl}/rest/v1/jobhunta_workspace?id=eq.${encodeURIComponent(userId)}`, { method: 'DELETE', headers: supabaseHeaders(), signal: AbortSignal.timeout(6000) }).catch(() => {}),
+          fetch(`${supabaseUrl}/rest/v1/jobhunta_users?id=eq.${encodeURIComponent(userId)}`, { method: 'DELETE', headers: supabaseHeaders(), signal: AbortSignal.timeout(6000) })
+        ]);
+      }
+      store.users = store.users.filter(u => u.id !== userId);
+      delete store.workspaces[userId];
+      delete getAdminState().userMeta[userId];
+      logAdminAudit(adminRecord.email, 'delete_user', target.email, 'Deleted user account, workspace & leads');
+      await saveAdminState(true);
+      return json({ ok: true });
+    }
+    if (req.method === 'POST' && path === '/api/admin/billing/transaction') {
+      const adminRecord = await requireAdmin(session);
+      const body = await readJson(req);
+      const email = String(body.email || '').trim().toLowerCase();
+      if (!validEmail(email)) fail(400, 'Enter a valid customer email.');
+      const tier = Object.hasOwn(USER_TIERS, body.tier) ? body.tier : 'gold';
+      const amountUsd = Math.max(0, Number(body.amountUsd) || 0);
+      const kind = body.kind === 'refund' ? 'refund' : 'payment';
+      const provider = String(body.provider || 'Manual / Bank').slice(0, 40);
+      const reference = String(body.reference || `MAN-${Date.now().toString(36).toUpperCase()}`).slice(0, 60);
+
+      const s = getAdminState();
+      const matchedUser = await findUserByEmail(email);
+      if (matchedUser && body.autoUpgrade !== false && kind === 'payment') {
+        await updateUserRecordById(matchedUser.id, { tier });
+        s.userMeta[matchedUser.id] = {
+          ...(s.userMeta[matchedUser.id] || {}),
+          status: 'active',
+          billingType: 'paid',
+          trialEndsAt: null,
+          monthlyPricePaid: amountUsd || DEFAULT_TIER_MONTHLY_USD[tier]
+        };
+      } else if (matchedUser && kind === 'refund' && body.autoDowngrade) {
+        await updateUserRecordById(matchedUser.id, { tier: 'basic' });
+        s.userMeta[matchedUser.id] = {
+          ...(s.userMeta[matchedUser.id] || {}),
+          billingType: 'free',
+          monthlyPricePaid: null
+        };
+      }
+      const tx = {
+        id: randomUUID(),
+        userId: matchedUser?.id || null,
+        email,
+        tier,
+        amountUsd,
+        currency: 'USD',
+        provider,
+        reference,
+        kind,
+        time: new Date().toISOString()
+      };
+      s.transactions.unshift(tx);
+      recordPlatformTelemetry('revenueUsd', kind === 'refund' ? -amountUsd : amountUsd, {
+        actor: email,
+        eventSummary: `Admin recorded ${kind}: $${amountUsd} (${tier.toUpperCase()}) for ${email}`
+      });
+      logAdminAudit(adminRecord.email, 'record_transaction', email, `${kind.toUpperCase()} $${amountUsd} (${tier}) via ${provider} [${reference}]`);
+      await saveAdminState(true);
+      return json({ ok: true, transaction: tx, matchedUser: Boolean(matchedUser) });
+    }
+    if (req.method === 'POST' && path === '/api/admin/billing/config') {
+      const adminRecord = await requireAdmin(session);
+      const body = await readJson(req);
+      const s = getAdminState();
+
+      if (body.checkoutUrls && typeof body.checkoutUrls === 'object') {
+        for (const k of ['silver', 'gold', 'premium', 'diamond']) {
+          if (body.checkoutUrls[k] !== undefined) {
+            const rawUrl = String(body.checkoutUrls[k] || '').trim();
+            s.checkoutUrls[k] = /^https?:\/\//i.test(rawUrl) ? rawUrl.slice(0, 500) : '';
+          }
+        }
+      }
+      if (body.tierOverrides && typeof body.tierOverrides === 'object') {
+        for (const [key, ov] of Object.entries(body.tierOverrides)) {
+          if (!Object.hasOwn(USER_TIERS, key) || !ov || typeof ov !== 'object') continue;
+          s.tierOverrides[key] = {
+            ...(s.tierOverrides[key] || {}),
+            ...(ov.monthlyUsd !== undefined ? { monthlyUsd: Math.max(0, Number(ov.monthlyUsd) || 0) } : {}),
+            ...(ov.price !== undefined ? { price: String(ov.price).slice(0, 24) } : {}),
+            ...(ov.dailySearchLimit !== undefined ? { dailySearchLimit: ov.dailySearchLimit === null || ov.dailySearchLimit === '' ? null : Math.max(0, Number(ov.dailySearchLimit)) } : {}),
+            ...(ov.dailyResultLimit !== undefined ? { dailyResultLimit: ov.dailyResultLimit === null || ov.dailyResultLimit === '' ? null : Math.max(0, Number(ov.dailyResultLimit)) } : {}),
+            ...(ov.dailyEmailLimit !== undefined ? { dailyEmailLimit: ov.dailyEmailLimit === null || ov.dailyEmailLimit === '' ? null : Math.max(0, Number(ov.dailyEmailLimit)) } : {}),
+            ...(ov.maxSearchPages !== undefined ? { maxSearchPages: Math.max(1, Math.min(30, Number(ov.maxSearchPages) || 8)) } : {})
+          };
+        }
+      }
+      if (body.addPromo && typeof body.addPromo === 'object') {
+        const cleanCode = String(body.addPromo.code || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 24);
+        if (!cleanCode) fail(400, 'Enter a valid alphanumeric promo code.');
+        s.promoCodes = s.promoCodes.filter(p => String(p.code || '').toUpperCase() !== cleanCode);
+        s.promoCodes.unshift({
+          code: cleanCode,
+          tier: Object.hasOwn(USER_TIERS, body.addPromo.tier) ? body.addPromo.tier : 'gold',
+          durationDays: Math.max(0, Number(body.addPromo.durationDays) || 0),
+          maxUses: Math.max(1, Number(body.addPromo.maxUses) || 50),
+          usesCount: 0,
+          active: true,
+          redeemedBy: [],
+          createdAt: new Date().toISOString()
+        });
+      }
+      if (body.deletePromoCode) {
+        const del = String(body.deletePromoCode).toUpperCase();
+        s.promoCodes = s.promoCodes.filter(p => String(p.code || '').toUpperCase() !== del);
+      }
+      if (body.togglePromoCode) {
+        const tog = String(body.togglePromoCode).toUpperCase();
+        const found = s.promoCodes.find(p => String(p.code || '').toUpperCase() === tog);
+        if (found) found.active = !found.active;
+      }
+      logAdminAudit(adminRecord.email, 'billing_config', '', 'Updated monetization checkout links, tier limits, or promo codes');
+      await saveAdminState(true);
+      return json({ ok: true, checkoutUrls: s.checkoutUrls, promoCodes: s.promoCodes, tierCatalog: Object.values(getEffectiveTierCatalog()) });
+    }
+    if (req.method === 'POST' && path === '/api/admin/broadcast') {
+      const adminRecord = await requireAdmin(session);
+      const body = await readJson(req);
+      const s = getAdminState();
+
+      if (Array.isArray(body.coAdmins)) {
+        s.coAdmins = body.coAdmins
+          .map(e => String(e || '').trim().toLowerCase())
+          .filter(e => validEmail(e) && e !== SUPER_ADMIN_EMAIL);
+        logAdminAudit(adminRecord.email, 'update_coadmins', '', `Co-admins: ${s.coAdmins.join(', ') || 'none'}`);
+      }
+      if (body.addAnnouncement && typeof body.addAnnouncement === 'object') {
+        const title = String(body.addAnnouncement.title || '').trim().slice(0, 100);
+        const message = String(body.addAnnouncement.message || '').trim().slice(0, 320);
+        if (!title || !message) fail(400, 'Provide an announcement title and message.');
+        s.announcements.unshift({
+          id: randomUUID(),
+          title,
+          message,
+          targetTier: String(body.addAnnouncement.targetTier || 'all'),
+          ctaHash: String(body.addAnnouncement.ctaHash || '#profile'),
+          active: true,
+          createdAt: new Date().toISOString()
+        });
+        logAdminAudit(adminRecord.email, 'publish_announcement', '', `Published "${title}" to ${body.addAnnouncement.targetTier || 'all'}`);
+      }
+      if (body.deleteAnnouncementId) {
+        s.announcements = s.announcements.filter(a => a.id !== body.deleteAnnouncementId);
+      }
+      await saveAdminState(true);
+      return json({ ok: true, announcements: s.announcements, coAdmins: s.coAdmins });
     }
     if (req.method === 'GET' && path === '/api/outreach') {
       if (!session.userId) fail(401, 'Sign in to your Job Hunta account first.');

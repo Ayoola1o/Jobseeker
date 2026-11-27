@@ -83,6 +83,14 @@ let dossierTab = 'overview';
 let auditCategoryFilter = 'all';
 let auditOutreachTab = 'coldEmail';
 let settingsTab = 'integrations';
+let adminTab = 'overview';
+let adminChartMetric = 'searches';
+let adminOverviewData = null;
+let adminLoading = false;
+let adminUserQuery = '';
+let adminPlanFilter = '';
+let adminBillingFilter = '';
+let adminStatusFilter = '';
 let selectedInboxKey = null;
 let inboxFilter = 'all';
 let inboxSearchQuery = '';
@@ -234,21 +242,63 @@ const TIER_CATALOG = [
 
 const TIER_KEY_ALIASES = { free: 'basic', starter: 'silver', pro: 'gold', agency: 'premium' };
 
+function getDynamicTierList() {
+  if (!Array.isArray(account?.tiers) || !account.tiers.length) return TIER_CATALOG;
+  return TIER_CATALOG.map(base => {
+    const srv = account.tiers.find(x => x.key === base.key);
+    if (!srv) return base;
+    return {
+      ...base,
+      price: srv.price || base.price,
+      monthlyUsd: srv.monthlyUsd,
+      dailySearchLimit: srv.dailySearchLimit !== undefined ? srv.dailySearchLimit : base.dailySearchLimit,
+      dailyResultLimit: srv.dailyResultLimit !== undefined ? srv.dailyResultLimit : base.dailyResultLimit,
+      dailyEmailLimit: srv.dailyEmailLimit !== undefined ? srv.dailyEmailLimit : base.dailyEmailLimit,
+      maxSearchPages: srv.maxSearchPages || base.maxSearchPages,
+      searches: srv.dailySearchLimit === null ? 'Unlimited' : String(srv.dailySearchLimit ?? base.searches),
+      leads: srv.dailyResultLimit === null ? 'Unlimited' : Number(srv.dailyResultLimit ?? 50).toLocaleString(),
+      emails: srv.dailyEmailLimit === null ? 'Unlimited' : Number(srv.dailyEmailLimit ?? 20).toLocaleString()
+    };
+  });
+}
+
 function getActiveTier() {
-  if (String(currentUser?.email || '').trim().toLowerCase() === 'philipibitade@gmail.com') {
-    return TIER_CATALOG[4];
+  const list = getDynamicTierList();
+  const normEmail = String(currentUser?.email || '').trim().toLowerCase();
+  if (normEmail === 'admin@jobhunta.com' || normEmail === 'philipibitade@gmail.com') {
+    return list[4] || TIER_CATALOG[4];
   }
   const raw = String(currentUser?.usage?.tier || currentUser?.tier || 'basic').trim().toLowerCase();
   const key = TIER_KEY_ALIASES[raw] || raw;
-  return TIER_CATALOG.find(t => t.key === key) || TIER_CATALOG[0];
+  return list.find(t => t.key === key) || list[0];
 }
 
 function getUserTierLevel() {
   return getActiveTier().level;
 }
 
-function showUpgradeModal(reqTier, featureTitle, description = '') {
+function buildCheckoutHref(tierKey) {
+  const rawUrl = account?.billing?.checkoutUrls?.[tierKey] || '';
+  if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return '';
+  try {
+    const u = new URL(rawUrl);
+    if (currentUser?.email && !u.searchParams.has('prefilled_email')) {
+      u.searchParams.set('prefilled_email', currentUser.email);
+    }
+    return u.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+function showUpgradeModal(reqTierOrLevel, featureTitle, description = '') {
+  const list = getDynamicTierList();
+  const reqTier = typeof reqTierOrLevel === 'number'
+    ? (list.find(t => t.level === reqTierOrLevel) || list[1])
+    : (list.find(t => t.key === reqTierOrLevel?.key) || reqTierOrLevel || list[1]);
   const curTier = getActiveTier();
+  api('/api/billing/intent', { targetTier: reqTier.key, featureTitle }).catch(() => {});
+
   const box = create('div', '', 'stack');
   const badgeRow = create('div', '', 'actions');
   const curPill = create('span', `Current: ${curTier.displayLabel}`, 'pill neutral');
@@ -263,19 +313,28 @@ function showUpgradeModal(reqTier, featureTitle, description = '') {
   card.style.background = '#f3faf7';
   card.append(create('strong', `${reqTier.displayLabel} Plan Highlights (${reqTier.price}):`));
   const ul = create('ul', '', 'tier-features');
-  for (const f of reqTier.features) {
+  for (const f of reqTier.features || []) {
     const li = create('li');
     li.append(iconEl('check', 14), document.createTextNode(f));
     ul.append(li);
   }
   card.append(ul);
 
+  const checkoutHref = buildCheckoutHref(reqTier.key);
   const acts = create('div', '', 'actions');
+  if (checkoutHref) {
+    acts.append(
+      btnWithIcon('crown', `Checkout ${reqTier.displayLabel} (${reqTier.price}) →`, () => {
+        window.open(checkoutHref, '_blank', 'noopener');
+        dialog.close();
+      })
+    );
+  }
   acts.append(
-    btnWithIcon('crown', 'Compare Plans & Upgrade', () => {
+    btnWithIcon('sparkles', 'Compare Plans / Redeem Code', () => {
       dialog.close();
       location.hash = '#profile';
-    }),
+    }, checkoutHref ? 'btn-soft' : ''),
     button('Maybe Later', () => dialog.close(), true)
   );
   box.append(badgeRow, descP, card, acts);
@@ -4889,6 +4948,11 @@ function renderProfile() {
   heroLeft.append(avatarBtn, heroText);
 
   const heroActs = create('div', '', 'actions profile-hero-actions');
+  if (currentUser?.isAdmin) {
+    heroActs.append(
+      btnWithIcon('shieldCheck', 'Open Admin cPanel', () => { location.hash = '#admin'; }, 'hero-btn-white')
+    );
+  }
   heroActs.append(
     btnWithIcon('camera', settings.avatarUrl ? 'Change Photo' : 'Upload Photo', triggerProfilePhotoUpload, 'hero-btn-ghost'),
     ...(settings.avatarUrl ? [button('Remove Photo', () => {
@@ -4897,7 +4961,7 @@ function renderProfile() {
       report('Removed profile picture.');
     }, 'hero-btn-ghost')] : []),
     btnWithIcon('settings', 'Edit Profile', () => { settingsTab = 'outreach'; location.hash = '#settings'; }, 'hero-btn-ghost'),
-    btnWithIcon('search', 'Find Businesses', () => { location.hash = '#discover'; }, 'hero-btn-white')
+    btnWithIcon('search', 'Find Businesses', () => { location.hash = '#discover'; }, currentUser?.isAdmin ? 'hero-btn-ghost' : 'hero-btn-white')
   );
   hero.append(heroLeft, heroActs);
 
@@ -5081,8 +5145,44 @@ function renderProfile() {
   );
   pHead.append(pHeadCopy, create('span', `Current: ${activeTier.displayLabel} (${activeTier.price})`, 'pill'));
 
+  const promoBar = create('div', '', 'promo-redeem-bar');
+  const promoCopy = create('div');
+  promoCopy.append(
+    create('strong', 'Have a Promo or VIP Trial Code?'),
+    create('div', 'Redeem partner or trial codes (e.g. LAUNCH7) to unlock upgraded quotas immediately.', 'small')
+  );
+  const promoForm = create('form', '', 'promo-redeem-form');
+  const promoInput = create('input');
+  promoInput.placeholder = 'Enter code…';
+  promoInput.maxLength = 24;
+  const promoBtn = btnWithIcon('sparkles', 'Redeem Code', null, 'btn-soft', 14);
+  promoBtn.type = 'submit';
+  promoForm.append(promoInput, promoBtn);
+  promoForm.onsubmit = async e => {
+    e.preventDefault();
+    const code = promoInput.value.trim();
+    if (!code) return;
+    promoBtn.disabled = true;
+    try {
+      const res = await api('/api/billing/redeem', { code });
+      if (res.user) {
+        currentUser = res.user;
+        account.user = res.user;
+        updateHeaderBadges();
+        renderDiscoverMetaBar();
+        renderProfile();
+      }
+      report(`Promo code ${code.toUpperCase()} redeemed! Your workspace is now on ${getActiveTier().displayLabel}.`);
+    } catch (err) {
+      report(err.message, true);
+    } finally {
+      promoBtn.disabled = false;
+    }
+  };
+  promoBar.append(promoCopy, promoForm);
+
   const cardsGrid = create('div', '', 'plan-cards-grid');
-  for (const t of tierList) {
+  for (const t of getDynamicTierList()) {
     const isCurrent = t.key === activeTier.key;
     const tc = create('article', '', 'tier-card' + (isCurrent ? ' active' : ''));
     if (isCurrent) tc.append(create('span', 'Current Plan', 'tier-card-badge'));
@@ -5113,10 +5213,24 @@ function renderProfile() {
       feats.append(li);
     });
 
-    tc.append(statBox, feats);
+    const ctaWrap = create('div', '', 'tier-card-cta');
+    const checkoutHref = buildCheckoutHref(t.key);
+    if (isCurrent) {
+      const curBtn = button('Active Plan', null, 'btn-soft');
+      curBtn.disabled = true;
+      ctaWrap.append(curBtn);
+    } else if (t.level > activeTier.level) {
+      if (checkoutHref) {
+        ctaWrap.append(btnWithIcon('crown', `Upgrade to ${t.label} →`, () => window.open(checkoutHref, '_blank', 'noopener')));
+      } else {
+        ctaWrap.append(btnWithIcon('crown', `Upgrade to ${t.label}`, () => showUpgradeModal(t, `${t.displayLabel} Plan`, `Upgrade to ${t.displayLabel} (${t.price}) or enter a promo code above.`)));
+      }
+    }
+
+    tc.append(statBox, feats, ctaWrap);
     cardsGrid.append(tc);
   }
-  plansSection.append(pHead, cardsGrid);
+  plansSection.append(pHead, promoBar, cardsGrid);
 
   const personaSection = buildPersonaAndAddedToolsCard(() => renderProfile());
   container.replaceChildren(hero, kpiGrid, personaSection, infoGrid, midGrid, plansSection);
@@ -6530,11 +6644,843 @@ function setMobileNav(open) {
   if (toggleBtn) toggleBtn.setAttribute('aria-expanded', String(open));
 }
 
+function buildAdminTrendChartSvg(series = [], metricKey = 'searches', label = 'Searches') {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 680 200');
+  svg.setAttribute('class', 'admin-chart-svg');
+
+  const vals = series.map(s => Number(s[metricKey]) || 0);
+  const maxVal = Math.max(1, ...vals);
+  const padLeft = 40;
+  const padRight = 14;
+  const padTop = 18;
+  const padBot = 30;
+  const w = 680 - padLeft - padRight;
+  const h = 200 - padTop - padBot;
+
+  for (let i = 0; i <= 3; i++) {
+    const y = padTop + (h * i) / 3;
+    const line = document.createElementNS(ns, 'line');
+    line.setAttribute('x1', String(padLeft));
+    line.setAttribute('x2', String(680 - padRight));
+    line.setAttribute('y1', String(y));
+    line.setAttribute('y2', String(y));
+    line.setAttribute('stroke', '#e8f0ed');
+    line.setAttribute('stroke-dasharray', '3,3');
+    svg.append(line);
+
+    const tickVal = Math.round(maxVal * (1 - i / 3));
+    const txt = document.createElementNS(ns, 'text');
+    txt.setAttribute('x', String(padLeft - 6));
+    txt.setAttribute('y', String(y + 4));
+    txt.setAttribute('text-anchor', 'end');
+    txt.setAttribute('fill', '#6b7280');
+    txt.setAttribute('font-size', '10.5');
+    txt.textContent = metricKey === 'revenueUsd' ? `$${tickVal}` : String(tickVal);
+    svg.append(txt);
+  }
+
+  const count = Math.max(1, series.length);
+  const slotW = w / count;
+  const barW = Math.min(28, Math.max(10, slotW * 0.58));
+
+  series.forEach((pt, idx) => {
+    const val = Number(pt[metricKey]) || 0;
+    const barH = Math.max(val > 0 ? 4 : 1.5, (val / maxVal) * h);
+    const x = padLeft + idx * slotW + (slotW - barW) / 2;
+    const y = padTop + h - barH;
+
+    const rect = document.createElementNS(ns, 'rect');
+    rect.setAttribute('x', String(x));
+    rect.setAttribute('y', String(y));
+    rect.setAttribute('width', String(barW));
+    rect.setAttribute('height', String(barH));
+    rect.setAttribute('rx', '5');
+    rect.setAttribute('fill', idx === series.length - 1 ? '#059669' : '#34d399');
+    const titleEl = document.createElementNS(ns, 'title');
+    titleEl.textContent = `${pt.date}: ${metricKey === 'revenueUsd' ? '$' + val : val} ${label}`;
+    rect.append(titleEl);
+    svg.append(rect);
+
+    if (idx % 2 === 0 || idx === series.length - 1) {
+      const lbl = document.createElementNS(ns, 'text');
+      lbl.setAttribute('x', String(x + barW / 2));
+      lbl.setAttribute('y', String(200 - 10));
+      lbl.setAttribute('text-anchor', 'middle');
+      lbl.setAttribute('fill', '#6b7280');
+      lbl.setAttribute('font-size', '10');
+      lbl.textContent = String(pt.date || '').slice(5);
+      svg.append(lbl);
+    }
+  });
+  return svg;
+}
+
+function exportAdminUsersCsv(users = []) {
+  const headers = ['ID', 'Name', 'Email', 'Tier', 'BillingType', 'MonthlyUSD', 'Status', 'SearchesToday', 'LeadsToday', 'EmailsToday', 'SavedLeads', 'OutreachSent', 'GmailConnected', 'Persona', 'CreatedAt'];
+  const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const lines = [
+    headers.join(','),
+    ...users.map(u => [
+      u.id, u.name, u.email, u.tier, u.billingType, u.monthlyUsd, u.status,
+      u.searchesToday, u.resultsToday, u.emailsToday, u.leadsCount, u.outreachSentCount,
+      u.gmailConnected ? u.gmailMailbox : 'No', u.persona, u.createdAt || ''
+    ].map(esc).join(','))
+  ];
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `jobhunta-users-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+}
+
+function openAdminUserInspector(u) {
+  const form = create('form', '', 'stack');
+
+  const summary = create('div', '', 'surface card-pad');
+  summary.style.background = '#f3faf7';
+  summary.append(
+    create('strong', `${u.name || 'Unnamed User'} (${u.email})`),
+    create('div', `Joined: ${u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '—'} · Saved Leads: ${u.leadsCount} · Outreach Sent: ${u.outreachSentCount} · Gmail: ${u.gmailConnected ? u.gmailMailbox : 'Not connected'}`, 'small')
+  );
+
+  const row1 = create('div', '', 'grid-2');
+  const tierWrap = create('label', 'Subscription Plan');
+  const tierSel = create('select');
+  for (const t of getDynamicTierList()) {
+    const opt = new Option(`${t.displayLabel} (${t.price})`, t.key);
+    if (t.key === u.tier) opt.selected = true;
+    tierSel.append(opt);
+  }
+  tierWrap.append(tierSel);
+
+  const billWrap = create('label', 'Billing Classification');
+  const billSel = create('select');
+  for (const [val, lbl] of [['paid', 'Paid Subscriber (Counts in MRR)'], ['trial', 'Timed VIP Trial'], ['comped', 'Comped / Partner VIP'], ['free', 'Free Tier']]) {
+    const opt = new Option(lbl, val);
+    if (val === u.billingType) opt.selected = true;
+    billSel.append(opt);
+  }
+  billWrap.append(billSel);
+  row1.append(tierWrap, billWrap);
+
+  const row2 = create('div', '', 'grid-2');
+  const trialDaysF = field('Trial Days (if Timed Trial)', 'trialDays', u.trialEndsAt ? Math.max(1, Math.ceil((Date.parse(u.trialEndsAt) - Date.now()) / 86400000)) : 7, { type: 'number', min: 0, max: 365 });
+  const pricePaidF = field('Monthly Price Paid USD ($)', 'monthlyPricePaid', u.monthlyUsd ?? '', { type: 'number', min: 0, max: 9999 });
+  row2.append(trialDaysF, pricePaidF);
+
+  const row3 = create('div', '', 'grid-3');
+  const bSearch = field('Bonus Searches / day', 'bonusSearches', u.bonusSearches || 0, { type: 'number', min: 0, max: 5000 });
+  const bLeads = field('Bonus Leads / day', 'bonusResults', u.bonusResults || 0, { type: 'number', min: 0, max: 20000 });
+  const bEmails = field('Bonus Emails / day', 'bonusEmails', u.bonusEmails || 0, { type: 'number', min: 0, max: 10000 });
+  row3.append(bSearch, bLeads, bEmails);
+
+  const row4 = create('div', '', 'grid-2');
+  const statusWrap = create('label', 'Account Status');
+  const statusSel = create('select');
+  statusSel.append(new Option('Active', 'active'), new Option('Suspended (Blocks Access)', 'suspended'));
+  statusSel.value = u.status || 'active';
+  statusWrap.append(statusSel);
+  const pwdF = field('Set Temporary Password (Optional)', 'newPassword', '', { placeholder: 'Leave blank to keep unchanged' });
+  row4.append(statusWrap, pwdF);
+
+  const notesF = field('Admin CRM Notes', 'notes', u.notes || '', { placeholder: 'Internal billing or support notes…' });
+
+  const acts = create('div', '', 'actions');
+  const saveBtn = btnWithIcon('check', 'Save User Changes', null);
+  saveBtn.type = 'submit';
+  const resetQuotaBtn = btnWithIcon('refresh', 'Reset Today Quotas', async () => {
+    try {
+      await api('/api/admin/reset-quota', { userId: u.id });
+      report(`Reset daily quotas for ${u.email}.`);
+      dialog.close();
+      renderAdminPanel(true);
+    } catch (err) { report(err.message, true); }
+  }, 'btn-soft');
+
+  const delBtn = button('Delete User', async () => {
+    if (!confirm(`Permanently delete ${u.email} and all their saved leads? This cannot be undone.`)) return;
+    try {
+      await api('/api/admin/delete-user', { userId: u.id });
+      report(`Deleted account ${u.email}.`);
+      dialog.close();
+      renderAdminPanel(true);
+    } catch (err) { report(err.message, true); }
+  }, 'danger');
+
+  acts.append(saveBtn, resetQuotaBtn, ...(u.email === 'admin@jobhunta.com' ? [] : [delBtn]));
+  form.append(summary, row1, row2, row3, row4, notesF, acts);
+
+  form.onsubmit = async e => {
+    e.preventDefault();
+    saveBtn.disabled = true;
+    try {
+      await api('/api/admin/user-update', {
+        userId: u.id,
+        tier: tierSel.value,
+        billingType: billSel.value,
+        trialDays: Number(trialDaysF.lastChild.value) || 0,
+        monthlyPricePaid: pricePaidF.lastChild.value === '' ? '' : Number(pricePaidF.lastChild.value),
+        bonusSearches: Number(bSearch.lastChild.value) || 0,
+        bonusResults: Number(bLeads.lastChild.value) || 0,
+        bonusEmails: Number(bEmails.lastChild.value) || 0,
+        status: statusSel.value,
+        newPassword: pwdF.lastChild.value.trim(),
+        notes: notesF.lastChild.value.trim()
+      });
+      report(`Updated ${u.email} (${tierSel.value.toUpperCase()} · ${billSel.value}).`);
+      dialog.close();
+      renderAdminPanel(true);
+    } catch (err) {
+      report(err.message, true);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  };
+
+  show(`Manage User: ${u.name || u.email}`, form);
+}
+
+async function renderAdminPanel(forceFetch = false) {
+  const container = $('#admin-content');
+  if (!container) return;
+  if (!currentUser?.isAdmin) {
+    container.replaceChildren(empty('lock', 'Admin Access Restricted', 'Sign in with an authorized Super Admin account to access the Job Hunta cPanel.'));
+    return;
+  }
+
+  if ((forceFetch || !adminOverviewData) && !adminLoading) {
+    adminLoading = true;
+    if (!adminOverviewData) {
+      container.replaceChildren(empty('sparkles', 'Loading Admin cPanel…', 'Aggregating users, workspaces, live usage quotas, discovery channels, and monetization metrics.'));
+    }
+    try {
+      adminOverviewData = await api('/api/admin/overview');
+    } catch (err) {
+      adminLoading = false;
+      container.replaceChildren(empty('alertCircle', 'Could not load Admin cPanel', err.message));
+      return;
+    }
+    adminLoading = false;
+  }
+  const data = adminOverviewData;
+  if (!data) return;
+  const k = data.kpis || {};
+
+  // Hero Header
+  const hero = create('section', '', 'admin-hero');
+  const heroLeft = create('div');
+  heroLeft.append(
+    create('h1', 'Job Hunta — Admin cPanel'),
+    create('p', `Super Admin: ${currentUser.email} · Live Users: ${k.totalUsers || 0} · Net Paid MRR: $${(k.netPaidMrr || 0).toLocaleString()}/mo · Updated ${new Date(data.generatedAt).toLocaleTimeString()}`)
+  );
+  const heroActs = create('div', '', 'actions');
+  heroActs.append(
+    btnWithIcon('refresh', 'Refresh Live Data', () => renderAdminPanel(true), 'hero-btn-white', 15),
+    btnWithIcon('fileText', 'Export Users CSV', () => exportAdminUsersCsv(data.users || []), 'hero-btn-ghost', 15)
+  );
+  hero.append(heroLeft, heroActs);
+
+  // 5 Tabs
+  const tabsBar = create('div', '', 'admin-tabs');
+  const tabDefs = [
+    ['overview', 'barChart', 'Executive Overview'],
+    ['users', 'users', `Users & Plans (${(data.users || []).length})`],
+    ['usage', 'layers', 'Usage & Discovery Telemetry'],
+    ['monetization', 'crown', 'Monetization & Billing'],
+    ['system', 'shieldCheck', 'System, Broadcasts & Logs']
+  ];
+  for (const [id, ico, lbl] of tabDefs) {
+    const b = create('button', '', 'admin-tab' + (adminTab === id ? ' active' : ''));
+    b.type = 'button';
+    b.append(iconEl(ico, 16), document.createTextNode(lbl));
+    b.onclick = () => { adminTab = id; renderAdminPanel(false); };
+    tabsBar.append(b);
+  }
+
+  const body = create('div');
+
+  const makeKpi = (ico, val, label, sub, tone = '') => {
+    const c = create('article', '', 'surface kpi-card');
+    const ic = create('div', '', 'kpi-ico' + (tone ? ' ' + tone : ''));
+    ic.append(iconEl(ico, 22));
+    const foot = create('div', '', 'kpi-foot-row');
+    foot.append(create('small', label), create('span', sub, 'kpi-trend'));
+    c.append(ic, create('strong', String(val)), foot);
+    return c;
+  };
+
+  const makeBarList = (rows = [], color = 'var(--green)') => {
+    const wrap = create('div', '', 'admin-bar-list');
+    const max = Math.max(1, ...rows.map(r => r.count || 0));
+    for (const r of rows) {
+      const item = create('div', '', 'admin-bar-row');
+      const top = create('div', '', 'admin-bar-top');
+      top.append(create('span', r.label), create('strong', `${r.count}${r.suffix || ''}`));
+      const track = create('div', '', 'admin-bar-track');
+      const fill = create('div', '', 'admin-bar-fill');
+      fill.style.width = `${Math.round(((r.count || 0) / max) * 100)}%`;
+      fill.style.background = r.color || color;
+      track.append(fill);
+      item.append(top, track);
+      wrap.append(item);
+    }
+    return wrap;
+  };
+
+  if (adminTab === 'overview') {
+    const kpiGrid = create('div', '', 'admin-kpi-grid');
+    kpiGrid.append(
+      makeKpi('users', k.totalUsers || 0, 'Total Users', `+${k.newUsersToday || 0} today · +${k.newUsers7d || 0} 7d`),
+      makeKpi('zap', `${k.dau || 0} / ${k.wau || 0} / ${k.mau || 0}`, 'Active (DAU / WAU / MAU)', `${k.gmailConnectedUsers || 0} Gmail linked`),
+      makeKpi('crown', `$${(k.netPaidMrr || 0).toLocaleString()}`, 'Net Paid MRR', `ARR: $${(k.projectedArr || 0).toLocaleString()}/yr`, 'amber'),
+      makeKpi('trendingUp', `${k.paidSubscribers || 0} Paid`, 'Subscribers & Conversion', `${k.conversionRate || 0}% conv · ${k.compedOrTrialUsers || 0} VIP/Trial`),
+      makeKpi('search', k.searchesToday || 0, 'Searches Run Today', `${k.resultsToday || 0} leads scraped today`),
+      makeKpi('database', (k.totalLeads || 0).toLocaleString(), 'Total Saved Leads', `${k.leadsWithEmail || 0} with verified email`),
+      makeKpi('send', k.emailsToday || 0, 'Emails Sent Today', `${k.totalOutreachThreads || 0} all-time threads`),
+      makeKpi('shieldCheck', k.auditedLeads || 0, 'Website Audits Run', `${k.repliedLeads || 0} warm interested leads`)
+    );
+
+    const splitTop = create('div', '', 'admin-split-2');
+
+    const chartCard = create('article', '', 'surface card-pad');
+    const chartHead = create('div', '', 'heading');
+    chartHead.style.margin = '0 0 10px';
+    chartHead.append(create('h2', '14-Day Platform Activity & Revenue'));
+    const metricPills = create('div', '', 'actions');
+    for (const [mKey, mLbl] of [['searches', 'Searches'], ['results', 'Leads'], ['emails', 'Emails'], ['signups', 'Signups'], ['revenueUsd', 'Revenue $']]) {
+      const p = button(mLbl, () => { adminChartMetric = mKey; renderAdminPanel(false); }, adminChartMetric === mKey ? '' : 'btn-soft');
+      p.style.padding = '5px 10px';
+      p.style.fontSize = '12px';
+      metricPills.append(p);
+    }
+    chartHead.append(metricPills);
+    chartCard.append(chartHead, buildAdminTrendChartSvg(data.dailySeries || [], adminChartMetric, adminChartMetric));
+
+    const tierCard = create('article', '', 'surface card-pad');
+    tierCard.append(create('h2', 'Users by Subscription Plan'));
+    const td = data.tierDistribution || {};
+    tierCard.append(makeBarList([
+      { label: 'Basic (Free)', count: td.basic || 0, color: '#94a3b8' },
+      { label: 'Silver ($29/mo)', count: td.silver || 0, color: '#64748b' },
+      { label: 'Gold ($79/mo)', count: td.gold || 0, color: '#d97706' },
+      { label: 'Premium ($199/mo)', count: td.premium || 0, color: '#7c3aed' },
+      { label: 'Diamond ($499/mo)', count: td.diamond || 0, color: '#059669' }
+    ]));
+
+    splitTop.append(chartCard, tierCard);
+
+    const eventsCard = create('article', '', 'surface card-pad');
+    const evHead = create('div', '', 'heading');
+    evHead.style.margin = '0 0 10px';
+    evHead.append(create('h2', 'Live Platform Event Stream'), button('Manage Users →', () => { adminTab = 'users'; renderAdminPanel(false); }, 'link-btn'));
+    eventsCard.append(evHead);
+    const evList = create('div', '', 'admin-event-list');
+    if ((data.recentEvents || []).length) {
+      for (const ev of data.recentEvents.slice(0, 20)) {
+        const row = create('div', '', 'admin-event-item');
+        row.append(create('span', ev.summary), create('small', new Date(ev.time).toLocaleString()));
+        evList.append(row);
+      }
+    } else {
+      evList.append(create('p', 'Platform events (signups, searches, audits, emails, payments) will stream here in real time.', 'small'));
+    }
+    eventsCard.append(evList);
+
+    body.append(kpiGrid, splitTop, eventsCard);
+  } else if (adminTab === 'users') {
+    const filterBar = create('div', '', 'filters-bar');
+    const searchIn = create('input');
+    searchIn.placeholder = 'Search user by name, email, or ID…';
+    searchIn.value = adminUserQuery;
+    searchIn.style.maxWidth = '280px';
+    searchIn.oninput = e => { adminUserQuery = e.target.value; renderAdminPanel(false); };
+
+    const planSel = create('select', '', 'inline-select');
+    planSel.append(new Option('All Plans', ''));
+    for (const t of getDynamicTierList()) planSel.append(new Option(t.displayLabel, t.key));
+    planSel.value = adminPlanFilter;
+    planSel.onchange = e => { adminPlanFilter = e.target.value; renderAdminPanel(false); };
+
+    const billSel = create('select', '', 'inline-select');
+    billSel.append(new Option('All Billing', ''), new Option('Paid Subscribers', 'paid'), new Option('Timed Trials', 'trial'), new Option('Comped / VIP', 'comped'), new Option('Free Tier', 'free'));
+    billSel.value = adminBillingFilter;
+    billSel.onchange = e => { adminBillingFilter = e.target.value; renderAdminPanel(false); };
+
+    const statSel = create('select', '', 'inline-select');
+    statSel.append(new Option('All Statuses', ''), new Option('Active', 'active'), new Option('Suspended', 'suspended'), new Option('Near Quota (>=80%)', 'quota'), new Option('Gmail Connected', 'gmail'));
+    statSel.value = adminStatusFilter;
+    statSel.onchange = e => { adminStatusFilter = e.target.value; renderAdminPanel(false); };
+
+    filterBar.append(searchIn, planSel, billSel, statSel);
+
+    const q = adminUserQuery.trim().toLowerCase();
+    const filteredUsers = (data.users || []).filter(u => {
+      if (q && !`${u.name} ${u.email} ${u.id}`.toLowerCase().includes(q)) return false;
+      if (adminPlanFilter && u.tier !== adminPlanFilter) return false;
+      if (adminBillingFilter && u.billingType !== adminBillingFilter) return false;
+      if (adminStatusFilter === 'active' && u.status !== 'active') return false;
+      if (adminStatusFilter === 'suspended' && u.status !== 'suspended') return false;
+      if (adminStatusFilter === 'quota' && (u.maxQuotaPct || 0) < 80) return false;
+      if (adminStatusFilter === 'gmail' && !u.gmailConnected) return false;
+      return true;
+    });
+
+    const tableCard = create('div', '', 'surface results-panel');
+    const wrap = create('div', '', 'data-table-wrap');
+    const table = create('table', '', 'data-table');
+    const thead = create('thead');
+    thead.innerHTML = '<tr><th>User</th><th>Plan &amp; Billing</th><th>Today Quota Usage</th><th>Workspace Pipeline</th><th>Last Active</th><th>Actions</th></tr>';
+    const tbody = create('tbody');
+
+    for (const u of filteredUsers) {
+      const tr = create('tr', '', 'clickable-row');
+      tr.onclick = () => openAdminUserInspector(u);
+
+      const tdUser = create('td');
+      const uTitle = create('strong', u.name || u.email.split('@')[0]);
+      const uSub = create('small', u.email);
+      uSub.style.display = 'block';
+      const uBadges = create('div', '', 'actions');
+      if (u.isAdmin) uBadges.append(create('span', 'Admin', 'pill'));
+      if (u.status === 'suspended') uBadges.append(create('span', 'Suspended', 'pill suspended'));
+      if (u.gmailConnected) uBadges.append(create('span', 'Gmail Linked', 'pill neutral'));
+      tdUser.append(uTitle, uSub, uBadges);
+
+      const tdPlan = create('td');
+      const pRow = create('div', '', 'actions');
+      pRow.append(planBadgeEl(u.tier, 22), create('strong', u.tierLabel));
+      const bRow = create('div', '', 'actions');
+      const bCls = u.billingType === 'paid' ? 'pill paid' : (u.billingType === 'trial' ? 'pill trial' : 'pill neutral');
+      const bText = u.billingType === 'paid'
+        ? `Paid ($${u.monthlyUsd}/mo)`
+        : u.billingType === 'trial'
+          ? `Trial${u.trialEndsAt ? ' until ' + u.trialEndsAt.slice(0, 10) : ''}`
+          : u.billingType === 'comped' ? 'Comped VIP' : 'Free';
+      bRow.append(create('span', bText, bCls));
+      tdPlan.append(pRow, bRow);
+
+      const tdQuota = create('td');
+      const meters = create('div', '', 'admin-mini-meters');
+      const fmtLim = (used, lim) => `${used} / ${lim === null ? '∞' : lim}`;
+      for (const [lbl, used, lim] of [['Searches', u.searchesToday, u.dailySearchLimit], ['Leads', u.resultsToday, u.dailyResultLimit], ['Emails', u.emailsToday, u.dailyEmailLimit]]) {
+        const l = create('div', '', 'admin-mini-meter-line');
+        l.append(create('span', lbl), create('strong', fmtLim(used, lim)));
+        meters.append(l);
+      }
+      tdQuota.append(meters);
+
+      const tdPipe = create('td');
+      tdPipe.append(
+        create('div', `${u.leadsCount} leads (${u.leadsWithEmail} w/ email)`),
+        create('small', `${u.auditedCount} audits · ${u.outreachSentCount} sent · ${u.persona}`)
+      );
+
+      const tdActv = create('td', u.lastActiveAt ? new Date(u.lastActiveAt).toLocaleDateString() : '—');
+
+      const tdBtns = create('td');
+      const grp = create('div', '', 'actions');
+      grp.onclick = e => e.stopPropagation();
+      grp.append(
+        button('Manage', () => openAdminUserInspector(u), 'btn-soft'),
+        button('Reset Quota', async () => {
+          try {
+            await api('/api/admin/reset-quota', { userId: u.id });
+            report(`Reset quotas for ${u.email}.`);
+            renderAdminPanel(true);
+          } catch (err) { report(err.message, true); }
+        }, true)
+      );
+      tdBtns.append(grp);
+
+      tr.append(tdUser, tdPlan, tdQuota, tdPipe, tdActv, tdBtns);
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    wrap.append(table);
+    tableCard.append(wrap);
+    body.append(filterBar, tableCard);
+  } else if (adminTab === 'usage') {
+    const ch = data.channelBreakdown || {};
+    const grid2 = create('div', '', 'admin-grid-2');
+
+    const chCard = create('article', '', 'surface card-pad');
+    chCard.append(create('h2', 'Discovered Leads by Omnichannel Engine'));
+    chCard.append(makeBarList([
+      { label: 'Bing Maps, Google Maps & Local Web', count: ch.mapsLocal || 0, color: '#059669' },
+      { label: 'Shopify, Klaviyo/ESPs & Etsy/Faire', count: ch.shopifyEcom || 0, color: '#2563eb' },
+      { label: 'Link-in-Bio, Booking & Chamber Directories', count: ch.rentedDirectory || 0, color: '#d97706' },
+      { label: 'Newly Registered Domains (crt.sh) & Launches', count: ch.newDomainsLaunches || 0, color: '#7c3aed' },
+      { label: 'Hiring Job Boards, Reddit & Paid-Ad Funnels', count: ch.hiringRedditAds || 0, color: '#dc2626' }
+    ]));
+
+    const perCard = create('article', '', 'surface card-pad');
+    perCard.append(create('h2', 'Active User Personas'));
+    const pb = data.personaBreakdown || {};
+    perCard.append(makeBarList(
+      PERSONA_CATALOG.map(p => ({ label: p.title, count: pb[p.id] || 0, color: '#0f766e' }))
+    ));
+    grid2.append(chCard, perCard);
+
+    const searchGrid = create('div', '', 'admin-grid-2');
+    const indCard = create('article', '', 'surface card-pad');
+    indCard.append(create('h2', 'Top Searched Industries & Niches'));
+    indCard.append((data.topIndustries || []).length
+      ? makeBarList(data.topIndustries.map(x => ({ label: x.name, count: x.count, suffix: ' searches' })))
+      : create('p', 'Searches run from this point onward will populate top industries.', 'small'));
+
+    const cityCard = create('article', '', 'surface card-pad');
+    cityCard.append(create('h2', 'Top Searched Cities & Markets'));
+    cityCard.append((data.topCities || []).length
+      ? makeBarList(data.topCities.map(x => ({ label: x.name, count: x.count, suffix: ' searches' })), '#2563eb')
+      : create('p', 'Searches run from this point onward will populate top target cities.', 'small'));
+    searchGrid.append(indCard, cityCard);
+
+    const quotaCard = create('article', '', 'surface card-pad');
+    quotaCard.append(
+      create('h2', 'Power Users Near Daily Quota (>=80% — Prime Upsell Leads)'),
+      create('p', 'Users actively hitting their plan limits today.', 'small')
+    );
+    if ((data.quotaHitUsers || []).length) {
+      const qList = create('div', '', 'admin-event-list');
+      for (const qu of data.quotaHitUsers) {
+        const r = create('div', '', 'admin-event-item');
+        r.append(
+          create('span', `${qu.name || qu.email} (${qu.tierLabel}) — ${qu.maxQuotaPct}% of daily limit used`),
+          button('Upgrade / Manage', () => openAdminUserInspector(qu), 'btn-soft')
+        );
+        qList.append(r);
+      }
+      quotaCard.append(qList);
+    } else {
+      quotaCard.append(create('p', 'No users are currently above 80% of their daily quota.', 'small'));
+    }
+
+    body.append(grid2, searchGrid, quotaCard);
+  } else if (adminTab === 'monetization') {
+    const revKpis = create('div', '', 'admin-kpi-grid');
+    revKpis.append(
+      makeKpi('crown', `$${(k.netPaidMrr || 0).toLocaleString()}`, 'Net Paid MRR', `Gross Plan Value: $${(k.grossPlanValueMrr || 0).toLocaleString()}/mo`, 'amber'),
+      makeKpi('trendingUp', `$${(k.projectedArr || 0).toLocaleString()}`, 'Projected ARR', `${k.paidSubscribers || 0} active paying accounts`),
+      makeKpi('barChart', `$${k.arpu || 0}`, 'ARPU (Avg Rev / Paid User)', `${k.conversionRate || 0}% free-to-paid conversion`),
+      makeKpi('database', `$${(k.totalRevenueRecorded || 0).toLocaleString()}`, 'Recorded Ledger Revenue', `${(data.transactions || []).length} payment events`)
+    );
+
+    const checkoutCard = create('article', '', 'surface card-pad stack');
+    checkoutCard.append(
+      create('h2', 'Self-Serve Payment Checkout Links & Webhook (Paystack / Stripe / Flutterwave)'),
+      create('p', 'Paste your payment link for each tier. Clicking "Upgrade" anywhere in Job Hunta will open your live checkout with the user’s email pre-filled.', 'small')
+    );
+    const webhookUrl = `${location.origin}/api/webhooks/billing`;
+    const whRow = create('div', '', 'promo-redeem-bar');
+    whRow.append(
+      create('div', `Billing Webhook Endpoint (Stripe & Paystack auto-upgrade): ${webhookUrl}`),
+      btnWithIcon('copy', 'Copy Webhook URL', async () => {
+        try { await navigator.clipboard.writeText(webhookUrl); report('Copied Billing Webhook URL.'); } catch {}
+      }, 'btn-soft', 14)
+    );
+    const urlGrid = create('div', '', 'grid-2');
+    const urlInputs = {};
+    for (const [tKey, lbl] of [['silver', 'Silver ($29/mo) Checkout URL'], ['gold', 'Gold ($79/mo) Checkout URL'], ['premium', 'Premium ($199/mo) Checkout URL'], ['diamond', 'Diamond ($499/mo) Checkout URL']]) {
+      const f = field(lbl, `url_${tKey}`, data.checkoutUrls?.[tKey] || '', { placeholder: 'https://paystack.com/pay/... or https://buy.stripe.com/...' });
+      urlInputs[tKey] = f.lastChild;
+      urlGrid.append(f);
+    }
+    const saveUrlsBtn = btnWithIcon('check', 'Save Checkout Links', async () => {
+      try {
+        const res = await api('/api/admin/billing/config', {
+          checkoutUrls: {
+            silver: urlInputs.silver.value.trim(),
+            gold: urlInputs.gold.value.trim(),
+            premium: urlInputs.premium.value.trim(),
+            diamond: urlInputs.diamond.value.trim()
+          }
+        });
+        if (account.billing) account.billing.checkoutUrls = res.checkoutUrls;
+        report('Saved live checkout links!');
+        renderAdminPanel(true);
+      } catch (err) { report(err.message, true); }
+    });
+    checkoutCard.append(whRow, urlGrid, create('div', '', 'actions'));
+    checkoutCard.lastChild.append(saveUrlsBtn);
+
+    const midMonGrid = create('div', '', 'admin-grid-2');
+
+    // Promo Codes Manager
+    const promoCard = create('article', '', 'surface card-pad stack');
+    promoCard.append(create('h2', 'Promo & VIP Trial Codes'), create('p', 'Create redeemable codes users can enter on their Profile page.', 'small'));
+    const pForm = create('form', '', 'grid-2');
+    const pCode = field('Code', 'code', '', { placeholder: 'e.g. GOLD14' });
+    const pTierWrap = create('label', 'Target Plan');
+    const pTierSel = create('select');
+    for (const kKey of ['silver', 'gold', 'premium', 'diamond']) pTierSel.append(new Option(kKey.toUpperCase(), kKey));
+    pTierSel.value = 'gold';
+    pTierWrap.append(pTierSel);
+    const pDays = field('Trial Days (0 = Permanent)', 'days', 7, { type: 'number', min: 0, max: 365 });
+    const pMax = field('Max Redemptions', 'maxUses', 50, { type: 'number', min: 1, max: 10000 });
+    const addPromoBtn = btnWithIcon('plus', 'Create Promo Code', null, 'btn-soft');
+    addPromoBtn.type = 'submit';
+    pForm.append(pCode, pTierWrap, pDays, pMax, addPromoBtn);
+    pForm.onsubmit = async e => {
+      e.preventDefault();
+      try {
+        await api('/api/admin/billing/config', {
+          addPromo: {
+            code: pCode.lastChild.value.trim(),
+            tier: pTierSel.value,
+            durationDays: Number(pDays.lastChild.value) || 0,
+            maxUses: Number(pMax.lastChild.value) || 50
+          }
+        });
+        report('Created promo code!');
+        renderAdminPanel(true);
+      } catch (err) { report(err.message, true); }
+    };
+    const pList = create('div', '', 'admin-event-list');
+    for (const pr of data.promoCodes || []) {
+      const item = create('div', '', 'admin-event-item');
+      item.append(
+        create('span', `${pr.code} → ${pr.tier.toUpperCase()} (${pr.durationDays ? pr.durationDays + 'd trial' : 'Permanent'}) · ${pr.usesCount || 0}/${pr.maxUses} used`),
+        button('Delete', async () => {
+          await api('/api/admin/billing/config', { deletePromoCode: pr.code });
+          renderAdminPanel(true);
+        }, 'danger')
+      );
+      pList.append(item);
+    }
+    promoCard.append(pForm, pList);
+
+    // Manual Payment / Invoice Recorder
+    const txFormCard = create('article', '', 'surface card-pad stack');
+    txFormCard.append(create('h2', 'Record Manual Payment / Refund'), create('p', 'Log bank transfer, Paystack, or Stripe payments and auto-upgrade the user.', 'small'));
+    const txForm = create('form', '', 'grid-2');
+    const txEmail = field('Customer Email', 'email', '', { placeholder: 'client@company.com' });
+    const txTierWrap = create('label', 'Plan');
+    const txTierSel = create('select');
+    for (const [kKey, usd] of [['silver', 29], ['gold', 79], ['premium', 199], ['diamond', 499]]) txTierSel.append(new Option(`${kKey.toUpperCase()} ($${usd})`, kKey));
+    txTierSel.value = 'gold';
+    txTierWrap.append(txTierSel);
+    const txAmt = field('Amount USD ($)', 'amountUsd', 79, { type: 'number', min: 0 });
+    txTierSel.onchange = () => {
+      const mapUsd = { silver: 29, gold: 79, premium: 199, diamond: 499 };
+      txAmt.lastChild.value = mapUsd[txTierSel.value] || 79;
+    };
+    const txKindWrap = create('label', 'Transaction Type');
+    const txKindSel = create('select');
+    txKindSel.append(new Option('Payment (Auto-Upgrade)', 'payment'), new Option('Refund', 'refund'));
+    txKindWrap.append(txKindSel);
+    const recBtn = btnWithIcon('check', 'Record & Apply', null);
+    recBtn.type = 'submit';
+    txForm.append(txEmail, txTierWrap, txAmt, txKindWrap, recBtn);
+    txForm.onsubmit = async e => {
+      e.preventDefault();
+      try {
+        await api('/api/admin/billing/transaction', {
+          email: txEmail.lastChild.value.trim(),
+          tier: txTierSel.value,
+          amountUsd: Number(txAmt.lastChild.value) || 0,
+          kind: txKindSel.value,
+          provider: 'Admin Manual'
+        });
+        report('Recorded transaction & updated subscriber tier!');
+        renderAdminPanel(true);
+      } catch (err) { report(err.message, true); }
+    };
+    const txList = create('div', '', 'admin-event-list');
+    for (const tx of (data.transactions || []).slice(0, 12)) {
+      const row = create('div', '', 'admin-event-item');
+      row.append(
+        create('span', `${tx.kind === 'refund' ? 'REFUND' : 'PAID'} $${tx.amountUsd} · ${tx.email} (${tx.tier.toUpperCase()} · ${tx.provider})`),
+        create('small', new Date(tx.time).toLocaleDateString())
+      );
+      txList.append(row);
+    }
+    txFormCard.append(txForm, txList);
+
+    midMonGrid.append(promoCard, txFormCard);
+
+    // Hot Upgrade Intent Queue
+    const intentCard = create('article', '', 'surface card-pad stack');
+    intentCard.append(create('h2', 'Hot Upgrade Intent Queue (Paywall Clicks)'), create('p', 'Users who clicked locked features or upgrade modals recently.', 'small'));
+    const intList = create('div', '', 'admin-event-list');
+    if ((data.upgradeIntents || []).length) {
+      for (const it of data.upgradeIntents) {
+        const r = create('div', '', 'admin-event-item');
+        r.append(
+          create('span', `${it.name || it.email} (${it.currentTier.toUpperCase()} → ${it.targetTier.toUpperCase()}) clicked "${it.featureTitle}"`),
+          create('small', new Date(it.time).toLocaleString())
+        );
+        intList.append(r);
+      }
+    } else {
+      intList.append(create('p', 'Upgrade modal clicks from users will appear here automatically.', 'small'));
+    }
+    intentCard.append(intList);
+
+    // Live Tier Pricing & Daily Allowance Editor
+    const priceEditorCard = create('article', '', 'surface card-pad stack');
+    priceEditorCard.append(create('h2', 'Live Tier Pricing & Daily Quota Configurator'), create('p', 'Adjust monthly USD prices and daily allowances across plans without redeploying code.', 'small'));
+    const tierEditWrap = create('div', '', 'data-table-wrap');
+    const tTable = create('table', '', 'data-table');
+    tTable.innerHTML = '<thead><tr><th>Plan</th><th>Monthly USD ($)</th><th>Searches / day</th><th>Leads / day</th><th>Emails / day</th><th>Max Pages</th></tr></thead>';
+    const tBody = create('tbody');
+    const ovInputs = {};
+    for (const t of data.tierCatalog || []) {
+      const tr = create('tr');
+      const mkIn = (val, placeholder = 'Unlimited') => {
+        const inp = create('input');
+        inp.type = 'number';
+        inp.value = val === null || val === undefined ? '' : val;
+        inp.placeholder = placeholder;
+        inp.style.width = '95px';
+        return inp;
+      };
+      ovInputs[t.key] = {
+        monthlyUsd: mkIn(t.monthlyUsd ?? 0, '0'),
+        dailySearchLimit: mkIn(t.dailySearchLimit),
+        dailyResultLimit: mkIn(t.dailyResultLimit),
+        dailyEmailLimit: mkIn(t.dailyEmailLimit),
+        maxSearchPages: mkIn(t.maxSearchPages, '8')
+      };
+      const td0 = create('td'); td0.append(create('strong', t.displayLabel));
+      const td1 = create('td'); td1.append(ovInputs[t.key].monthlyUsd);
+      const td2 = create('td'); td2.append(ovInputs[t.key].dailySearchLimit);
+      const td3 = create('td'); td3.append(ovInputs[t.key].dailyResultLimit);
+      const td4 = create('td'); td4.append(ovInputs[t.key].dailyEmailLimit);
+      const td5 = create('td'); td5.append(ovInputs[t.key].maxSearchPages);
+      tr.append(td0, td1, td2, td3, td4, td5);
+      tBody.append(tr);
+    }
+    tTable.append(tBody);
+    tierEditWrap.append(tTable);
+    const saveTiersBtn = btnWithIcon('check', 'Save Live Tier Limits & Pricing', async () => {
+      const tierOverrides = {};
+      for (const [key, fieldsObj] of Object.entries(ovInputs)) {
+        const usd = Number(fieldsObj.monthlyUsd.value) || 0;
+        tierOverrides[key] = {
+          monthlyUsd: usd,
+          price: key === 'basic' && usd === 0 ? 'Free' : `$${usd}/mo`,
+          dailySearchLimit: fieldsObj.dailySearchLimit.value === '' ? null : Number(fieldsObj.dailySearchLimit.value),
+          dailyResultLimit: fieldsObj.dailyResultLimit.value === '' ? null : Number(fieldsObj.dailyResultLimit.value),
+          dailyEmailLimit: fieldsObj.dailyEmailLimit.value === '' ? null : Number(fieldsObj.dailyEmailLimit.value),
+          maxSearchPages: Number(fieldsObj.maxSearchPages.value) || 8
+        };
+      }
+      try {
+        const res = await api('/api/admin/billing/config', { tierOverrides });
+        if (res.tierCatalog) account.tiers = res.tierCatalog;
+        report('Updated live tier pricing and daily quotas across Job Hunta!');
+        renderAdminPanel(true);
+      } catch (err) { report(err.message, true); }
+    });
+    const saveTiersRow = create('div', '', 'actions');
+    saveTiersRow.append(saveTiersBtn);
+    priceEditorCard.append(tierEditWrap, saveTiersRow);
+
+    body.append(revKpis, checkoutCard, midMonGrid, intentCard, priceEditorCard);
+  } else if (adminTab === 'system') {
+    const h = data.systemHealth || {};
+    const sysKpis = create('div', '', 'admin-kpi-grid');
+    sysKpis.append(
+      makeKpi('database', h.supabaseConfigured ? (h.supabaseConnected ? `${h.supabaseLatencyMs}ms` : 'Offline') : 'Local JSON', 'Supabase Postgres', `${h.dbCounts?.users || 0} users · ${h.dbCounts?.leads || 0} leads`),
+      makeKpi('mail', h.gmailOAuthConfigured ? 'Ready' : 'Missing', 'Google Gmail OAuth', `${k.gmailConnectedUsers || 0} connected mailboxes`),
+      makeKpi('sparkles', h.geminiConfigured ? 'Active' : 'Smart Fallback', 'Gemini 2.5 Flash AI', h.serperConfigured || h.tavilyConfigured ? 'Serper/Tavily Enabled' : 'Built-in Multi-Engine'),
+      makeKpi('zap', `${h.memoryRssMb || 0} MB`, 'Server Memory (RSS)', `Uptime: ${Math.floor((h.uptimeSeconds || 0) / 60)}m · Heap ${h.heapUsedMb || 0} MB`)
+    );
+
+    const sysGrid = create('div', '', 'admin-grid-2');
+
+    // Global In-App Announcement Publisher
+    const annCard = create('article', '', 'surface card-pad stack');
+    annCard.append(create('h2', 'Global User Announcement Broadcast'), create('p', 'Push a promo or announcement directly to users’ notification bells.', 'small'));
+    const annForm = create('form', '', 'stack');
+    const annTitle = field('Announcement Title', 'title', '', { placeholder: 'e.g. Weekend Promo: Use LAUNCH7 for 7 Days Free Gold!' });
+    const annMsg = field('Message', 'message', '', { placeholder: 'Short message shown inside the Notification Bell…' });
+    const annTargetWrap = create('label', 'Target Audience');
+    const annTarget = create('select');
+    annTarget.append(new Option('All Users', 'all'), new Option('Basic (Free) Users Only', 'basic'), new Option('Silver Users Only', 'silver'), new Option('Gold Users Only', 'gold'));
+    annTargetWrap.append(annTarget);
+    const pubBtn = btnWithIcon('megaphone', 'Publish Broadcast', null);
+    pubBtn.type = 'submit';
+    annForm.append(annTitle, annMsg, annTargetWrap, pubBtn);
+    annForm.onsubmit = async e => {
+      e.preventDefault();
+      try {
+        await api('/api/admin/broadcast', {
+          addAnnouncement: {
+            title: annTitle.lastChild.value.trim(),
+            message: annMsg.lastChild.value.trim(),
+            targetTier: annTarget.value,
+            ctaHash: '#profile'
+          }
+        });
+        report('Published announcement to users!');
+        renderAdminPanel(true);
+      } catch (err) { report(err.message, true); }
+    };
+    const annList = create('div', '', 'admin-event-list');
+    for (const a of data.announcements || []) {
+      const r = create('div', '', 'admin-event-item');
+      r.append(
+        create('span', `[${a.targetTier.toUpperCase()}] ${a.title} — ${a.message}`),
+        button('Remove', async () => {
+          await api('/api/admin/broadcast', { deleteAnnouncementId: a.id });
+          renderAdminPanel(true);
+        }, 'danger')
+      );
+      annList.append(r);
+    }
+    annCard.append(annForm, annList);
+
+    // Co-Admins Manager
+    const coCard = create('article', '', 'surface card-pad stack');
+    coCard.append(create('h2', 'Admin Access & Co-Admins'), create('p', 'Primary Super Admin: admin@jobhunta.com. Add or revoke additional admin emails below.', 'small'));
+    const coField = field('Co-Admin Emails (comma-separated)', 'coAdmins', (data.coAdmins || []).join(', '), { placeholder: 'teammate@jobhunta.com' });
+    const saveCoBtn = btnWithIcon('shieldCheck', 'Update Co-Admins', async () => {
+      const list = coField.lastChild.value.split(',').map(s => s.trim()).filter(Boolean);
+      try {
+        await api('/api/admin/broadcast', { coAdmins: list });
+        report('Updated Co-Admin access list.');
+        renderAdminPanel(true);
+      } catch (err) { report(err.message, true); }
+    }, 'btn-soft');
+    coCard.append(coField, create('div', '', 'actions'));
+    coCard.lastChild.append(saveCoBtn);
+
+    sysGrid.append(annCard, coCard);
+
+    // Audit Log
+    const logCard = create('article', '', 'surface card-pad stack');
+    logCard.append(create('h2', 'Immutable Admin Security Audit Log'));
+    const logList = create('div', '', 'admin-event-list');
+    if ((data.auditLog || []).length) {
+      for (const entry of data.auditLog) {
+        const r = create('div', '', 'admin-event-item');
+        r.append(
+          create('span', `[${entry.action}] ${entry.actorEmail}${entry.targetEmail ? ' → ' + entry.targetEmail : ''}: ${entry.details}`),
+          create('small', new Date(entry.time).toLocaleString())
+        );
+        logList.append(r);
+      }
+    } else {
+      logList.append(create('p', 'All administrative changes (plan edits, quota resets, payments, config updates) are logged here.', 'small'));
+    }
+    logCard.append(logList);
+
+    body.append(sysKpis, sysGrid, logCard);
+  }
+
+  container.replaceChildren(hero, tabsBar, body);
+}
+
 function navigate() {
   setMobileNav(false);
-  const validPages = new Set(['dashboard', 'discover', 'leads', 'business', 'inbox', 'broadcast', 'profile', 'settings']);
+  const validPages = new Set(['dashboard', 'discover', 'leads', 'business', 'inbox', 'broadcast', 'profile', 'settings', 'admin']);
   const requested = location.hash.slice(1);
-  const page = validPages.has(requested) ? requested : 'dashboard';
+  let page = validPages.has(requested) ? requested : 'dashboard';
+  if (page === 'admin' && !currentUser?.isAdmin) page = 'dashboard';
   for (const section of document.querySelectorAll('.page')) section.hidden = section.id !== page;
   for (const link of document.querySelectorAll('aside nav a, .mobile-bottom-nav a')) {
     if (link.hash === '#' + page) link.setAttribute('aria-current', 'page');
@@ -6547,6 +7493,7 @@ function navigate() {
   if (page === 'broadcast') renderBroadcast();
   if (page === 'profile') renderProfile();
   if (page === 'settings') renderSettings();
+  if (page === 'admin') renderAdminPanel(true);
 }
 
 $('#menu-toggle').onclick = () => setMobileNav(!document.body.classList.contains('nav-open'));
@@ -6627,9 +7574,12 @@ function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMai
   document.body.classList.remove('auth-checking', 'auth-locked');
   try {
     localStorage.setItem('jobhunta.activeUser', JSON.stringify({
-      id: user.id, name: user.name, email: user.email, tier: user.tier, usage: user.usage, createdAt: user.createdAt || null
+      id: user.id, name: user.name, email: user.email, tier: user.tier, isAdmin: Boolean(user.isAdmin), usage: user.usage, createdAt: user.createdAt || null
     }));
   } catch {}
+
+  const adminNav = $('#nav-admin-link');
+  if (adminNav) adminNav.hidden = !user.isAdmin;
 
   const sidebarUser = $('#sidebar-user');
   if (sidebarUser) sidebarUser.replaceChildren(create('i'), document.createTextNode(' ' + (user.name || user.email)));
@@ -6662,13 +7612,32 @@ function applyUserSession(user, serverLeads = [], serverSettings = {}, serverMai
     renderProfile();
     renderSettings();
   }
+  if (!isHydration && Array.isArray(account?.announcements)) {
+    for (const ann of account.announcements) {
+      if (ann?.id && !notificationEvents.some(n => n.id === `ann-${ann.id}`)) {
+        notificationEvents.unshift({
+          id: `ann-${ann.id}`,
+          icon: 'megaphone',
+          tone: 'amber',
+          title: ann.title,
+          sub: ann.message,
+          targetHash: ann.ctaHash || '#profile',
+          unread: true,
+          time: Date.parse(ann.createdAt) || Date.now()
+        });
+      }
+    }
+    saveUserNotifications();
+    updateHeaderBadges();
+  }
   renderAccount();
   navigate();
   if (!isHydration) refresh();
 }
 
 function showAuthScreen() {
-  currentUser = null; leads = []; results = []; resultsPage = 1; activeBusinessId = null; selectedInboxKey = null; messages.clear();
+  currentUser = null; adminOverviewData = null; leads = []; results = []; resultsPage = 1; activeBusinessId = null; selectedInboxKey = null; messages.clear();
+  if ($('#nav-admin-link')) $('#nav-admin-link').hidden = true;
   renderEmptyDiscoverState();
   try { localStorage.removeItem('jobhunta.activeUser'); } catch {}
   setAuthMode('login');
@@ -6688,6 +7657,9 @@ $('#auth-form').onsubmit = async event => {
     const payload = Object.fromEntries(new FormData(form));
     const data = await api(authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login', payload);
     form.reset();
+    if (String(data.user?.email || '').toLowerCase() === 'admin@jobhunta.com') {
+      location.hash = '#admin';
+    }
     applyUserSession(data.user, data.leads, data.settings, data.mailbox);
   } catch (error) {
     errEl.textContent = error.message; errEl.hidden = false;
