@@ -278,6 +278,12 @@ form.stack,.stack{display:grid;gap:14px}
 .composer-proof-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12.5px}
 .composer-proof-btns{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .composer-proof-btns button{font-size:12px;padding:6px 10px;border-radius:9px}
+.channel-origin-banner{background:linear-gradient(135deg,#ecfdf5 0%,#ffffff 100%);border:1.5px solid #a7f3d0;border-radius:14px;padding:13px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.channel-origin-banner.warn{background:linear-gradient(135deg,#fffbeb 0%,#ffffff 100%);border-color:#fde68a}
+.channel-origin-banner.blue{background:linear-gradient(135deg,#eff6ff 0%,#ffffff 100%);border-color:#bfdbfe}
+.channel-origin-main{display:grid;gap:3px;min-width:0;flex:1}
+.channel-origin-main strong{font-size:13.5px;color:var(--ink);display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.channel-origin-main small{font-size:12.5px;color:var(--muted);line-height:1.45}
 .chip-pill{background:rgba(255,255,255,.11);color:white;border:1px solid rgba(255,255,255,.16);padding:5px 13px;border-radius:20px;font-size:12.5px;font-weight:500}
 .chip-pill:hover{background:rgba(255,255,255,.22)}
 .search{display:grid;grid-template-columns:1fr 1fr auto;align-items:end;gap:14px;padding:16px 20px;margin-bottom:16px}

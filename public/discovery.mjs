@@ -17,7 +17,10 @@ export const platformDomains = {
   Substack: 'substack.com',
   Kit: 'kit.com',
   MailerLite: 'mailerlite.io',
-  Buttondown: 'buttondown.com'
+  Buttondown: 'buttondown.com',
+  'Etsy Shop': 'etsy.com',
+  'Faire Brand': 'faire.com',
+  'eBay Store': 'ebay.com'
 };
 
 export const PLATFORM_DISCOVERY_GROUPS = [
@@ -46,29 +49,127 @@ export const PLATFORM_DISCOVERY_GROUPS = [
       { key: 'Kit', label: 'Kit (ConvertKit) Creators' },
       { key: 'MailerLite', label: 'MailerLite Pages & Lists' }
     ]
+  },
+  {
+    group: 'Marketplace Sellers (Need Own DTC Store)',
+    items: [
+      { key: 'Etsy Shop', label: 'Etsy Shops (site:etsy.com/shop)' },
+      { key: 'Faire Brand', label: 'Faire Wholesale Brands (site:faire.com/brand)' },
+      { key: 'eBay Store', label: 'eBay Stores (site:ebay.com/str)' }
+    ]
   }
 ];
+
+export const SOCIAL_DIRECTORY_PACKS = {
+  link_in_bio: {
+    key: 'link_in_bio',
+    label: 'Link-in-Bio Only (Linktree, Beacons, Stan, Carrd)',
+    badge: 'Link-in-Bio Storefront',
+    channel: 'link_in_bio',
+    sites: ['linktr.ee', 'beacons.ai', 'stan.store', 'carrd.co', 'bio.site']
+  },
+  booking_beauty: {
+    key: 'booking_beauty',
+    label: 'Booking Directories (Booksy, Fresha, Vagaro, Mindbody)',
+    badge: 'Rented Booking Directory',
+    channel: 'directory',
+    sites: ['booksy.com', 'fresha.com', 'vagaro.com', 'mindbodyonline.com']
+  },
+  home_b2b: {
+    key: 'home_b2b',
+    label: 'Service & Agency Directories (Houzz, Thumbtack, Clutch)',
+    badge: 'Directory Listing',
+    channel: 'directory',
+    sites: ['houzz.com/professionals', 'thumbtack.com', 'clutch.co/profile', 'designrush.com/agency']
+  },
+  social_pages: {
+    key: 'social_pages',
+    label: 'Social-First Businesses (Instagram, Facebook & TikTok)',
+    badge: 'Social-Only Brand',
+    channel: 'social_only',
+    sites: ['instagram.com', 'facebook.com', 'tiktok.com']
+  }
+};
+
+export const LAUNCH_DOMAIN_MODES = {
+  both: {
+    key: 'both',
+    label: 'New Domains (crt.sh) + Product Launches (Combined)'
+  },
+  crt_sh: {
+    key: 'crt_sh',
+    label: 'Newly Registered Domains Only (crt.sh Live SSL Feed)'
+  },
+  product_launch: {
+    key: 'product_launch',
+    label: 'Product Hunt, Kickstarter & Indie Hackers Launches'
+  }
+};
 
 export const REDDIT_SUBREDDIT_PACKS = {
   hiring: {
     key: 'hiring',
-    label: 'Direct Hiring & Gig Boards (r/forhire, r/DesignJobs…)',
+    label: 'Reddit Direct Hiring Boards (r/forhire, r/DesignJobs…)',
+    kind: 'reddit',
     subreddits: ['forhire', 'DesignJobs', 'hireawriter', 'jobbit', 'shopify'],
     defaultIntent: 'hiring'
   },
+  job_boards: {
+    key: 'job_boards',
+    label: 'Company Job Boards Hiring Now (Greenhouse, Lever, Workable…)',
+    kind: 'job_boards',
+    sites: ['boards.greenhouse.io', 'jobs.lever.co', 'apply.workable.com', 'jobs.ashbyhq.com', 'weworkremotely.com/remote-jobs', 'wellfound.com/company']
+  },
+  ad_funnels: {
+    key: 'ad_funnels',
+    label: 'Active Paid-Ad & Promo Landing Pages (/lp/, /offer…)',
+    kind: 'ad_funnels'
+  },
   smallbiz: {
     key: 'smallbiz',
-    label: 'Business Owners Needing Help (r/smallbusiness, r/ecommerce…)',
+    label: 'Reddit Business Owners Needing Help (r/smallbusiness…)',
+    kind: 'reddit',
     subreddits: ['smallbusiness', 'entrepreneur', 'ecommerce', 'shopify'],
     defaultIntent: 'all_buyers'
   },
   marketing_seo: {
     key: 'marketing_seo',
-    label: 'SEO, Website & Ads Pain Points (r/SEO, r/PPC, r/web_design…)',
+    label: 'Reddit SEO, Website & Ads Pain Points (r/SEO, r/PPC…)',
+    kind: 'reddit',
     subreddits: ['SEO', 'PPC', 'web_design', 'digital_marketing', 'socialmedia'],
     defaultIntent: 'all_buyers'
   }
 };
+
+const RENTED_OR_INTERMEDIARY_HOSTS = [
+  'linktr.ee', 'beacons.ai', 'stan.store', 'carrd.co', 'bio.site', 'lnk.bio', 'taplink.cc',
+  'booksy.com', 'fresha.com', 'vagaro.com', 'mindbodyonline.com', 'styleseat.com',
+  'houzz.com', 'thumbtack.com', 'clutch.co', 'designrush.com', 'etsy.com', 'faire.com', 'ebay.com',
+  'boards.greenhouse.io', 'greenhouse.io', 'jobs.lever.co', 'lever.co', 'apply.workable.com', 'workable.com',
+  'jobs.ashbyhq.com', 'ashbyhq.com', 'weworkremotely.com', 'wellfound.com',
+  'producthunt.com', 'kickstarter.com', 'indiegogo.com', 'indiehackers.com'
+];
+
+export function classifyRentedOrIntermediaryUrl(urlStr = '') {
+  try {
+    const u = new URL(urlStr);
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
+    for (const h of RENTED_OR_INTERMEDIARY_HOSTS) {
+      if (host === h || host.endsWith('.' + h)) {
+        const isJobBoard = /(greenhouse|lever|workable|ashbyhq|weworkremotely|wellfound)/i.test(h);
+        const isLaunch = /(producthunt|kickstarter|indiegogo|indiehackers)/i.test(h);
+        const isLinkBio = /(linktr\.ee|beacons\.ai|stan\.store|carrd\.co|bio\.site|lnk\.bio|taplink)/i.test(h);
+        const isMarketplace = /(etsy\.com|faire\.com|ebay\.com)/i.test(h);
+        return {
+          isIntermediary: true,
+          host: h,
+          kind: isJobBoard ? 'job_board' : isLaunch ? 'launch' : isLinkBio ? 'link_in_bio' : isMarketplace ? 'marketplace' : 'directory'
+        };
+      }
+    }
+  } catch {}
+  return { isIntermediary: false, host: '', kind: '' };
+}
 
 const PLATFORM_FOOTPRINT_CLUES = {
   Shopify: ['"powered by Shopify"', '"add to cart"'],
@@ -86,7 +187,10 @@ const PLATFORM_FOOTPRINT_CLUES = {
   Beehiiv: ['site:beehiiv.com', '"beehiiv" newsletter'],
   Substack: ['site:substack.com', '"substack" newsletter'],
   Kit: ['site:ck.page', 'site:kit.com', '"convertkit" newsletter'],
-  MailerLite: ['site:mailerlite.io', '"mailerlite" newsletter']
+  MailerLite: ['site:mailerlite.io', '"mailerlite" newsletter'],
+  'Etsy Shop': ['site:etsy.com/shop "sales"'],
+  'Faire Brand': ['site:faire.com/brand'],
+  'eBay Store': ['site:ebay.com/str']
 };
 
 export function searchList(value, limit) {
@@ -115,6 +219,18 @@ export function googleQueries(term, location, platform, mode) {
 }
 
 export function platformFootprintQueries(term, location = '', platform = 'Shopify') {
+  if (platform === 'Etsy Shop') {
+    const loc = location && !/^(online|global|worldwide|remote|any)$/i.test(location) ? ` "${location}"` : '';
+    return [`site:etsy.com/shop "${term}"${loc}`, `site:etsy.com/shop ${term} handmade${loc}`];
+  }
+  if (platform === 'Faire Brand') {
+    const loc = location && !/^(online|global|worldwide|remote|any)$/i.test(location) ? ` "${location}"` : '';
+    return [`site:faire.com/brand "${term}"${loc}`, `site:faire.com "${term}" wholesale${loc}`];
+  }
+  if (platform === 'eBay Store') {
+    const loc = location && !/^(online|global|worldwide|remote|any)$/i.test(location) ? ` "${location}"` : '';
+    return [`site:ebay.com/str "${term}"${loc}`];
+  }
   const quote = value => '"' + String(value || '').replaceAll('"', '').trim() + '"';
   const cleanLoc = String(location || '').trim();
   const useLoc = cleanLoc && !/^(online|global|worldwide|remote|any)$/i.test(cleanLoc);
@@ -159,5 +275,11 @@ export function websiteIdentity(url) {
   if (host === 'mailchi.mp' && segments.length) return host + '/' + segments.slice(0, 2).join('/');
   if (host === 'substack.com' && segments[0]?.startsWith('@')) return host + '/' + segments[0];
   if (host === 'reddit.com' && segments.length >= 4) return host + '/' + segments.slice(0, 4).join('/');
+  if (['linktr.ee', 'beacons.ai', 'stan.store', 'bio.site', 'boards.greenhouse.io', 'jobs.lever.co', 'apply.workable.com', 'jobs.ashbyhq.com'].includes(host) && segments.length) {
+    return host + '/' + segments[0];
+  }
+  if (['etsy.com', 'faire.com', 'ebay.com', 'booksy.com', 'fresha.com', 'vagaro.com', 'clutch.co', 'houzz.com', 'producthunt.com', 'kickstarter.com'].includes(host) && segments.length >= 2) {
+    return host + '/' + segments.slice(0, 2).join('/');
+  }
   return host;
 }

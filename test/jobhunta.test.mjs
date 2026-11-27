@@ -1,6 +1,16 @@
 import { test } from 'node:test';
 import { assessLead, industryAngle, normalizeLeadProfiles } from '../public/qualification.mjs';
-import { googleQueries, platformFootprintQueries, businessKeys, PLATFORM_DISCOVERY_GROUPS, REDDIT_SUBREDDIT_PACKS } from '../public/discovery.mjs';
+import {
+  googleQueries,
+  platformFootprintQueries,
+  businessKeys,
+  websiteIdentity,
+  PLATFORM_DISCOVERY_GROUPS,
+  SOCIAL_DIRECTORY_PACKS,
+  LAUNCH_DOMAIN_MODES,
+  REDDIT_SUBREDDIT_PACKS,
+  classifyRentedOrIntermediaryUrl
+} from '../public/discovery.mjs';
 import assert from 'node:assert/strict';
 import { readBusinessCsv, writeBusinessCsv } from '../public/csv.mjs';
 import {
@@ -25,6 +35,7 @@ import {
   parseBingWebSearchHtml,
   parseBingRssXml,
   parseDuckDuckGoHtml,
+  parseCrtShCertificates,
   classifyRedditPostIntent,
   decodeCloudflareEmail,
   rankDiscoveredEmails,
@@ -703,4 +714,99 @@ test('Progressive search page depth ladder enforces Basic=8, Silver=11, Gold=15,
   assert.equal(diamondFull.at(0).page, 1);
   assert.equal(diamondFull.at(-1).page, 25);
   assert.equal(diamondFull.at(-1).first, 241);
+});
+
+test('Omnichannel discovery packs, intermediary URL classifier, crt.sh parser, and channel-aware Dossier pitches work end-to-end', () => {
+  // 1. Discovery packs & marketplace footprint queries
+  assert.ok(SOCIAL_DIRECTORY_PACKS.link_in_bio.sites.includes('linktr.ee'));
+  assert.ok(SOCIAL_DIRECTORY_PACKS.booking_beauty.sites.includes('booksy.com'));
+  assert.ok(LAUNCH_DOMAIN_MODES.both && LAUNCH_DOMAIN_MODES.crt_sh && LAUNCH_DOMAIN_MODES.product_launch);
+  assert.equal(REDDIT_SUBREDDIT_PACKS.job_boards.kind, 'job_boards');
+  assert.equal(REDDIT_SUBREDDIT_PACKS.ad_funnels.kind, 'ad_funnels');
+
+  const etsyQueries = platformFootprintQueries('candles', 'Austin', 'Etsy Shop');
+  assert.ok(etsyQueries[0].startsWith('site:etsy.com/shop'));
+  assert.ok(etsyQueries[0].includes('"Austin"'));
+
+  // 2. Intermediary / rented platform URL classifier & multi-tenant identity preservation
+  assert.deepEqual(classifyRentedOrIntermediaryUrl('https://linktr.ee/glowstudio'), {
+    isIntermediary: true,
+    host: 'linktr.ee',
+    kind: 'link_in_bio'
+  });
+  assert.deepEqual(classifyRentedOrIntermediaryUrl('https://boards.greenhouse.io/acmecorp'), {
+    isIntermediary: true,
+    host: 'boards.greenhouse.io',
+    kind: 'job_board'
+  });
+  assert.deepEqual(classifyRentedOrIntermediaryUrl('https://www.etsy.com/shop/LuxeCandles'), {
+    isIntermediary: true,
+    host: 'etsy.com',
+    kind: 'marketplace'
+  });
+  assert.deepEqual(classifyRentedOrIntermediaryUrl('https://www.producthunt.com/posts/superflow'), {
+    isIntermediary: true,
+    host: 'producthunt.com',
+    kind: 'launch'
+  });
+  assert.equal(classifyRentedOrIntermediaryUrl('https://acmedental.com').isIntermediary, false);
+
+  assert.equal(websiteIdentity(new URL('https://linktr.ee/glowstudio')), 'linktr.ee/glowstudio');
+  assert.equal(websiteIdentity(new URL('https://boards.greenhouse.io/acmecorp/jobs/123')), 'boards.greenhouse.io/acmecorp');
+  assert.equal(websiteIdentity(new URL('https://www.etsy.com/shop/LuxeCandles')), 'etsy.com/shop/LuxeCandles');
+
+  // 3. allowAllHosts preserves Linktree / directory URLs in Bing RSS & DuckDuckGo parsers
+  const linkBioRss = `<?xml version="1.0"?><rss><channel>
+    <item><title>Glow Brow Studio | Linktree</title><link>https://linktr.ee/glowbrowstudio</link><description>Book lashes &amp; brows in Miami.</description></item>
+  </channel></rss>`;
+  const parsedBio = parseBingRssXml(linkBioRss, 'Beauty Salon', 'Miami', 1, 'site:linktr.ee "Miami"', true);
+  assert.equal(parsedBio.length, 1);
+  assert.equal(parsedBio[0].website, 'https://linktr.ee/glowbrowstudio');
+
+  // 4. crt.sh Certificate Transparency parser cleans wildcards and filters infra/staging noise
+  const crtRows = [
+    { id: 901, name_value: '*.brightdentalclinic.com\nbrightdentalclinic.com', entry_timestamp: '2026-11-26T10:15:00' },
+    { id: 902, name_value: 'staging.brightdentalclinic.com', entry_timestamp: '2026-11-27T08:00:00' },
+    { id: 903, name_value: 'cdn.cloudflare.net', entry_timestamp: '2026-11-27T09:00:00' },
+    { id: 904, name_value: 'lumina-wellness.co', entry_timestamp: '2026-11-27T11:30:00' }
+  ];
+  const crtLeads = parseCrtShCertificates(crtRows, 'Dental', 'Austin');
+  assert.equal(crtLeads.length, 2);
+  assert.equal(crtLeads[0].website, 'https://lumina-wellness.co');
+  assert.equal(crtLeads[0].channelMeta.channel, 'new_domain');
+  assert.equal(crtLeads[0].channelMeta.certIssuedAt, '2026-11-27');
+  assert.equal(crtLeads[1].website, 'https://brightdentalclinic.com');
+
+  // 5. Channel-aware Business Dossier intelligence & gap pitches
+  const newDomainBrief = buildLeadIntelligence({
+    name: 'Lumina Wellness',
+    industry: 'Wellness',
+    city: 'Austin',
+    website: 'https://lumina-wellness.co',
+    channelMeta: { channel: 'new_domain', certIssuedAt: '2026-11-27', hasStandaloneSite: true }
+  }, { senderName: 'Ayoola' });
+  assert.match(newDomainBrief.overview, /newly registered business domain/i);
+  assert.ok(newDomainBrief.gaps.some(g => /Brand-New Domain Launch Readiness/i.test(g)));
+
+  const linkBioBrief = buildLeadIntelligence({
+    name: 'Glow Brow Studio',
+    industry: 'Beauty Salon',
+    city: 'Miami',
+    website: 'https://linktr.ee/glowbrowstudio',
+    signals: { rentedPlatformOnly: true },
+    channelMeta: { channel: 'link_in_bio', rentedPlatform: 'linktr.ee', hasStandaloneSite: false }
+  }, { senderName: 'Ayoola' });
+  assert.match(linkBioBrief.overview, /without a dedicated standalone website/i);
+  assert.ok(linkBioBrief.gaps.some(g => /Relying on Rented Platform/i.test(g)));
+
+  const jobBoardBrief = buildLeadIntelligence({
+    name: 'Acme Health',
+    industry: 'Healthcare SaaS',
+    city: 'Remote',
+    website: 'https://acmehealth.io',
+    discoveryProvider: 'Greenhouse',
+    channelMeta: { channel: 'job_board', openRole: 'Senior Shopify & Growth Marketer', hasStandaloneSite: true }
+  }, { senderName: 'Ayoola', persona: 'digital_marketer' });
+  assert.match(jobBoardBrief.overview, /actively hiring \(Senior Shopify & Growth Marketer\)/i);
+  assert.ok(jobBoardBrief.gaps.some(g => /Active Hiring Bottleneck/i.test(g)));
 });

@@ -2,7 +2,10 @@ import { normalizeLeadProfiles } from './public/qualification.mjs';
 import {
   platformDomains,
   PLATFORM_DISCOVERY_GROUPS,
+  SOCIAL_DIRECTORY_PACKS,
+  LAUNCH_DOMAIN_MODES,
   REDDIT_SUBREDDIT_PACKS,
+  classifyRentedOrIntermediaryUrl,
   searchList,
   googleQueries,
   platformFootprintQueries,
@@ -1487,7 +1490,7 @@ function isNoiseDirectoryDomain(hostname = '') {
   return false;
 }
 
-export function parseBingRssXml(xml = '', fallbackIndustry = '', city = '', startRank = 1, query = '') {
+export function parseBingRssXml(xml = '', fallbackIndustry = '', city = '', startRank = 1, query = '', allowAllHosts = false) {
   const items = [];
   const seenHosts = new Set();
   let rank = startRank;
@@ -1498,7 +1501,7 @@ export function parseBingRssXml(xml = '', fallbackIndustry = '', city = '', star
     const rawDesc = block.match(/<description>([\s\S]*?)<\/description>/i)?.[1] || '';
     const linkStr = decodeHtmlEntities(rawLink.replace(/<!\[CDATA\[|\]\]>/g, '').trim());
     const url = publicWebsite(linkStr);
-    if (!url || isNoiseDirectoryDomain(url.hostname)) continue;
+    if (!url || (!allowAllHosts && isNoiseDirectoryDomain(url.hostname))) continue;
     const identity = websiteIdentity(url);
     if (!identity || seenHosts.has(identity)) continue;
     seenHosts.add(identity);
@@ -1508,7 +1511,7 @@ export function parseBingRssXml(xml = '', fallbackIndustry = '', city = '', star
     const cleanName = (title.split(/\s+[|\-–—:]\s+/)[0] || title || identity).slice(0, 100);
     const currentRank = rank++;
     items.push({
-      id: `rss-${identity}`,
+      id: `rss-${identity.replace(/[^a-zA-Z0-9._-]/g, '_')}`,
       name: cleanName,
       industry: fallbackIndustry,
       city: city || 'Online',
@@ -1518,7 +1521,7 @@ export function parseBingRssXml(xml = '', fallbackIndustry = '', city = '', star
         isMyShopify ? 'Shopify Store (.myshopify.com)' : '',
         snippet
       ].filter(Boolean).join(' · '),
-      website: identity.includes('/') ? url.href : url.origin,
+      website: (allowAllHosts || identity.includes('/')) ? url.href : url.origin,
       phone: '',
       email: '',
       source: url.href,
@@ -1532,7 +1535,7 @@ export function parseBingRssXml(xml = '', fallbackIndustry = '', city = '', star
   return items;
 }
 
-export function parseDuckDuckGoHtml(html = '', fallbackIndustry = '', city = '', startRank = 1, query = '') {
+export function parseDuckDuckGoHtml(html = '', fallbackIndustry = '', city = '', startRank = 1, query = '', allowAllHosts = false) {
   const items = [];
   const seenHosts = new Set();
   let rank = startRank;
@@ -1552,7 +1555,7 @@ export function parseDuckDuckGoHtml(html = '', fallbackIndustry = '', city = '',
     }
     if (/duckduckgo\.com\/y\.js/i.test(rawHref)) continue;
     const url = publicWebsite(rawHref);
-    if (!url || isNoiseDirectoryDomain(url.hostname)) continue;
+    if (!url || (!allowAllHosts && isNoiseDirectoryDomain(url.hostname))) continue;
     const identity = websiteIdentity(url);
     if (!identity || seenHosts.has(identity)) continue;
     seenHosts.add(identity);
@@ -1565,7 +1568,7 @@ export function parseDuckDuckGoHtml(html = '', fallbackIndustry = '', city = '',
     const cleanName = (title.split(/\s+[|\-–—:]\s+/)[0] || title || identity).slice(0, 100);
     const currentRank = rank++;
     items.push({
-      id: `ddg-${identity}`,
+      id: `ddg-${identity.replace(/[^a-zA-Z0-9._-]/g, '_')}`,
       name: cleanName,
       industry: fallbackIndustry,
       city: city || 'Online',
@@ -1575,7 +1578,7 @@ export function parseDuckDuckGoHtml(html = '', fallbackIndustry = '', city = '',
         isMyShopify ? 'Shopify Store (.myshopify.com)' : '',
         snippet
       ].filter(Boolean).join(' · '),
-      website: identity.includes('/') ? url.href : url.origin,
+      website: (allowAllHosts || identity.includes('/')) ? url.href : url.origin,
       phone: '',
       email: '',
       source: url.href,
@@ -1589,7 +1592,7 @@ export function parseDuckDuckGoHtml(html = '', fallbackIndustry = '', city = '',
   return items;
 }
 
-async function searchBingRss(query, cleanIndustry, subCity, startRank = 1, firstOffset = 1) {
+async function searchBingRss(query, cleanIndustry, subCity, startRank = 1, firstOffset = 1, allowAllHosts = false) {
   try {
     const rssUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&format=rss&count=20&first=${firstOffset}`;
     const response = await fetch(rssUrl, {
@@ -1601,13 +1604,13 @@ async function searchBingRss(query, cleanIndustry, subCity, startRank = 1, first
     });
     if (!response.ok) return [];
     const xml = await response.text();
-    return parseBingRssXml(xml, cleanIndustry, subCity, startRank, query);
+    return parseBingRssXml(xml, cleanIndustry, subCity, startRank, query, allowAllHosts);
   } catch {
     return [];
   }
 }
 
-async function searchDuckDuckGoLite(query, cleanIndustry, subCity, startRank = 1) {
+async function searchDuckDuckGoLite(query, cleanIndustry, subCity, startRank = 1, allowAllHosts = false) {
   try {
     const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
     const response = await fetch(ddgUrl, {
@@ -1621,10 +1624,225 @@ async function searchDuckDuckGoLite(query, cleanIndustry, subCity, startRank = 1
     if (!response.ok) return [];
     const html = await response.text();
     if (/anomaly-modal|captcha|challenge-form/i.test(html)) return [];
-    return parseDuckDuckGoHtml(html, cleanIndustry, subCity, startRank, query);
+    return parseDuckDuckGoHtml(html, cleanIndustry, subCity, startRank, query, allowAllHosts);
   } catch {
     return [];
   }
+}
+
+const CRT_NOISE_HOSTS = /(?:cloudflare|amazonaws|azure|googleusercontent|fastly|akamai|vercel|netlify|github|gitlab|heroku|digitalocean|linode|plesk|cpanel|whm|letsencrypt|sectigo|digicert|godaddy|namecheap|wixdns|myshopify|squarespace|wordpress\.com|gov\.|edu\.|\.gov$|\.edu$|\.internal$|\.local$)/i;
+
+export function parseCrtShCertificates(rows = [], keyword = '', locationFilter = '') {
+  const seenDomains = new Map();
+  const locSlug = String(locationFilter || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const sorted = [...(Array.isArray(rows) ? rows : [])].sort((a, b) =>
+    String(b?.entry_timestamp || b?.not_before || '').localeCompare(String(a?.entry_timestamp || a?.not_before || ''))
+  );
+
+  for (const row of sorted) {
+    const rawNames = String(row?.name_value || row?.common_name || '').split(/\s+/);
+    const issuedDate = String(row?.entry_timestamp || row?.not_before || '').slice(0, 10);
+    for (const raw of rawNames) {
+      const host = raw.toLowerCase().replace(/^\*\./, '').replace(/^www\./, '').trim();
+      if (!/^[a-z0-9-]{3,42}\.(?:com|co|io|ai|shop|store|org|net|us|uk|ca|ng|au|de|fr|health|dental|clinic|studio|agency|beauty|care|homes)$/i.test(host)) continue;
+      if (host.split('.').length > 3) continue;
+      if (/^(mail|smtp|imap|pop|webmail|autodiscover|cpanel|whm|cpcontacts|cpcalendars|staging|dev|test|api|cdn|ns1|ns2)\./i.test(host)) continue;
+      if (CRT_NOISE_HOSTS.test(host) || isNoiseDirectoryDomain(host)) continue;
+      if (locSlug && locSlug.length >= 3 && !/^(online|global|worldwide|remote|any)$/i.test(locationFilter)) {
+        // Prefer domains containing location hint if many results exist, otherwise allow clean brand domains
+      }
+      if (seenDomains.has(host)) continue;
+      const brandLabel = host.split('.')[0]
+        .replace(/[-_]+/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase());
+      const crtProofUrl = row?.id ? `https://crt.sh/?id=${encodeURIComponent(row.id)}` : `https://crt.sh/?q=${encodeURIComponent(host)}`;
+      seenDomains.set(host, {
+        id: `crt-${host}`,
+        name: `${brandLabel} (${host})`,
+        industry: keyword,
+        city: locationFilter || 'Newly Registered',
+        address: issuedDate ? `SSL Issued: ${issuedDate}` : 'Certificate Transparency Log',
+        about: `Newly issued SSL domain (${host})${issuedDate ? ` · Registered/Issued ${issuedDate}` : ''} via Certificate Transparency (crt.sh)`,
+        website: `https://${host}`,
+        phone: '',
+        email: '',
+        source: crtProofUrl,
+        platform: 'New Domain',
+        discoveryProvider: 'crt.sh SSL Feed',
+        channelMeta: {
+          channel: 'new_domain',
+          badgeLabel: issuedDate ? `New Domain (${issuedDate})` : 'New Domain (crt.sh)',
+          certIssuedAt: issuedDate,
+          listingUrl: crtProofUrl,
+          hasStandaloneSite: true
+        }
+      });
+      if (seenDomains.size >= 35) break;
+    }
+    if (seenDomains.size >= 35) break;
+  }
+  return [...seenDomains.values()];
+}
+
+async function searchCrtShNewDomains(keyword = '', locationFilter = '') {
+  const slug = String(keyword || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 24);
+  if (slug.length < 3) return [];
+  try {
+    const crtUrl = `https://crt.sh/?q=%25${encodeURIComponent(slug)}%25&output=json`;
+    const res = await fetch(crtUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; JobHunta/1.2)',
+        Accept: 'application/json'
+      },
+      signal: AbortSignal.timeout(11000)
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return parseCrtShCertificates(data, keyword, locationFilter);
+  } catch {
+    return [];
+  }
+}
+
+async function runTargetedSiteQueries(queries = [], keyword = '', city = '', decorateItem = null) {
+  const out = [];
+  const seen = new Set();
+  for (const q of queries) {
+    const [rssItems, ddgItems] = await Promise.all([
+      searchBingRss(q, keyword, city || 'Online', 1, 1, true),
+      searchDuckDuckGoLite(q, keyword, city || 'Online', 1, true)
+    ]);
+    for (const item of [...rssItems, ...ddgItems]) {
+      const key = item.website || item.id;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const decorated = decorateItem ? decorateItem(item, q) : item;
+      if (decorated) out.push(decorated);
+    }
+  }
+  return out;
+}
+
+async function searchSocialAndDirectoryLeads(keyword = '', city = '', packKey = 'link_in_bio') {
+  const pack = SOCIAL_DIRECTORY_PACKS[packKey] || SOCIAL_DIRECTORY_PACKS.link_in_bio;
+  const useLoc = city && !/^(online|global|worldwide|remote|any)$/i.test(city) ? ` "${city}"` : '';
+  const queries = pack.sites.slice(0, 4).map(site => `site:${site} "${keyword}"${useLoc}`);
+  return runTargetedSiteQueries(queries, keyword, city || 'Online', item => {
+    let hostLabel = pack.badge;
+    try { hostLabel = new URL(item.website).hostname.replace(/^www\./, ''); } catch {}
+    return {
+      ...item,
+      id: `dir-${Buffer.from(item.website).toString('base64url').slice(0, 22)}`,
+      platform: pack.badge,
+      discoveryProvider: hostLabel,
+      about: `[${pack.badge} · ${hostLabel}] ${item.about || ''}`.slice(0, 450),
+      channelMeta: {
+        channel: pack.channel,
+        badgeLabel: `${pack.badge} (${hostLabel})`,
+        rentedPlatform: hostLabel,
+        listingUrl: item.website,
+        hasStandaloneSite: false
+      }
+    };
+  });
+}
+
+async function searchProductLaunches(keyword = '', city = '') {
+  const useLoc = city && !/^(online|global|worldwide|remote|any)$/i.test(city) ? ` "${city}"` : '';
+  const queries = [
+    `site:producthunt.com/posts "${keyword}"${useLoc}`,
+    `site:kickstarter.com/projects "${keyword}"${useLoc}`,
+    `site:indiehackers.com/product "${keyword}"${useLoc}`
+  ];
+  return runTargetedSiteQueries(queries, keyword, city || 'Online', item => {
+    let host = 'Launch Platform';
+    try { host = new URL(item.website).hostname.replace(/^www\./, ''); } catch {}
+    return {
+      ...item,
+      id: `launch-${Buffer.from(item.website).toString('base64url').slice(0, 22)}`,
+      platform: 'Product Launch',
+      discoveryProvider: host,
+      channelMeta: {
+        channel: 'launch',
+        badgeLabel: `Product Launch (${host})`,
+        listingUrl: item.website
+      }
+    };
+  });
+}
+
+async function searchJobBoardCompanies(keyword = '', city = '') {
+  const useLoc = city && !/^(online|global|worldwide|remote|any)$/i.test(city) ? ` "${city}"` : '';
+  const queries = [
+    `site:boards.greenhouse.io "${keyword}"${useLoc}`,
+    `site:jobs.lever.co "${keyword}"${useLoc}`,
+    `site:apply.workable.com "${keyword}"${useLoc}`,
+    `site:jobs.ashbyhq.com "${keyword}"${useLoc}`
+  ];
+  return runTargetedSiteQueries(queries, keyword, city || 'Remote', item => {
+    let host = 'Job Board';
+    let companySlug = '';
+    try {
+      const u = new URL(item.website);
+      host = u.hostname.replace(/^www\./, '');
+      companySlug = u.pathname.split('/').filter(Boolean)[0] || '';
+    } catch {}
+    const cleanCompany = companySlug
+      ? companySlug.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+      : item.name;
+    return {
+      ...item,
+      id: `job-${Buffer.from(item.website).toString('base64url').slice(0, 22)}`,
+      name: `${cleanCompany} (Hiring: ${item.name.slice(0, 48)})`,
+      platform: 'Hiring on Job Board',
+      discoveryProvider: host,
+      channelMeta: {
+        channel: 'job_board',
+        badgeLabel: `Hiring Now (${host})`,
+        openRole: item.name,
+        listingUrl: item.website
+      }
+    };
+  });
+}
+
+async function searchAdFunnelSpenders(keyword = '', city = '') {
+  const useLoc = city && !/^(online|global|worldwide|remote|any)$/i.test(city) ? ` "${city}"` : '';
+  const queries = [
+    `"${keyword}"${useLoc} (inurl:"/lp/" OR inurl:"/pages/offer" OR "claim your free" OR "limited time offer") -yelp -pinterest`,
+    `"${keyword}"${useLoc} ("book your free consultation" OR "get an instant quote") -yelp -jobs`
+  ];
+  return runTargetedSiteQueries(queries, keyword, city || 'Online', item => {
+    if (isNoiseDirectoryDomain(publicWebsite(item.website)?.hostname || '')) return null;
+    return {
+      ...item,
+      platform: item.platform || 'Active Funnel / LP',
+      channelMeta: {
+        channel: 'ad_funnel',
+        badgeLabel: 'Active Promo / Funnel Page',
+        listingUrl: item.source || item.website
+      }
+    };
+  });
+}
+
+async function searchChamberDirectories(cleanIndustry = '', subCity = '') {
+  const queries = [
+    `"${cleanIndustry}" "${subCity}" ("chamber of commerce" OR inurl:chamber) -yelp -jobs`,
+    `"${cleanIndustry}" "${subCity}" "member directory" -yelp -facebook`
+  ];
+  return runTargetedSiteQueries(queries, cleanIndustry, subCity, item => {
+    if (isNoiseDirectoryDomain(publicWebsite(item.website)?.hostname || '')) return null;
+    return {
+      ...item,
+      discoveryProvider: 'Chamber / Trade Directory',
+      channelMeta: {
+        channel: 'chamber',
+        badgeLabel: 'Chamber / Association Lead',
+        listingUrl: item.source || item.website
+      }
+    };
+  });
 }
 
 async function searchSerperMaps(cleanIndustry, city) {
@@ -1689,8 +1907,8 @@ async function searchPlatformAndStackWeb(cleanIndustry, subCity, targetPlatform 
     }
 
     const [rssItems, ddgItems] = await Promise.all([
-      searchBingRss(q, cleanIndustry, subCity || 'Online', 1),
-      searchDuckDuckGoLite(q, cleanIndustry, subCity || 'Online', 1)
+      searchBingRss(q, cleanIndustry, subCity || 'Online', 1, 1, ['Etsy Shop', 'Faire Brand', 'eBay Store'].includes(targetPlatform)),
+      searchDuckDuckGoLite(q, cleanIndustry, subCity || 'Online', 1, ['Etsy Shop', 'Faire Brand', 'eBay Store'].includes(targetPlatform))
     ]);
     pushUnique(rssItems);
     pushUnique(ddgItems);
@@ -1984,7 +2202,7 @@ async function searchOverpassFallback(cleanIndustry, city, limitNodes = 100, rad
 
 async function streamSearch(res, industry, city, rankMode = 'all', reserveResults, onFailure, tierLevel = 5, extraOpts = {}) {
   const cleanIndustry = (industry || '').trim();
-  const sourceType = ['local', 'platform', 'reddit'].includes(extraOpts.sourceType) ? extraOpts.sourceType : 'local';
+  const sourceType = ['local', 'platform', 'directory', 'launches', 'reddit'].includes(extraOpts.sourceType) ? extraOpts.sourceType : 'local';
   const cleanCity = (city || '').trim() || (sourceType !== 'local' ? 'Online' : '');
   if (!/^[\p{L}\p{M}\p{N} .,'’&/+()-]{2,60}$/u.test(cleanIndustry) ||
       !/^[\p{L}\p{M}\p{N} .,'’/()-]{2,75}$/u.test(cleanCity)) {
@@ -2037,10 +2255,92 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
     return granted;
   };
 
-  // MODE A: REDDIT BUSINESS & HIRING LEAD ENGINE
+  // MODE A0: SOCIAL & DIRECTORY-ONLY BUSINESSES (Link-in-Bio, Booksy/Fresha/Houzz/Clutch, Social Pages)
+  if (sourceType === 'directory') {
+    const packKey = Object.hasOwn(SOCIAL_DIRECTORY_PACKS, extraOpts.directoryPack) ? extraOpts.directoryPack : 'link_in_bio';
+    const pack = SOCIAL_DIRECTORY_PACKS[packKey];
+    sendEvent({
+      type: 'status',
+      page: 1,
+      totalPages: 1,
+      totalFound: seen.size,
+      message: `Scanning ${pack.label} for "${cleanIndustry}" businesses…`
+    });
+    const dirItems = await searchSocialAndDirectoryLeads(cleanIndustry, cleanCity, packKey);
+    if (dirItems.length) await emitBusinesses(dirItems);
+    if (seen.size === 0) await onFailure?.();
+    sendEvent({ type: 'done', totalFound: seen.size });
+    if (!res.writableEnded) res.end();
+    return;
+  }
+
+  // MODE A1: NEWLY REGISTERED DOMAINS (crt.sh) & PRODUCT LAUNCHES
+  if (sourceType === 'launches') {
+    const launchMode = Object.hasOwn(LAUNCH_DOMAIN_MODES, extraOpts.launchMode) ? extraOpts.launchMode : 'both';
+    if (launchMode === 'crt_sh' || launchMode === 'both') {
+      sendEvent({
+        type: 'status',
+        page: 1,
+        totalPages: launchMode === 'both' ? 2 : 1,
+        totalFound: seen.size,
+        message: `Querying live Certificate Transparency logs (crt.sh) for newly registered "${cleanIndustry}" domains…`
+      });
+      const crtItems = await searchCrtShNewDomains(cleanIndustry, cleanCity);
+      if (crtItems.length) await emitBusinesses(crtItems);
+    }
+    if (!stopped && (launchMode === 'product_launch' || launchMode === 'both')) {
+      sendEvent({
+        type: 'status',
+        page: launchMode === 'both' ? 2 : 1,
+        totalPages: launchMode === 'both' ? 2 : 1,
+        totalFound: seen.size,
+        message: `Scanning Product Hunt, Kickstarter & Indie Hackers for "${cleanIndustry}" launches…`
+      });
+      const launchItems = await searchProductLaunches(cleanIndustry, cleanCity);
+      if (launchItems.length) await emitBusinesses(launchItems);
+    }
+    if (seen.size === 0) await onFailure?.();
+    sendEvent({ type: 'done', totalFound: seen.size });
+    if (!res.writableEnded) res.end();
+    return;
+  }
+
+  // MODE A: REDDIT, COMPANY JOB BOARDS & PAID-AD FUNNEL BUYER-INTENT ENGINE
   if (sourceType === 'reddit') {
     const packKey = Object.hasOwn(REDDIT_SUBREDDIT_PACKS, extraOpts.redditPack) ? extraOpts.redditPack : 'hiring';
     const pack = REDDIT_SUBREDDIT_PACKS[packKey];
+
+    if (pack.kind === 'job_boards') {
+      sendEvent({
+        type: 'status',
+        page: 1,
+        totalPages: 1,
+        totalFound: seen.size,
+        message: `Scanning Greenhouse, Lever, Workable & Ashby job boards for companies hiring "${cleanIndustry}"…`
+      });
+      const jobItems = await searchJobBoardCompanies(cleanIndustry, cleanCity);
+      if (jobItems.length) await emitBusinesses(jobItems);
+      if (seen.size === 0) await onFailure?.();
+      sendEvent({ type: 'done', totalFound: seen.size });
+      if (!res.writableEnded) res.end();
+      return;
+    }
+
+    if (pack.kind === 'ad_funnels') {
+      sendEvent({
+        type: 'status',
+        page: 1,
+        totalPages: 1,
+        totalFound: seen.size,
+        message: `Scanning active paid-traffic & promo landing pages for "${cleanIndustry}"…`
+      });
+      const funnelItems = await searchAdFunnelSpenders(cleanIndustry, cleanCity);
+      if (funnelItems.length) await emitBusinesses(funnelItems);
+      if (seen.size === 0) await onFailure?.();
+      sendEvent({ type: 'done', totalFound: seen.size });
+      if (!res.writableEnded) res.end();
+      return;
+    }
     const customSubs = searchList(extraOpts.subreddits || '', 6).map(s => s.replace(/^r\//i, '').replace(/[^a-zA-Z0-9_]/g, '')).filter(Boolean);
     const subreddits = customSubs.length ? customSubs : pack.subreddits;
     const intentFilter = extraOpts.redditIntent === 'hiring' ? 'hiring' : 'all_buyers';
@@ -2224,8 +2524,17 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
       }
     }
 
-    // 4. DuckDuckGo Lite Sweep + Weak-SEO / Outdated-Website Dorks (Gold/Premium/Diamond Deep Modes)
+    // 4. DuckDuckGo Lite Sweep + Weak-SEO / Outdated-Website Dorks + Chamber of Commerce (Gold/Premium/Diamond)
     if (!closed && !stopped && !isStateBreakdown) {
+      if (rankMode === 'chamber') {
+        sendEvent({
+          type: 'status',
+          totalFound: seen.size,
+          message: `Scanning Chamber of Commerce & Trade Member Directories in ${subCity}…`
+        });
+        const chamberItems = await searchChamberDirectories(cleanIndustry, subCity);
+        if (chamberItems.length) await emitBusinesses(chamberItems);
+      }
       sendEvent({
         type: 'status',
         totalFound: seen.size,
@@ -2235,7 +2544,8 @@ async function streamSearch(res, industry, city, rankMode = 'all', reserveResult
       const weakSeoPromises = (isDeepRankMode && tierLevel >= 3)
         ? [
             searchBingRss(`intitle:"Home" "${cleanIndustry}" "${subCity}" -yelp -facebook`, cleanIndustry, subCity, 120, 1),
-            searchBingRss(`"${cleanIndustry}" "${subCity}" ("powered by WordPress" OR "created with Wix" OR "© 2020" OR "© 2021") -yelp`, cleanIndustry, subCity, 140, 1)
+            searchBingRss(`"${cleanIndustry}" "${subCity}" ("powered by WordPress" OR "created with Wix" OR "© 2020" OR "© 2021") -yelp`, cleanIndustry, subCity, 140, 1),
+            ...(rankMode === 'deep_full' ? [searchChamberDirectories(cleanIndustry, subCity)] : [])
           ]
         : [];
       const extraBatches = await Promise.all([ddgBase, ...weakSeoPromises]);
@@ -3060,6 +3370,71 @@ async function fetchWebsiteEmails(websiteUrl) {
   }
 
   const crawledPages = homepageHtml ? [base.href] : [];
+  const intermediaryInfo = classifyRentedOrIntermediaryUrl(base.href);
+  let channelResolution = null;
+
+  if (homepageHtml && intermediaryInfo.isIntermediary) {
+    const NON_STANDALONE_OUTBOUND = /(?:facebook\.com|instagram\.com|twitter\.com|x\.com|linkedin\.com|tiktok\.com|youtube\.com|wa\.me|whatsapp\.com|t\.me|calendly\.com|acuityscheduling\.com|paypal\.com|venmo\.com|cash\.app|stripe\.com|apple\.com|play\.google\.com|spotify\.com|amazon\.com|goo\.gl|bit\.ly)/i;
+    const outboundBioLinks = [];
+    let standaloneCandidate = null;
+
+    for (const m of homepageHtml.matchAll(/href\s*=\s*["'](https?:\/\/[^"'#\s]+)["']/gi)) {
+      try {
+        const outUrl = new URL(decodeHtmlEntities(m[1]));
+        const outHost = outUrl.hostname.toLowerCase().replace(/^www\./, '');
+        if (outHost === base.hostname.toLowerCase().replace(/^www\./, '')) continue;
+        if (!outboundBioLinks.includes(outUrl.href) && outboundBioLinks.length < 10) {
+          outboundBioLinks.push(outUrl.href);
+        }
+        if (!standaloneCandidate &&
+            !NON_STANDALONE_OUTBOUND.test(outHost) &&
+            !isNoiseDirectoryDomain(outHost) &&
+            !classifyRentedOrIntermediaryUrl(outUrl.href).isIntermediary) {
+          standaloneCandidate = outUrl;
+        }
+      } catch {}
+    }
+
+    if (standaloneCandidate) {
+      try {
+        const hopHtml = await fetchHtml(standaloneCandidate.origin, true);
+        if (hopHtml) {
+          crawledPages.push(standaloneCandidate.origin);
+          homepageHtml = hopHtml;
+          collectContactDetails(hopHtml, standaloneCandidate.origin);
+          for (const email of extractEmailsFromHtml(hopHtml, standaloneCandidate.hostname)) {
+            emails.add(email);
+            emailSources[email] ||= standaloneCandidate.origin;
+          }
+          const hopSocials = extractSocialsFromHtml(hopHtml);
+          for (const key of Object.keys(socials)) {
+            if (!socials[key] && hopSocials[key]) socials[key] = hopSocials[key];
+          }
+          const hopInsights = extractWebsiteInsights(hopHtml, standaloneCandidate.origin);
+          Object.assign(insights, hopInsights);
+          channelResolution = {
+            intermediaryKind: intermediaryInfo.kind,
+            listingUrl: base.href,
+            resolvedStandaloneWebsite: standaloneCandidate.origin,
+            hasStandaloneSite: true,
+            outboundBioLinks
+          };
+        }
+      } catch {}
+    }
+
+    if (!channelResolution) {
+      insights.signals.rentedPlatformOnly = true;
+      channelResolution = {
+        intermediaryKind: intermediaryInfo.kind,
+        listingUrl: base.href,
+        resolvedStandaloneWebsite: '',
+        hasStandaloneSite: false,
+        outboundBioLinks
+      };
+    }
+  }
+
   if (homepageHtml) {
     const subLinks = [...homepageHtml.matchAll(/href\s*=\s*["']([^"'#]+)["']/gi)]
       .map(match => match[1])
@@ -3192,9 +3567,10 @@ async function fetchWebsiteEmails(websiteUrl) {
     ? insights.platform
     : (auditReport.stack?.platform || insights.platform);
 
-  const rankedEmails = rankDiscoveredEmails([...emails], base.hostname);
+  const rankedEmails = rankDiscoveredEmails([...emails], channelResolution?.resolvedStandaloneWebsite ? new URL(channelResolution.resolvedStandaloneWebsite).hostname : base.hostname);
   return {
-    website: base.href,
+    website: channelResolution?.resolvedStandaloneWebsite || base.href,
+    channelResolution,
     brandName: insights.brandName || insights.siteTitle?.split(/[|\-–—]/)[0]?.trim() || base.hostname.replace(/^www\./, ''),
     logoUrl: insights.logoUrl || '',
     ogImage: insights.ogImage || '',
@@ -3278,10 +3654,17 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
   const auditReport = lead.auditReport || null;
   const activeLensLabel = `${persona.title}${addedTools.length ? ` + ${addedTools.map(k => PERSONA_TOOL_MODULES[k]?.shortLabel).filter(Boolean).join(', ')}` : ''}`;
 
+  const cm = lead.channelMeta || {};
   const overviewParts = [
     lead.redditMeta
       ? `${name} posted in r/${lead.redditMeta.subreddit} (${lead.redditMeta.intentType}${lead.redditMeta.budgetHint ? ` · Budget: ${lead.redditMeta.budgetHint}` : ''}): "${lead.redditMeta.postTitle}".`
-      : `${name} operates as a ${industry} in ${city}${lead.address ? ` (${lead.address})` : ''}.`
+      : cm.channel === 'new_domain'
+        ? `${name} is a newly registered business domain (${cm.certIssuedAt ? `SSL issued ${cm.certIssuedAt} via Certificate Transparency` : 'discovered via crt.sh SSL logs'}) in the ${industry} space.`
+        : cm.channel === 'job_board'
+          ? `${name} is actively hiring (${cm.openRole || industry}) on ${lead.discoveryProvider || 'their job board'} — proving active budget and immediate growth needs.`
+          : (cm.channel === 'link_in_bio' || cm.channel === 'directory' || cm.channel === 'social_only')
+            ? `${name} operates in ${city} primarily through ${cm.rentedPlatform || lead.platform || 'a rented directory/social profile'}${cm.hasStandaloneSite === false ? ' without a dedicated standalone website' : ''}.`
+            : `${name} operates as a ${industry} in ${city}${lead.address ? ` (${lead.address})` : ''}.`
   ];
   if (lead.redditMeta?.postSnippet) {
     overviewParts.push(`Reddit request summary: "${lead.redditMeta.postSnippet.slice(0, 260)}".`);
@@ -3335,6 +3718,17 @@ export function buildLeadIntelligence(lead = {}, senderSettings = {}, userIssues
   }
 
   const gaps = [];
+  if (cm.channel === 'link_in_bio' || cm.channel === 'directory' || cm.channel === 'social_only' || signals.rentedPlatformOnly) {
+    if (cm.hasStandaloneSite === false || signals.rentedPlatformOnly) {
+      gaps.push(`Relying on Rented Platform (${cm.rentedPlatform || lead.platform || 'Link-in-Bio / Directory'}): Customers currently land on a third-party profile instead of a branded, Google-indexed website you own — losing organic search traffic and paying platform commissions.`);
+    }
+  }
+  if (cm.channel === 'new_domain') {
+    gaps.push(`Brand-New Domain Launch Readiness (${cm.certIssuedAt || 'Recent SSL'}): Newly registered domains need immediate technical SEO indexing, mobile conversion UX, and trust proof so early visitors convert.`);
+  }
+  if (cm.channel === 'job_board' && cm.openRole) {
+    gaps.push(`Active Hiring Bottleneck (${cm.openRole}): Instead of waiting months to onboard full-time headcount, key ${persona.label.toLowerCase()} deliverables can be shipped immediately with faster ROI.`);
+  }
   if (activeModules.has('seo_local')) {
     if (lead.searchRank && lead.searchRank > 10) {
       gaps.push(`Local Search Visibility: Buried at Rank #${lead.searchRank} (Page ${lead.searchPage || Math.ceil(lead.searchRank / 10)}) in search for "${industry} in ${city}" — losing high-intent local buyers to Page 1 competitors.`);
@@ -4015,10 +4409,10 @@ export async function handleRequest(req, res) {
       const quotaStatus = getUserQuotaStatus(userRecord);
       const tierLevel = quotaStatus.level || 1;
       const rankMode = url.searchParams.get('rankMode') || 'all';
-      const sourceType = ['local', 'platform', 'reddit'].includes(url.searchParams.get('sourceType'))
+      const sourceType = ['local', 'platform', 'directory', 'launches', 'reddit'].includes(url.searchParams.get('sourceType'))
         ? url.searchParams.get('sourceType')
         : 'local';
-      const isAdvancedSearch = sourceType === 'platform' || sourceType === 'reddit' || rankMode === 'shopify';
+      const isAdvancedSearch = ['platform', 'directory', 'launches', 'reddit'].includes(sourceType) || ['shopify', 'chamber'].includes(rankMode);
 
       if (rankMode === 'low' && tierLevel < 2) {
         fail(403, 'Low-Ranking Business Discovery (Pages 3–11) requires the Silver (Starter) plan or higher.');
@@ -4065,6 +4459,8 @@ export async function handleRequest(req, res) {
           {
             sourceType,
             targetPlatform: url.searchParams.get('targetPlatform') || 'Shopify',
+            directoryPack: url.searchParams.get('directoryPack') || 'link_in_bio',
+            launchMode: url.searchParams.get('launchMode') || 'both',
             redditPack: url.searchParams.get('redditPack') || 'hiring',
             redditIntent: url.searchParams.get('redditIntent') || 'all_buyers',
             subreddits: url.searchParams.get('subreddits') || ''

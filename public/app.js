@@ -1,6 +1,12 @@
 import { readBusinessCsv, writeBusinessCsv } from './csv.mjs';
 import { iconEl, iconSvg, planBadgeEl } from './icons.mjs';
-import { PLATFORM_DISCOVERY_GROUPS, REDDIT_SUBREDDIT_PACKS } from './discovery.mjs';
+import {
+  PLATFORM_DISCOVERY_GROUPS,
+  SOCIAL_DIRECTORY_PACKS,
+  LAUNCH_DOMAIN_MODES,
+  REDDIT_SUBREDDIT_PACKS,
+  classifyRentedOrIntermediaryUrl
+} from './discovery.mjs';
 import {
   generateClientOutreach,
   generateLeadSolutionPack,
@@ -336,6 +342,17 @@ function collectLeadResearchAssets(lead = {}) {
   };
 
   if (lead.website) pushLink('Official Website', lead.website, lead.platform || 'Primary homepage');
+  if (lead.channelMeta?.listingUrl && lead.channelMeta.listingUrl !== lead.website) {
+    const cmLabel = lead.channelMeta.channel === 'new_domain'
+      ? 'Certificate Transparency Log (crt.sh)'
+      : lead.channelMeta.channel === 'job_board'
+        ? `Job Post (${lead.channelMeta.openRole || 'Hiring'})`
+        : `Channel Profile (${lead.channelMeta.badgeLabel || 'Source'})`;
+    pushLink(cmLabel, lead.channelMeta.listingUrl, 'Original discovery proof');
+  }
+  for (const bioLink of (lead.channelMeta?.outboundBioLinks || []).slice(0, 4)) {
+    pushLink('Outbound Bio / Profile Link', bioLink, 'Extracted from rented profile');
+  }
   if (lead.contactPage) pushLink('Contact Page', lead.contactPage, 'Crawled for direct contact details');
   if (lead.contactFormSource && lead.contactFormSource !== lead.contactPage) {
     pushLink('Lead / Contact Form', lead.contactFormSource, 'Form detected on page');
@@ -1456,6 +1473,19 @@ function applyEnrichmentToItem(item, found) {
   if (found.emailSources && typeof found.emailSources === 'object') {
     item.emailSources = { ...(item.emailSources || {}), ...found.emailSources };
   }
+  if (found.channelResolution && typeof found.channelResolution === 'object') {
+    const cr = found.channelResolution;
+    item.channelMeta = {
+      ...(item.channelMeta || {}),
+      listingUrl: item.channelMeta?.listingUrl || cr.listingUrl || item.source || '',
+      hasStandaloneSite: Boolean(cr.hasStandaloneSite),
+      resolvedStandaloneWebsite: cr.resolvedStandaloneWebsite || '',
+      outboundBioLinks: cr.outboundBioLinks || []
+    };
+    if (cr.resolvedStandaloneWebsite) {
+      item.website = cr.resolvedStandaloneWebsite;
+    }
+  }
   if (found.platform && found.platform !== 'Custom / Website') {
     item.platform = found.platform;
   }
@@ -1928,7 +1958,15 @@ function getVisibleSearchResults() {
   const mode = $('#results-filter')?.value || '';
   if (mode === 'shopify') return results.filter(item => item.platform === 'Shopify');
   if (mode === 'ecommerce') return results.filter(item => item.platform && item.platform !== 'Custom / Website' && item.platform !== 'Reddit Lead' || item.targetPlatform);
-  if (mode === 'reddit') return results.filter(item => Boolean(item.redditMeta) || item.platform === 'Reddit Lead');
+  if (mode === 'rented_platform') {
+    return results.filter(item => ['link_in_bio', 'directory', 'social_only'].includes(item.channelMeta?.channel) || classifyRentedOrIntermediaryUrl(item.website).isIntermediary);
+  }
+  if (mode === 'new_domains') {
+    return results.filter(item => ['new_domain', 'launch'].includes(item.channelMeta?.channel));
+  }
+  if (mode === 'reddit') {
+    return results.filter(item => Boolean(item.redditMeta) || item.platform === 'Reddit Lead' || ['job_board', 'ad_funnel'].includes(item.channelMeta?.channel));
+  }
   if (mode === 'low') return results.filter(item => (item.searchRank || 0) >= 21 || (item.searchPage || 0) >= 3);
   if (mode === 'ultra_low') return results.filter(item => (item.searchRank || 0) >= 81 || (item.searchPage || 0) >= 9);
   return results;
@@ -2034,10 +2072,13 @@ function renderResults() {
 
 /* ---------------- SAVED LEADS (Figma KPI Grid + Clean Table) ---------------- */
 function buildSearchFolderName(industry = '', city = '', rankMode = 'all', sourceType = 'local', extraLabel = '') {
-  const cleanCity = String(city || '').trim() || (sourceType === 'reddit' ? 'Reddit' : 'Online');
+  const cleanCity = String(city || '').trim() || (sourceType === 'reddit' ? 'Buyer Intent' : 'Online');
   const base = [String(industry).trim(), cleanCity].filter(Boolean).join(' · ') || 'Search Results';
-  if (sourceType === 'reddit') return `${base} (Reddit Leads)`;
+  if (sourceType === 'directory') return `${base} (${extraLabel || 'Link-in-Bio / Directory'})`;
+  if (sourceType === 'launches') return `${base} (${extraLabel || 'New Domains & Launches'})`;
+  if (sourceType === 'reddit') return `${base} (${extraLabel || 'Hiring & Buyer Intent'})`;
   if (sourceType === 'platform') return `${base} (${extraLabel || 'Platform'})`;
+  if (rankMode === 'chamber') return `${base} (Chamber & Trade)`;
   if (rankMode === 'shopify') return `${base} (Shopify)`;
   if (rankMode === 'deep_full') return `${base} (Pages 1–25+ Full)`;
   if (rankMode === 'deep_19') return `${base} (Pages 9–19 Ultra-Low)`;
@@ -2131,6 +2172,17 @@ function matchesOpportunityFilter(lead, mode) {
       || sig.hasMetaDescription === false;
   }
   if (mode === 'no-website') return !lead.website;
+  if (mode === 'rented-platform') {
+    return ['link_in_bio', 'directory', 'social_only'].includes(lead.channelMeta?.channel)
+      || sig.rentedPlatformOnly === true
+      || classifyRentedOrIntermediaryUrl(lead.website).isIntermediary;
+  }
+  if (mode === 'new-domain') {
+    return ['new_domain', 'launch'].includes(lead.channelMeta?.channel);
+  }
+  if (mode === 'hiring-intent') {
+    return Boolean(lead.redditMeta) || ['job_board', 'ad_funnel'].includes(lead.channelMeta?.channel);
+  }
   if (mode === 'no-socials') return !hasLinkedSocials(lead);
   if (mode === 'no-lead-capture') return !lead.website || sig.hasBookingOrForm === false || sig.hasChatWidget === false;
   if (mode === 'low-rating') return !lead.rating || (!Number.isNaN(ratingNum) && ratingNum < 4.2);
@@ -3719,12 +3771,97 @@ function renderBusinessPage() {
   );
 
   const nodes = [mobDossierBar, navBar, headerGrid, personaBar];
+  const originBanner = renderChannelOriginBanner(lead);
+  if (originBanner) nodes.push(originBanner);
   if (quickContactStrip.childNodes.length) nodes.push(quickContactStrip);
   nodes.push(tabsShell, contentWrap, mobDossierCta);
   container.replaceChildren(...nodes);
 }
 
 /* ---------------- EMAIL BROADCAST (Figma Email Broadcast) ---------------- */
+
+function renderChannelOriginBanner(lead) {
+  const cm = lead.channelMeta;
+  const rm = lead.redditMeta;
+  const rentedCheck = classifyRentedOrIntermediaryUrl(lead.website);
+  if (!cm && !rm && !rentedCheck.isIntermediary) return null;
+
+  let tone = '';
+  let headline = '';
+  let detail = '';
+  const rightActs = create('div', '', 'actions');
+
+  if (rm) {
+    tone = 'blue';
+    headline = `Reddit Buyer Signal · r/${rm.subreddit} (${rm.intentType}${rm.budgetHint ? ` · ${rm.budgetHint}` : ''})`;
+    detail = rm.postTitle;
+    if (rm.permalink) {
+      const a = create('a', 'Open Reddit Post ↗', 'btn-soft');
+      a.href = rm.permalink;
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      a.style.cssText = 'text-decoration:none;font-size:12px;padding:6px 11px;border-radius:9px';
+      rightActs.append(a);
+    }
+  } else if (cm?.channel === 'new_domain') {
+    headline = `Newly Registered Domain · ${cm.certIssuedAt ? `SSL Issued ${cm.certIssuedAt}` : 'Live crt.sh Feed'}`;
+    detail = 'Discovered via Certificate Transparency logs right as their SSL certificate went live — prime launch-readiness & SEO prospect.';
+    if (cm.listingUrl) {
+      const a = create('a', 'View SSL Certificate (crt.sh) ↗', 'btn-soft');
+      a.href = cm.listingUrl;
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      a.style.cssText = 'text-decoration:none;font-size:12px;padding:6px 11px;border-radius:9px';
+      rightActs.append(a);
+    }
+  } else if (cm?.channel === 'job_board') {
+    tone = 'blue';
+    headline = `Actively Hiring · ${cm.openRole || 'Open Role Spotted'}`;
+    detail = cm.resolvedStandaloneWebsite
+      ? `2-Hop Resolver traced this job post to their corporate site (${cm.resolvedStandaloneWebsite}). Pitch done-for-you execution faster than hiring full-time.`
+      : 'Click "Comb Site" to auto-trace their job board page to their standalone corporate website & decision-maker email.';
+    if (cm.listingUrl) {
+      const a = create('a', 'Open Job Post ↗', 'btn-soft');
+      a.href = cm.listingUrl;
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      a.style.cssText = 'text-decoration:none;font-size:12px;padding:6px 11px;border-radius:9px';
+      rightActs.append(a);
+    }
+  } else if (['link_in_bio', 'directory', 'social_only'].includes(cm?.channel) || rentedCheck.isIntermediary) {
+    tone = cm?.hasStandaloneSite ? '' : 'warn';
+    const platName = cm?.rentedPlatform || rentedCheck.host || lead.platform || 'Rented Directory';
+    headline = cm?.hasStandaloneSite
+      ? `Discovered via ${platName} → Traced to ${cm.resolvedStandaloneWebsite}`
+      : `Rented Platform Alert · Operating on ${platName} (No Standalone Website Confirmed)`;
+    detail = cm?.hasStandaloneSite
+      ? `2-Hop Comber located their standalone domain (${cm.resolvedStandaloneWebsite}) from their ${platName} profile.`
+      : `This business relies on ${platName} instead of owning their own Google-indexed website or direct booking/storefront funnel.`;
+    const targetHref = cm?.listingUrl || lead.source;
+    if (targetHref && /^https?:\/\//i.test(targetHref)) {
+      const a = create('a', `Open ${platName} Profile ↗`, 'btn-soft');
+      a.href = targetHref;
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      a.style.cssText = 'text-decoration:none;font-size:12px;padding:6px 11px;border-radius:9px';
+      rightActs.append(a);
+    }
+  } else if (cm?.badgeLabel) {
+    headline = `Discovery Signal · ${cm.badgeLabel}`;
+    detail = lead.about || 'Omnichannel buyer-intent lead.';
+  } else {
+    return null;
+  }
+
+  const banner = create('div', '', 'channel-origin-banner' + (tone ? ` ${tone}` : ''));
+  const main = create('div', '', 'channel-origin-main');
+  const titleRow = create('strong');
+  titleRow.append(iconEl('sparkles', 15), document.createTextNode(headline));
+  main.append(titleRow, create('small', detail));
+  banner.append(main);
+  if (rightActs.childNodes.length) banner.append(rightActs);
+  return banner;
+}
 function getBroadcastAudienceLeads(type) {
   if (type === 'new') return leads.filter(l => l.email && !blocked(l.email) && !(l.threads?.length));
   if (type === 'due') return leads.filter(l => l.email && !blocked(l.email) && leadStatus(l) === 'Follow-up due');
@@ -5972,6 +6109,24 @@ function initDiscoverControls() {
       platSelect.append(og);
     }
   }
+  const dirSelect = $('#directory-pack');
+  if (dirSelect && !dirSelect.options.length) {
+    for (const pack of Object.values(SOCIAL_DIRECTORY_PACKS)) {
+      const opt = document.createElement('option');
+      opt.value = pack.key;
+      opt.textContent = pack.label;
+      dirSelect.append(opt);
+    }
+  }
+  const launchSelect = $('#launch-mode');
+  if (launchSelect && !launchSelect.options.length) {
+    for (const m of Object.values(LAUNCH_DOMAIN_MODES)) {
+      const opt = document.createElement('option');
+      opt.value = m.key;
+      opt.textContent = m.label;
+      launchSelect.append(opt);
+    }
+  }
   const redditSelect = $('#reddit-pack');
   if (redditSelect && !redditSelect.options.length) {
     for (const pack of Object.values(REDDIT_SUBREDDIT_PACKS)) {
@@ -5992,7 +6147,7 @@ function initDiscoverControls() {
 }
 
 function setDiscoverSourceTab(source = 'local') {
-  const valid = ['local', 'platform', 'reddit'].includes(source) ? source : 'local';
+  const valid = ['local', 'platform', 'directory', 'launches', 'reddit'].includes(source) ? source : 'local';
   if ($('#source-type-input')) $('#source-type-input').value = valid;
   for (const btn of document.querySelectorAll('#discover-source-tabs .discover-tab')) {
     const active = btn.dataset.source === valid;
@@ -6001,6 +6156,8 @@ function setDiscoverSourceTab(source = 'local') {
   }
   if ($('#seg-rank-mode')) $('#seg-rank-mode').hidden = valid !== 'local';
   if ($('#seg-platform')) $('#seg-platform').hidden = valid !== 'platform';
+  if ($('#seg-directory')) $('#seg-directory').hidden = valid !== 'directory';
+  if ($('#seg-launch')) $('#seg-launch').hidden = valid !== 'launches';
   if ($('#seg-reddit')) $('#seg-reddit').hidden = valid !== 'reddit';
 
   const indLabel = $('#industry-label');
@@ -6010,23 +6167,41 @@ function setDiscoverSourceTab(source = 'local') {
   const submitBtn = $('#search-submit-btn');
 
   if (valid === 'reddit') {
-    if (indLabel) indLabel.textContent = 'Service / Niche Keyword';
-    if (indInput) indInput.placeholder = 'e.g. shopify developer, seo, website redesign, facebook ads';
+    if (indLabel) indLabel.textContent = 'Role / Service Keyword';
+    if (indInput) indInput.placeholder = 'e.g. shopify developer, marketing, seo, facebook ads';
     if (cityLabel) cityLabel.textContent = 'Location Filter (Optional)';
     if (cityInput) {
       cityInput.required = false;
-      cityInput.placeholder = 'Online / Remote (or e.g. Austin, UK)';
+      cityInput.placeholder = 'Remote / Any (or e.g. Austin, UK)';
     }
-    if (submitBtn) submitBtn.textContent = 'Scan Reddit Leads';
+    if (submitBtn) submitBtn.textContent = 'Find Buyer Leads';
+  } else if (valid === 'directory') {
+    if (indLabel) indLabel.textContent = 'Niche / Business Type';
+    if (indInput) indInput.placeholder = 'e.g. Hair Salon, Med Spa, Fitness Coach, Interior Design';
+    if (cityLabel) cityLabel.textContent = 'City / Market (Optional)';
+    if (cityInput) {
+      cityInput.required = false;
+      cityInput.placeholder = 'Any / Global (or e.g. Miami, London, Lagos)';
+    }
+    if (submitBtn) submitBtn.textContent = 'Scan Profiles & Directories';
+  } else if (valid === 'launches') {
+    if (indLabel) indLabel.textContent = 'Domain / Niche Keyword';
+    if (indInput) indInput.placeholder = 'e.g. dental, skincare, roofing, coffee, ai';
+    if (cityLabel) cityLabel.textContent = 'Market Hint (Optional)';
+    if (cityInput) {
+      cityInput.required = false;
+      cityInput.placeholder = 'Global SSL & Launch Feed';
+    }
+    if (submitBtn) submitBtn.textContent = 'Discover New Launches';
   } else if (valid === 'platform') {
-    if (indLabel) indLabel.textContent = 'Niche / Industry';
-    if (indInput) indInput.placeholder = 'e.g. Skincare, Fitness, SaaS, Coffee';
+    if (indLabel) indLabel.textContent = 'Niche / Product';
+    if (indInput) indInput.placeholder = 'e.g. Skincare, Candles, Jewelry, Coffee';
     if (cityLabel) cityLabel.textContent = 'City / Country (Optional)';
     if (cityInput) {
       cityInput.required = false;
       cityInput.placeholder = 'Global Web (or e.g. London, Lagos, Texas)';
     }
-    if (submitBtn) submitBtn.textContent = 'Find Platform Leads';
+    if (submitBtn) submitBtn.textContent = 'Find Store & ESP Leads';
   } else {
     if (indLabel) indLabel.textContent = 'Industry';
     if (indInput) indInput.placeholder = 'e.g. Clothing & Fashion, Dentists';
@@ -6127,12 +6302,16 @@ $('#search').onsubmit = async event => {
     if ($('#rank-mode')) $('#rank-mode').value = 'all';
     return;
   }
-  const isAdvanced = sourceType === 'platform' || sourceType === 'reddit' || (sourceType === 'local' && chosenMode === 'shopify');
+  const isAdvanced = ['platform', 'directory', 'launches', 'reddit'].includes(sourceType) || (sourceType === 'local' && ['shopify', 'chamber'].includes(chosenMode));
   if (isAdvanced) {
-    const title = sourceType === 'reddit'
-      ? 'Reddit Business & Hiring Lead Discovery'
-      : `Multi-Engine ${sourceType === 'platform' ? targetPlatform : 'Shopify'} Discovery`;
-    const desc = 'Search E-Commerce stores, Email Marketing platforms (Klaviyo, Mailchimp, Beehiiv, Substack, Kit), and high-intent Reddit hiring threads. Gold (Pro) includes 1 run/day; Premium (Agency) & Diamond get unlimited access.';
+    const title = sourceType === 'directory'
+      ? 'Link-in-Bio, Social & Booking Directory Discovery'
+      : sourceType === 'launches'
+        ? 'Newly Registered Domains (crt.sh) & Product Launch Discovery'
+        : sourceType === 'reddit'
+          ? 'Hiring Boards, Reddit & Ad-Funnel Buyer Discovery'
+          : `Omnichannel ${sourceType === 'platform' ? targetPlatform : chosenMode === 'chamber' ? 'Chamber Directory' : 'Shopify'} Discovery`;
+    const desc = 'Uncover businesses across Link-in-Bio/Booking Directories, Live SSL Registrations (crt.sh), Etsy/Faire Marketplaces, ATS Job Boards, and Reddit. Gold (Pro) includes 1 run/day; Premium (Agency) & Diamond get unlimited access.';
     if (!checkAdvancedDiscoveryAllowance(title, desc)) {
       if (sourceType === 'local' && $('#rank-mode')) $('#rank-mode').value = 'all';
       return;
@@ -6142,15 +6321,29 @@ $('#search').onsubmit = async event => {
   if (searchController) searchController.abort();
   searchController = new AbortController();
   const generation = ++searchGeneration;
-  const cityVal = String(formData.get('city') || '').trim() || (sourceType === 'reddit' ? 'Remote' : sourceType === 'platform' ? 'Online' : '');
-  const extraFolderLabel = sourceType === 'platform' ? targetPlatform : '';
+  const cityVal = String(formData.get('city') || '').trim() || (sourceType === 'reddit' ? 'Remote' : sourceType !== 'local' ? 'Online' : '');
+  const directoryPack = String(formData.get('directoryPack') || 'link_in_bio');
+  const launchMode = String(formData.get('launchMode') || 'both');
+  const extraFolderLabel = sourceType === 'platform'
+    ? targetPlatform
+    : sourceType === 'directory'
+      ? (SOCIAL_DIRECTORY_PACKS[directoryPack]?.badge || 'Directory')
+      : sourceType === 'launches'
+        ? (launchMode === 'crt_sh' ? 'crt.sh New Domains' : 'New Launches')
+        : sourceType === 'reddit'
+          ? (REDDIT_SUBREDDIT_PACKS[redditPack]?.kind === 'job_boards' ? 'Hiring Boards' : REDDIT_SUBREDDIT_PACKS[redditPack]?.kind === 'ad_funnels' ? 'Ad Funnels' : 'Reddit Leads')
+          : '';
   activeSearchFolder = buildSearchFolderName(formData.get('industry'), cityVal, chosenMode, sourceType, extraFolderLabel);
   activeWorkers = 0; results = []; resultsPage = 1; streamActive = true;
-  currentScrapeStep = sourceType === 'reddit'
-    ? 'Scanning Reddit buyer & hiring boards…'
-    : sourceType === 'platform'
-      ? `Searching Bing RSS, DuckDuckGo & Web for ${targetPlatform} leads…`
-      : 'Connecting to multi-engine business search…';
+  currentScrapeStep = sourceType === 'directory'
+    ? 'Scanning Link-in-Bio & rented directory profiles…'
+    : sourceType === 'launches'
+      ? 'Querying crt.sh Certificate Transparency & launch feeds…'
+      : sourceType === 'reddit'
+        ? 'Scanning active hiring boards, Reddit & promo funnels…'
+        : sourceType === 'platform'
+          ? `Searching multi-engine web for ${targetPlatform} leads…`
+          : 'Connecting to multi-engine business search…';
   submit.disabled = true; report(); updateScrapeBanner();
   $('#save-all').hidden = true; $('#results-pagination').hidden = true; $('#results-count').textContent = '';
   $('#results').replaceChildren(empty(

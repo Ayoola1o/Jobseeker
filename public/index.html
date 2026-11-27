@@ -181,21 +181,31 @@
         <div class="discover-hero">
           <div class="discover-hero-copy">
             <h1>Discover Businesses.<br>Find New Opportunities.</h1>
-            <p>Search Bing, DuckDuckGo, Google/OSM, E-Commerce &amp; Email Marketing platforms, and high-intent Reddit leads.</p>
+            <p>Search Maps, Search Engines, Stores &amp; Marketplaces, Link-in-Bio/Directories, Newly Registered Domains (crt.sh), and Hiring/Ad-Spending Buyers.</p>
           </div>
           <div class="discover-source-tabs" id="discover-source-tabs" role="tablist" aria-label="Discovery source">
             <button type="button" class="discover-tab active" data-source="local" role="tab" aria-selected="true">
               <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>
-              <span>Local &amp; Multi-Engine</span>
+              <span>Local &amp; Chambers</span>
             </button>
             <button type="button" class="discover-tab" data-source="platform" role="tab" aria-selected="false">
               <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
-              <span>Stores &amp; Email Platforms</span>
+              <span>Stores, ESPs &amp; Etsy</span>
+              <small class="tab-pro-tag">Gold+</small>
+            </button>
+            <button type="button" class="discover-tab" data-source="directory" role="tab" aria-selected="false">
+              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+              <span>Social &amp; Directory-Only</span>
+              <small class="tab-pro-tag">Gold+</small>
+            </button>
+            <button type="button" class="discover-tab" data-source="launches" role="tab" aria-selected="false">
+              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/></svg>
+              <span>New Domains &amp; Launches</span>
               <small class="tab-pro-tag">Gold+</small>
             </button>
             <button type="button" class="discover-tab" data-source="reddit" role="tab" aria-selected="false">
               <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>
-              <span>Reddit Leads &amp; Hiring</span>
+              <span>Hiring, Reddit &amp; Ads</span>
               <small class="tab-pro-tag">Gold+</small>
             </button>
           </div>
@@ -215,13 +225,20 @@
                 <option value="deep_15">Deep Low-Rank (Pages 6–15 · Gold+)</option>
                 <option value="deep_19">Ultra-Low Rank (Pages 9–19 · Premium+)</option>
                 <option value="deep_full">Deepest Full Sweep (Pages 1–25+ · Diamond)</option>
+                <option value="chamber">Chamber &amp; Trade Directories (Gold+)</option>
                 <option value="shopify">Shopify Stores (Gold+)</option>
               </select>
             </label>
-            <label class="search-seg no-div" id="seg-platform" hidden><span>Store / Email Stack</span>
+            <label class="search-seg no-div" id="seg-platform" hidden><span>Store / ESP / Marketplace</span>
               <select name="targetPlatform" id="target-platform"></select>
             </label>
-            <label class="search-seg no-div" id="seg-reddit" hidden><span>Reddit Board Pack</span>
+            <label class="search-seg no-div" id="seg-directory" hidden><span>Rented Profile Type</span>
+              <select name="directoryPack" id="directory-pack"></select>
+            </label>
+            <label class="search-seg no-div" id="seg-launch" hidden><span>Launch / Domain Feed</span>
+              <select name="launchMode" id="launch-mode"></select>
+            </label>
+            <label class="search-seg no-div" id="seg-reddit" hidden><span>Buyer-Intent Channel</span>
               <select name="redditPack" id="reddit-pack"></select>
             </label>
             <button type="submit" class="search-submit-btn" id="search-submit-btn">Search Businesses</button>
@@ -260,8 +277,10 @@
               <select id="results-filter" class="inline-select" aria-label="Filter search results">
                 <option value="">All scraped results</option>
                 <option value="shopify">Shopify stores only</option>
-                <option value="ecommerce">Stores &amp; Email Platforms</option>
-                <option value="reddit">Reddit Buyer Leads</option>
+                <option value="ecommerce">Stores, ESPs &amp; Marketplaces</option>
+                <option value="rented_platform">Link-in-Bio &amp; Directories Only</option>
+                <option value="new_domains">New Domains (crt.sh) &amp; Launches</option>
+                <option value="reddit">Hiring, Reddit &amp; Ad Spenders</option>
                 <option value="low">Low-ranked (Rank #21+ / Page 3+)</option>
                 <option value="ultra_low">Ultra-low ranked (Rank #81+ / Page 9+)</option>
               </select>
@@ -322,6 +341,9 @@
             <option value="very-low-rank">Very Low Ranking (Rank #21+ / Page 3+)</option>
             <option value="bad-performance">Bad Website Performance / Audit (&lt;75/100)</option>
             <option value="no-website">No Official Website</option>
+            <option value="rented-platform">Link-in-Bio / Rented Directory Only</option>
+            <option value="new-domain">Newly Registered Domains (crt.sh) &amp; Launches</option>
+            <option value="hiring-intent">Actively Hiring / Buyer-Intent Leads</option>
             <option value="no-socials">No Social Media Presence</option>
             <option value="no-lead-capture">Missing Lead Form / Live Chat</option>
             <option value="low-rating">Low or No Map Rating (&lt;4.2★)</option>
